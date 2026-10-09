@@ -12,6 +12,12 @@ Error, or that has no eval.json yet, is counted apart and never as a
 failure, as CooperBench's own pass rate does.
 
     python3 experiment/report.py [--logs ~/cooperbench/logs] [--tag cc]
+        [--arm solo --arm team ...] [--run LABEL=RUN_NAME ...]
+
+Any arm, built in or a plug-in of one's own (experiment/coordbench), is
+reported the same way: --arm NAME reads the run flash-NAME-<tag>, and
+--run LABEL=RUN_NAME reads any run under the label given, so a coordbench
+run of an arm can sit next to CooperBench's own run of the same arm.
 """
 
 import argparse
@@ -122,8 +128,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--logs", type=Path, default=Path.home() / "cooperbench" / "logs")
     parser.add_argument("--tag", default="cc")
+    parser.add_argument("--prefix", default="flash")
+    parser.add_argument("--arm", action="append", default=[],
+                        help="an arm whose run is <prefix>-<arm>-<tag>; the four built-in ones when none is given")
+    parser.add_argument("--run", action="append", default=[], metavar="LABEL=RUN_NAME",
+                        help="any run, reported under LABEL")
     args = parser.parse_args(argv)
-    arms = {arm: arm_outcomes(args.logs, f"flash-{arm}-{args.tag}") for arm in ARMS}
+    runs = {arm: f"{args.prefix}-{arm}-{args.tag}" for arm in (args.arm or ([] if args.run else ARMS))}
+    for entry in args.run:
+        label, _, run_name = entry.partition("=")
+        runs[label] = run_name or label
+    arms = {label: arm_outcomes(args.logs, run_name) for label, run_name in runs.items()}
     print(render(arms), end="")
     return 0
 

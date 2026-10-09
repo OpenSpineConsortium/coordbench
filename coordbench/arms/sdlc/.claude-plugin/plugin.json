@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-sdlc",
+  "version": "0.1.0",
+  "description": "coordbench's sdlc arm, this template's claim protocol: agents claim one issue each, work on claude/<issue> on a shared remote, open a pull request, and land it through a merge gate that answers main moved when it conflicts."
+}

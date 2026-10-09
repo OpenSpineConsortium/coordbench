@@ -1,0 +1,8 @@
+{
+  "entry": "arm.py:SoloArm",
+  "name": "solo",
+  "description": "CooperBench's solo setting: one agent implements every feature, alone.",
+  "needs": [],
+  "plugins": [],
+  "mcp_servers": {}
+}

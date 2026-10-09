@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-coop-git",
+  "version": "0.1.0",
+  "description": "coordbench's coop-git arm, CooperBench's setting with a shared git remote: agents message each other and merge each other's branches before submitting."
+}

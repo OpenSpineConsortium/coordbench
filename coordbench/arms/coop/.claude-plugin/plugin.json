@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-coop",
+  "version": "0.1.0",
+  "description": "coordbench's coop arm, CooperBench's messages-only setting: agents on separate features of one codebase coordinate through an inbox each."
+}

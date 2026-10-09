@@ -1,0 +1,10 @@
+{
+  "entry": "arm.py:TeamArm",
+  "name": "team",
+  "description": "CooperBench's team mode, the best arm of the authors' ablation: a lead and members, one per feature, with a shared task list, typed requests, messages and a shared scratchpad.",
+  "needs": [
+    "shared_volume"
+  ],
+  "plugins": [],
+  "mcp_servers": {}
+}

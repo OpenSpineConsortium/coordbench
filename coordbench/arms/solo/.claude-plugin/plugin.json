@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-solo",
+  "version": "0.1.0",
+  "description": "coordbench's solo arm, CooperBench's baseline: one agent implements every feature with no coordination tools."
+}

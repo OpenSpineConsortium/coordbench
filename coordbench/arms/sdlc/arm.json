@@ -1,0 +1,10 @@
+{
+  "entry": "arm.py:SdlcArm",
+  "name": "sdlc",
+  "description": "This template's claim protocol: one agent per feature, each claiming its issue, working on claude/<issue> on a shared remote and landing it by pull request through a merge gate.",
+  "needs": [
+    "git_remote"
+  ],
+  "plugins": [],
+  "mcp_servers": {}
+}

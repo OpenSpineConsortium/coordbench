@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "coordbench": {
+      "type": "http",
+      "url": "${COORD_MCP_URL}"
+    }
+  }
+}

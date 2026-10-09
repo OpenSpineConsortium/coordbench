@@ -49,3 +49,6 @@ DOCKER
 fi
 docker build -q -t "$image" "$ctx"
 rm -rf "$ctx"
+# With the containerd image store the build cache holds a second copy of
+# the task image's layers, several gigabytes for the large tasks; drop it.
+docker builder prune -af >/dev/null 2>&1 || true

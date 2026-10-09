@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-team",
+  "version": "0.1.0",
+  "description": "coordbench's team arm, CooperBench's team mode: a lead and members, one per feature, sharing a task list with atomic claims, typed requests, messages and a scratchpad, with the lead integrating everyone's work."
+}

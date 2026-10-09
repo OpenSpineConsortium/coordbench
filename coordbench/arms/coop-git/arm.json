@@ -1,0 +1,10 @@
+{
+  "entry": "arm.py:CoopGitArm",
+  "name": "coop-git",
+  "description": "CooperBench's coop setting with a shared git remote: one agent per feature, messages on, each merging its peers' branches before it submits.",
+  "needs": [
+    "git_remote"
+  ],
+  "plugins": [],
+  "mcp_servers": {}
+}

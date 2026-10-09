@@ -1,0 +1,8 @@
+{
+  "entry": "arm.py:CoopArm",
+  "name": "coop",
+  "description": "CooperBench's coop setting: one agent per feature, coordinating by messages only.",
+  "needs": [],
+  "plugins": [],
+  "mcp_servers": {}
+}
