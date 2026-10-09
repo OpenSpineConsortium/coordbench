@@ -1,0 +1,38 @@
+diff --git a/src/cooperbench/agents/claude_code/setup.sh b/src/cooperbench/agents/claude_code/setup.sh
+index 758cc25..21017e4 100644
+--- a/src/cooperbench/agents/claude_code/setup.sh
++++ b/src/cooperbench/agents/claude_code/setup.sh
+@@ -5,7 +5,11 @@
+ # access to fetch it).
+ set -e
+ 
+-if command -v apt-get >/dev/null 2>&1; then
++# An image that already carries claude (the cloud-session overlay) needs no
++# install, and the install's package mirrors may be unreachable there.
++if command -v claude >/dev/null 2>&1; then
++    claude --version
++elif command -v apt-get >/dev/null 2>&1; then
+     apt-get update -qq
+     apt-get install -y --no-install-recommends curl ca-certificates gnupg >/dev/null
+ elif command -v apk >/dev/null 2>&1; then
+@@ -14,14 +18,16 @@ elif command -v yum >/dev/null 2>&1; then
+     yum install -y curl >/dev/null
+ fi
+ 
+-if ! command -v npm >/dev/null 2>&1; then
++if ! command -v claude >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
+     apt-get install -y --no-install-recommends nodejs >/dev/null
+ fi
+ 
+-VERSION="${CLAUDE_CODE_VERSION:-latest}"
+-npm install -g --silent "@anthropic-ai/claude-code@${VERSION}"
+-claude --version
++if ! command -v claude >/dev/null 2>&1; then
++    VERSION="${CLAUDE_CODE_VERSION:-latest}"
++    npm install -g --silent "@anthropic-ai/claude-code@${VERSION}"
++    claude --version
++fi
+ 
+ # Coop helper install (no-op when /tmp/cb-coop-msg.py is absent, i.e. solo).
+ if [ -f /tmp/cb-coop-install.sh ]; then
