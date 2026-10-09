@@ -29,6 +29,7 @@ Python 3.11 does.
 
 import importlib.util
 import json
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -114,11 +115,14 @@ class Call:
 class Tool:
     """A coordination tool. The handler returns text (or a dict, sent as
     JSON text) or raises ToolError. `argv` maps a shell command's
-    positional words to arguments, the last name ending in "..." taking
-    the rest of the line, so `alias` can stand in for CooperBench's
-    commands (coop-send <to> <text...>). `flags` maps a shell flag to the
-    argument it sets (--note to "note"); a flag whose argument is a boolean
-    in the schema is a switch, any other takes the next word."""
+    positional words to arguments, one word per name, so `alias` can stand
+    in for CooperBench's commands (coop-send <to> <text>); a last name
+    ending in "..." takes the rest of the line instead, a form cli.py keeps
+    for an arm that wants it, though none shipped here does, since
+    CooperBench's commands read one word per positional. `flags` maps a
+    shell flag to the argument it sets (--note to "note"); a flag whose
+    argument is a boolean in the schema is a switch, any other takes the
+    next word."""
 
     name: str
     description: str
@@ -148,20 +152,41 @@ class Run:
         self.lock = threading.Condition()
         self.events = []
         self.events_path = Path(events_path) if events_path else None
+        self.log_complained = False
         self.started = time.time()
         self.closed = False
 
     def emit(self, kind, agent=None, **data):
-        """Record one coordination event; the metrics come from these."""
+        """Record one coordination event; the metrics come from these. The
+        waiters are woken whatever happens after the event is in, so a
+        failure here never leaves a blocking tool asleep."""
         with self.lock:
-            event = {"seq": len(self.events), "t": round(time.time() - self.started, 3),
-                     "kind": kind, "agent": agent, **data}
-            self.events.append(event)
-            if self.events_path:
-                with self.events_path.open("a", encoding="utf-8") as out:
-                    out.write(json.dumps(event) + "\n")
-            self.lock.notify_all()
+            try:
+                event = {"seq": len(self.events), "t": round(time.time() - self.started, 3),
+                         "kind": kind, "agent": agent, **data}
+                self.events.append(event)
+                self.log(event)
+            finally:
+                self.lock.notify_all()
         return event
+
+    def log(self, event):
+        """Append the event to events.jsonl, best effort. The file is a side
+        record (the runner reads the events from memory), so a disk that
+        refuses the write, or a log directory cleaned away, costs one
+        complaint on stderr per run and never the tool call that emitted;
+        later writes are still tried, so a disk that fills and empties
+        again loses only the events in between."""
+        if not self.events_path:
+            return
+        try:
+            with self.events_path.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(event) + "\n")
+        except OSError as problem:
+            if not self.log_complained:
+                self.log_complained = True
+                print(f"coordbench run {self.id}: cannot write {self.events_path} ({problem}); "
+                      "the events stay in memory", file=sys.stderr, flush=True)
 
     def wait_until(self, ready, timeout):
         """Block until ready() holds or the timeout (seconds) passes;
@@ -186,6 +211,9 @@ class Arm:
     - tools(run, agent): the tools this agent gets;
     - prompt(run, agent, specs): what the agent is told, given each
       feature's spec by number;
+    - instructions(run, agent): text sent as MCP server instructions, which
+      Claude Code puts into the system prompt; empty by default, because
+      CooperBench's agents got none and a fair comparison keeps it so;
     - metrics(run): numbers worth keeping, from run.events and run.state;
     - teardown(run): free what setup or the tools took (a scratch clone, a
       thread), called once when the run closes, outside run.lock.
@@ -222,6 +250,9 @@ class Arm:
         parts = [specs[n].strip() for n in mine]
         return "\n\n".join(parts + [SUBMISSION_BLOCK])
 
+    def instructions(self, run, agent):
+        return ""
+
     def teardown(self, run):
         pass
 
@@ -237,9 +268,12 @@ class Arm:
         return {t.name: t for t in self.tools(run, agent) if not t.roles or role in t.roles}
 
 
-def load_arm(path):
-    """Load the arm in a directory from its arm.json: {"entry": "arm.py:ClassName", ...}.
-    The rest of arm.json is handed to the arm as its config."""
+def load_arm_class(path):
+    """The Arm subclass and the config an arm directory holds, from its
+    arm.json: {"entry": "arm.py:ClassName", ...}; the rest of arm.json is
+    the config. Every call executes arm.py into a module of its own, so a
+    caller that makes many arms from one directory (the hub) keeps what
+    this returns and instantiates from it."""
     root = Path(path).resolve()
     config = json.loads((root / "arm.json").read_text(encoding="utf-8"))
     module_file, _, class_name = config["entry"].partition(":")
@@ -247,10 +281,18 @@ def load_arm(path):
                                                   root / module_file)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    arm = getattr(module, class_name)(root, config)
-    if not isinstance(arm, Arm):
+    cls = getattr(module, class_name)
+    if not (isinstance(cls, type) and issubclass(cls, Arm)):
         raise TypeError(f"{class_name} in {root} is not an Arm")
-    return arm
+    return cls, config
+
+
+def load_arm(path):
+    """Load the arm in a directory: its class, instantiated with the
+    directory and its config."""
+    root = Path(path).resolve()
+    cls, config = load_arm_class(root)
+    return cls(root, config)
 
 
 def builtin_arms_dir():

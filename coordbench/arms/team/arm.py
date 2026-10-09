@@ -10,16 +10,25 @@ as runner/team.py lays them out. Every agent gets the same tools:
   a pre-assigned one included, cannot be claimed;
 - the typed request protocol (team_harness/protocol.py): request, respond
   and pending, for questions that want an answer by id;
-- CooperBench's messaging with wait_for_message, the long poll its team
-  mode registers for CLI agents (team_harness/mcp_server.py).
+- CooperBench's messaging (coop_msg.py, from kit.py) and wait_for_message,
+  a tool with the name, text and schema of the long poll CooperBench's
+  team mode registers for its CLI agents (team_harness/mcp_server.py),
+  which here returns a message where CooperBench's never did; the list of
+  differences below says why.
 
 Each tool carries the shell command CooperBench installs for it
 (install_snippet.sh) as its alias and coop_task.py's options (--assign,
 -n/--note, --mine, --open, --wait) as its flags, so
 `coop-task-update <id> blocked -n "<why>"` works as in the authors' runs,
-and an MCP client sees the same arguments as plain fields. A refused call
-exits with coop_task.py's own code, so the prompt's "exit 0 if you got
-it, 2 if someone else owns it" stays true: 1 for a task that does not
+and an MCP client sees the same arguments as plain fields. The words are
+read as coop_task.py's argparse reads them: one word per positional, so a
+title or a body of several words wants its quotes and a word too many is
+refused, by cli.py, with argparse's exit code 2; an empty title or body
+is a value, as "" is to argparse; and a request is queued for whatever
+name it is addressed to, since protocol.py checks the recipient against
+nobody, so a wait on a request to a misspelt peer runs out. A refused
+call exits with coop_task.py's own code, so the prompt's "exit 0 if you
+got it, 2 if someone else owns it" stays true: 1 for a task that does not
 exist, 2 for a claim another agent holds, 3 for an update by a non-owner,
 4 for a bad status, 5 for a wait that ran out, 6 for an unknown request
 and 7 for a request addressed to someone else. A missing argument or a
@@ -41,17 +50,27 @@ Where this differs from CooperBench, and why:
   holds the run's lock, so a claim is atomic in fact; CooperBench reads
   the owner and then writes it, which its own comments call race-safe
   only because contention is small.
-- A request to an agent that is not in the run is refused (exit 1), as
-  kit's messages are, rather than queued for nobody.
-- A request's wait is capped (LONGEST_WAIT_SECONDS) and a closed run wakes
-  it, so a blocked call never holds a hub thread past the run.
-- A title or a body typed as several words is taken whole, joined by
-  spaces, where argparse refuses the words after the first: an agent that
-  forgot its quotes loses nothing, and one that used them sees no change.
+- A request's wait is capped (LONGEST_WAIT_SECONDS, 300 seconds) and a
+  closed run wakes it, where coop_task.py's BLPOP waits as long as it is
+  asked to. The cap keeps a blocked call inside the limits of its callers,
+  which sit above it on purpose: Claude Code gives up on an MCP call after
+  the timeout the arm's .mcp.json sets (330 seconds) and cli.py after 600,
+  so an unbounded wait would be cut off by the client anyway, and the
+  response it then took would reach nobody.
+- wait_for_message returns a message. At 63b9d44 CooperBench's never did:
+  its server BLPOPs <agent>:inbox, with no prefix, while coop_msg.py
+  pushes to run:<id>:<agent>:inbox, so every call there ran out with the
+  no-message marker and left the inbox for coop-recv. Here the tool hands
+  over the oldest message and removes it from the inbox, and holds the
+  wait to the schema's range (kit.py says how). The difference is
+  deliberate: a long poll that never answers measures nothing.
 - The mirror of the list under /workspace/shared/tasks, which coop-task-list
-  writes as it lists, is written by the hub, so it needs the shared
-  directory as the hub's host sees it (the run option "shared_dir_host");
-  without one there is no mirror.
+  writes as it lists, is written by the hub from its host, so it needs the
+  shared directory as the hub's host sees it (the run option
+  "shared_dir_host"); without one there is no mirror. The volume is the
+  agents' to write, so the hub treats it as untrusted: it writes only into
+  a real directory named tasks at the top of the volume, never through a
+  symlink an agent put in its place, and not once the run has closed.
 
 Every ported piece is from CooperBench at 63b9d44 (MIT licence) and says
 where it came from.
@@ -61,7 +80,6 @@ import functools
 import importlib.util
 import json
 import os
-import tempfile
 import time
 import uuid
 from collections import Counter
@@ -83,8 +101,10 @@ VALID_STATUSES = frozenset({"open", "in_progress", "blocked", "done"})
 # runner/team.py seeds the list in this name.
 BENCH_RUNNER = "bench-runner"
 
-# coop_task.py waits as long as asked; the hub caps it well under cli.py's
-# ten-minute timeout, so the command hears back before it gives up.
+# coop_task.py waits as long as asked; the hub caps it under the limits of
+# its callers, so each hears back before it gives up: cli.py waits 600
+# seconds, and Claude Code the 330 the arm's .mcp.json sets (without that
+# key it would give up at 60, and the response would reach nobody).
 LONGEST_WAIT_SECONDS = 300
 
 # The run event each audit-log entry is recorded as, so events.jsonl
@@ -94,10 +114,8 @@ EVENT_KINDS = {"create": "task_create", "claim": "task_claim", "update": "task_u
 
 # coop_task.py's exit codes, which its callers branch on. USAGE is
 # argparse's code for words it cannot read, which coop_task.py exits with
-# before it does anything. NO_SUCH_AGENT is this arm's own refusal, a real
-# error like any other.
+# before it does anything.
 NO_SUCH_TASK = 1
-NO_SUCH_AGENT = 1
 USAGE = 2
 OWNED_BY_ANOTHER = 2
 NOT_THE_OWNER = 3
@@ -192,10 +210,10 @@ class Board:
             return tasks, [dict(entry) for entry in self.log]
 
     def request(self, sender, recipient, kind, body):
-        """protocol.py's request: an open request in the recipient's queue."""
-        if recipient not in self.run.agents:
-            raise ToolError(f"no agent named {recipient!r}; the agents are {', '.join(self.run.agents)}",
-                            NO_SUCH_AGENT)
+        """protocol.py's request: an open request in the recipient's queue,
+        whoever the recipient is. protocol.py checks the name against
+        nobody, so a request to a misspelt peer waits for an answer that
+        never comes, as it does in CooperBench."""
         with self.run.lock:
             request_id = fresh_id(self.requests, self.responses)
             self.requests[request_id] = {"id": request_id, "from": sender, "to": recipient,
@@ -255,9 +273,10 @@ def lead_of(run):
 
 def required(call, name):
     """An argument the command cannot go without, refused as argparse
-    refuses a missing positional: with its message, exiting 2."""
+    refuses a missing positional: with its message, exiting 2. An empty
+    string is a value, as "" is to argparse."""
     value = call.arguments.get(name)
-    if value is None or str(value) == "":
+    if value is None:
         raise ToolError(f"the following arguments are required: {name}", USAGE)
     return str(value)
 
@@ -306,10 +325,15 @@ def task_update(call):
 
 def task_list(call):
     mine, open_only = switch(call, "mine"), switch(call, "open")
-    tasks, log = board_of(call.run).snapshot()
+    run = call.run
+    with run.lock:
+        # One hold for the snapshot and the run's state, so the mirror is
+        # of a list that was listed while the run was open.
+        tasks, log = board_of(run).snapshot()
+        closed = run.closed
     chosen = [task for task in tasks
               if (not mine or task["owner"] == call.agent) and (not open_only or task["status"] == "open")]
-    mirror_if_shared(call.run, tasks, log)
+    mirror_if_shared(run, tasks, log, closed)
     return json.dumps(chosen, indent=2)
 
 
@@ -345,7 +369,7 @@ def task_tools():
              "pre-sets its owner, who must still claim it. "
              "Shell: coop-task-create [--assign <agent>] \"<title>\".",
              task_create, kit.schema(["title"], title=TEXT, assign=assign),
-             alias="coop-task-create", argv=("title...",), flags={"--assign": "assign"}),
+             alias="coop-task-create", argv=("title",), flags={"--assign": "assign"}),
         Tool("task_claim",
              "Claim a task: you become its owner and it moves to in_progress. Refused when another "
              "agent owns it, by claim or by assignment (the command exits 2: pick another task); "
@@ -377,58 +401,100 @@ def protocol_tools():
              "instead, or exit 5 when none comes. "
              "Shell: coop-request <recipient> <kind> [body] [--wait N].",
              send_request, kit.schema(["recipient", "kind"], recipient=TEXT, kind=TEXT, body=TEXT, wait=wait),
-             alias="coop-request", argv=("recipient", "kind", "body..."), flags={"--wait": "wait"}),
+             alias="coop-request", argv=("recipient", "kind", "body"), flags={"--wait": "wait"}),
         Tool("respond",
              "Answer an open request addressed to you; the response goes to the requester waiting "
              "on it, and the request closes. Refused for an unknown or closed request (exit 6) and "
              "for one addressed to another agent (exit 7). Shell: coop-respond <request_id> [body].",
              answer_request, kit.schema(["request_id"], request_id=TEXT, body=TEXT),
-             alias="coop-respond", argv=("request_id", "body...")),
+             alias="coop-respond", argv=("request_id", "body")),
         Tool("pending",
              "The open requests addressed to you, as JSON. Shell: coop-pending.",
              pending_requests, alias="coop-pending"),
     ]
 
 
-# The list's mirror on the shared scratchpad.
+# The list's mirror on the shared scratchpad. The hub writes it from its
+# host, as root when the volume's host path asks for it, into a directory
+# the agents fill as they like, so every step is relative to a descriptor
+# of the real tasks directory: a symlink an agent planted in its place is
+# refused by the kernel as the directory is opened, and nothing an agent
+# does to the path afterwards moves where the writes and the unlinks land.
+# A check of the path before the writes would leave a window between the
+# two, which is why there is none.
 
-def write_atomically(path, text):
-    """Write through a temporary file and a rename, so a reader sees the old
-    file or the new one, never half of one (fs_mirror.py)."""
-    handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+def open_tasks_directory(shared):
+    """A descriptor on <shared>/tasks, the leaf made when it is missing.
+    The volume's root is the runner's, taken as given; only the leaf is
+    made, so a volume the runner has removed is not brought back as a
+    stray directory. O_NOFOLLOW and O_DIRECTORY make the kernel refuse a
+    symlink, or anything but a directory, in the open itself."""
+    tasks = Path(shared).resolve() / "tasks"
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
+        os.mkdir(tasks)
+    except FileExistsError:
+        pass
+    return os.open(tasks, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+
+def unlink_quietly(directory, name):
+    try:
+        os.unlink(name, dir_fd=directory)
+    except OSError:
+        pass
+
+
+def write_atomically(directory, name, text):
+    """Write the file called name in the open directory through a temporary
+    file and a rename, so a reader sees the old file or the new one, never
+    half of one (fs_mirror.py). The temporary file is made with O_EXCL, so
+    a file an agent left under its name is refused rather than written."""
+    temporary = f".{name}.{uuid.uuid4().hex[:8]}"
+    handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644, dir_fd=directory)
+    try:
+        with open(handle, "w", encoding="utf-8") as out:
             out.write(text)
-        os.replace(temporary, path)
+        os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
     except BaseException:
-        Path(temporary).unlink(missing_ok=True)
+        unlink_quietly(directory, temporary)
         raise
 
 
-def mirror_task_list(target, tasks, log):
-    """coop_task.py's _snapshot_to_directory: one JSON file per task, stale
-    ones removed, an index and a copy of the log."""
-    target.mkdir(parents=True, exist_ok=True)
+def mirror_task_list(directory, tasks, log):
+    """coop_task.py's _snapshot_to_directory, into the open directory: one
+    JSON file per task, stale ones removed, an index and a copy of the log.
+    A stale entry that will not go (a directory an agent named so) is left,
+    as CooperBench leaves it, and the rest of the mirror is still written."""
     live = {task["id"] for task in tasks}
     for task in tasks:
-        write_atomically(target / f"{task['id']}.json", json.dumps(task, indent=2, default=str))
-    for stale in target.glob("*.json"):
-        if not stale.name.startswith("_") and stale.stem not in live:
-            stale.unlink(missing_ok=True)
+        write_atomically(directory, f"{task['id']}.json", json.dumps(task, indent=2, default=str))
+    with os.scandir(directory) as entries:
+        names = [entry.name for entry in entries]
+    for name in names:
+        if name.endswith(".json") and not name.startswith("_") and name[:-5] not in live:
+            unlink_quietly(directory, name)
     index = {"updated_at": time.time(), "ids": sorted(live)}
-    write_atomically(target / "_index.json", json.dumps(index, indent=2))
-    write_atomically(target / "_log.jsonl", "".join(json.dumps(entry) + "\n" for entry in log))
+    write_atomically(directory, "_index.json", json.dumps(index, indent=2))
+    write_atomically(directory, "_log.jsonl", "".join(json.dumps(entry) + "\n" for entry in log))
 
 
-def mirror_if_shared(run, tasks, log):
-    """The side effect of coop-task-list, best effort as CooperBench's is."""
+def mirror_if_shared(run, tasks, log, closed):
+    """The side effect of coop-task-list, best effort as CooperBench's is,
+    and not for a closed run: the runner removes the volume once the run
+    is closed, and a mirror then would leave a directory of its own."""
     shared = run.options.get("shared_dir_host")
-    if not shared:
+    if not shared or closed:
         return
     try:
-        mirror_task_list(Path(shared) / "tasks", tasks, log)
+        directory = open_tasks_directory(shared)
+    except OSError:
+        return
+    try:
+        mirror_task_list(directory, tasks, log)
     except OSError:
         pass
+    finally:
+        os.close(directory)
 
 
 # The prompt: team_harness/prompt.py, word for word.

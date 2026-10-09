@@ -9,12 +9,12 @@ or --url) lists the tools with their aliases and runs them:
     python3 cli.py prompt                      the agent's prompt
     python3 cli.py call <tool> '{"to": "agent2", "text": "hi"}'
     python3 cli.py call <tool> to=agent2 text=hi
-    python3 cli.py alias-run <tool> agent2 hi there
+    python3 cli.py alias-run <tool> agent2 "hi there"
     python3 cli.py install /usr/local/bin [--url URL] [--python PATH]
 
 install writes one small sh wrapper per alias (coop-send) and one per tool
 (coord-send_message), each running `alias-run <tool>`, so the agent types
-`coop-send agent2 hi there` as in the authors' runs. Given --url, the
+`coop-send agent2 "hi there"` as in the authors' runs. Given --url, the
 wrappers carry the URL themselves, which lets agents that share one host
 each have a bin directory of their own.
 
@@ -23,15 +23,23 @@ the tool's flags sets that flag's argument wherever it stands, before,
 among or after the other words: a flag whose argument the tool's schema
 types as a boolean is a switch (--mine), any other takes the next word
 (-n "a note") or the value after "=" (--wait=10). The words left go onto
-the tool's argv in order. A word that is not one of the tool's flags stays
-a word even when it starts with a dash, since a message may.
+the tool's argv in order, one word per name, a name ending in "..."
+taking the rest of the line; the last name, "..." or not, takes the text
+on stdin when no word is left for it (`coop-send agent2 < note.txt`, as
+coop_msg.py reads its content from stdin when the word is missing). A
+word beyond the names is refused, as argparse refuses it. A word that is
+not one of the tool's flags stays a word even when it starts with a
+dash, since a message may.
 
-What a command prints: the tool's text on stdout and exit 0; a tool that
-refused its call, its text on stderr and the exit code the tool gave its
-command, 1 when it gave none, so a ported command keeps the codes its
-callers branch on (coop-task-claim exits 2 for a task another agent
-holds); a hub that cannot be reached or answers with an HTTP error, or a
-command used wrongly, one line on stderr and exit 2.
+What a command prints: the tool's text on stdout and exit 0, or on stderr
+when the tool's schema says so ("x-coordbench-prints": "stderr", which
+coop-send carries so that "sent to agent2" goes where coop_msg.py sends
+it and stdout stays empty); a tool that refused its call, its text on
+stderr and the exit code the tool gave its command, 1 when it gave none,
+so a ported command keeps the codes its callers branch on (coop-task-claim
+exits 2 for a task another agent holds); a hub that cannot be reached or
+answers with an HTTP error, or a command used wrongly, one line on stderr
+and exit 2.
 
 The file imports nothing from coordbench, so it can be copied alone into
 an agent's container and run by whatever Python 3 is there.
@@ -124,12 +132,16 @@ def describe_agent(url):
     return answer
 
 
+def tool_named(description, name):
+    return next((t for t in description.get("tools") or [] if t.get("name") == name), None)
+
+
 def find_tool(description, name):
-    for tool in description.get("tools") or []:
-        if tool.get("name") == name:
-            return tool
-    names = ", ".join(t.get("name", "?") for t in description.get("tools") or []) or "none"
-    raise Failure(f"this agent has no tool named {name!r}; its tools are: {names}")
+    tool = tool_named(description, name)
+    if tool is None:
+        names = ", ".join(t.get("name", "?") for t in description.get("tools") or []) or "none"
+        raise Failure(f"this agent has no tool named {name!r}; its tools are: {names}")
+    return tool
 
 
 def command_name(tool):
@@ -264,28 +276,36 @@ def words_to_arguments(tool, words):
 
 
 def argv_arguments(tool, words):
-    """Map words onto the tool's argv names in order; a name ending in
-    "..." takes the rest of the words joined by spaces, and, when no word
-    is left for it but every earlier name got one, the text on stdin (as
-    coop-send does in CooperBench's coop_msg.py at 63b9d44). A tool with
-    no argv takes key=value words or one JSON object instead."""
+    """Map words onto the tool's argv names in order: one word per name,
+    the rest of the words joined by spaces for a name ending in "...",
+    which is the last, and for the last name, "..." or not, the text on
+    stdin when no word is left for it but every earlier name got one.
+    That is coop_msg.py's content at 63b9d44, an optional positional read
+    from stdin when missing, so `coop-send agent2 < note.txt` works as in
+    CooperBench. Words beyond the names are refused, as argparse refuses
+    them. A tool with no argv takes key=value words or one JSON object."""
     argv = list(tool.get("argv") or [])
     if not argv:
         return parse_arguments(words, tool)
+    if not argv[-1].endswith("...") and len(words) > len(argv):
+        raise Failure(f"too many words; usage: {usage(tool)}")
     arguments = {}
     for index, name in enumerate(argv):
-        if name.endswith("..."):
-            rest_name = name[:-3]
-            if words[index:]:
-                arguments[rest_name] = coerce(tool, rest_name, " ".join(words[index:]))
-            elif len(words) == index and stdin_has_text():
-                arguments[rest_name] = sys.stdin.read()
-            return arguments
-        if index < len(words):
-            arguments[name] = coerce(tool, name, words[index])
-    if len(words) > len(argv):
-        raise Failure(f"too many words; usage: {usage(tool)}")
+        value = argv_word(name, index, words, last=index == len(argv) - 1)
+        if value is not None:
+            arguments[name.removesuffix("...")] = coerce(tool, name.removesuffix("..."), value)
     return arguments
+
+
+def argv_word(name, index, words, last):
+    """The word for the argv name at index: the word at its place, or the
+    rest of the words joined for a name ending in "..."; for the last name
+    with no word left for it, the text on stdin, when there is some."""
+    if index < len(words):
+        return " ".join(words[index:]) if name.endswith("...") else words[index]
+    if last and index == len(words) and stdin_has_text():
+        return sys.stdin.read()
+    return None
 
 
 def run_tool(url, name, arguments):
@@ -313,8 +333,21 @@ def exit_code(answer):
     return TOOL_ERROR
 
 
-def report(answer):
-    show(str(answer.get("text", "")), sys.stderr if answer.get("isError") else sys.stdout)
+def prints_on_stderr(tool):
+    """True for a tool whose schema says its text goes to stderr. The mark
+    is a keyword of the input schema ("x-coordbench-prints": "stderr")
+    because the hub's description already carries the schema whole, JSON
+    Schema lets a schema carry keywords it does not define, and an MCP
+    client ignores one; coop-send carries it, so "sent to agent2" goes
+    where coop_msg.py sends it and stdout stays what a caller would pipe."""
+    return ((tool or {}).get("inputSchema") or {}).get("x-coordbench-prints") == "stderr"
+
+
+def report(answer, tool=None):
+    """Print the answer where it belongs and give the exit code: a refusal
+    on stderr, a result on stdout, or on stderr when the tool says so."""
+    to_stderr = bool(answer.get("isError")) or prints_on_stderr(tool)
+    show(str(answer.get("text", "")), sys.stderr if to_stderr else sys.stdout)
     return exit_code(answer)
 
 
@@ -336,15 +369,16 @@ def print_prompt(args):
 
 
 def call(args):
-    tool = None
-    if any("=" in word for word in args.words) and not args.words[0].lstrip().startswith("{"):
-        tool = find_tool(describe_agent(args.url), args.tool)
-    return report(run_tool(args.url, args.tool, parse_arguments(args.words, tool)))
+    """A tool by name with its arguments as given. The description types
+    the key=value words and says where the text goes; a name the hub does
+    not list is left for the hub to refuse, with its own reason."""
+    tool = tool_named(describe_agent(args.url), args.tool)
+    return report(run_tool(args.url, args.tool, parse_arguments(args.words, tool)), tool)
 
 
 def alias_run(args):
     tool = find_tool(describe_agent(args.url), args.tool)
-    return report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words)))
+    return report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words)), tool)
 
 
 def wrapper_script(tool_name, python, url=None):

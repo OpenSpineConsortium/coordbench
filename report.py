@@ -4,12 +4,21 @@ Each arm is one CooperBench run (experiment/run_arms.sh names them
 flash-<arm>-<tag>), and each pair it ran leaves result.json (the agents'
 status, tokens and time) and eval.json (whether both features' tests
 passed on the merged code) under logs/<run>/<setting>/<repo>/<task>/<pair>/.
-This reads those files and prints Markdown: each arm's pass rate with a
-95% Wilson interval next to the authors' number, every pair of arms
-compared on the pairs both finished (an exact McNemar test, since the
-arms ran the same pairs), and one row per pair. A pair an agent left in
-Error, or that has no eval.json yet, is counted apart and never as a
-failure, as CooperBench's own pass rate does.
+The agents are read from the "agents" block that CooperBench's coop and
+team runners and coordbench's run.py write, or from the one "agent" block
+of CooperBench's solo runner (runner/solo.py), so its solo baseline is
+measured like every other row. A null token count is unknown, not zero
+(coordbench writes null when its driver could not measure usage): a pair
+whose counts are all null is left out of "Tokens per pair", which shows
+'-' when no pair of the arm was measured. This prints Markdown: each arm's
+pass rate with a 95% Wilson interval next to the authors' number, every
+pair of arms compared on the pairs both finished (an exact McNemar test,
+since the arms ran the same pairs), and one row per pair. A pair an agent
+left in Error, or that has no eval.json yet, or whose eval.json reports an
+error, is counted apart and never as a failure. CooperBench's own tally
+sets an eval error apart too but scores an errored agent's empty patch as
+a failure; here every arm's rate, CooperBench's runs and coordbench's
+alike, is its rate on the pairs its agents finished.
 
     python3 experiment/report.py [--logs ~/cooperbench/logs] [--tag cc]
         [--arm solo --arm team ...] [--run LABEL=RUN_NAME ...]
@@ -32,16 +41,38 @@ ARMS = ("solo", "coop", "coop-git", "team")
 AUTHORS = {"solo": "24/50", "coop": "13/50", "coop-git": "28/50", "team": "31/50"}
 
 
+TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+def pair_agents(result):
+    """The agents of one result.json, keyed by id. CooperBench's coop and
+    team runners and coordbench's run.py write them under "agents";
+    CooperBench's solo runner (runner/solo.py) writes the one agent under
+    the singular "agent", and reading only the plural would count that
+    baseline's tokens as 0 and never see its agent in Error."""
+    agents = result.get("agents")
+    if isinstance(agents, dict) and agents:
+        return agents
+    agent = result.get("agent")
+    return {"solo": agent} if isinstance(agent, dict) else {}
+
+
+def pair_tokens(agents):
+    """The pair's token total, or None when no count is known. A driver
+    that cannot measure usage writes null for the counts (coordbench's
+    run.py), so a null is unknown and a measured zero is a zero: the sum
+    runs over the counts that are numbers, and a pair with none is None
+    rather than a 0 that reads as measured."""
+    known = [a.get(k) for a in agents.values() for k in TOKEN_FIELDS if a.get(k) is not None]
+    return sum(known) if known else None
+
+
 def pair_outcome(pair_dir):
     """"pass", "fail" or "error" for one pair, with its usage."""
     result_file, eval_file = pair_dir / "result.json", pair_dir / "eval.json"
     result = json.loads(result_file.read_text()) if result_file.exists() else {}
-    agents = result.get("agents") or {}
-    usage = {
-        "tokens": sum(a.get(k) or 0 for a in agents.values()
-                      for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")),
-        "seconds": result.get("duration_seconds") or 0,
-    }
+    agents = pair_agents(result)
+    usage = {"tokens": pair_tokens(agents), "seconds": result.get("duration_seconds") or 0}
     if not eval_file.exists() or any(a.get("status") == "Error" for a in agents.values()):
         return "error", usage
     evaluation = json.loads(eval_file.read_text())
@@ -89,10 +120,14 @@ def summary_rows(arms):
         rate = 100 * passed / len(scored) if scored else 0.0
         errors = len(outcomes) - len(scored)
         count = max(1, len(outcomes))
-        tokens = sum(u["tokens"] for _, u in outcomes.values()) / count
+        # A pair whose tokens are unknown (every count null) is left out of
+        # the mean rather than pulling it towards zero; '-' when no pair of
+        # the arm was measured.
+        known = [u["tokens"] for _, u in outcomes.values() if u["tokens"] is not None]
+        tokens = f"{sum(known) / len(known):,.0f}" if known else "-"
         minutes = sum(u["seconds"] for _, u in outcomes.values()) / 60 / count
         rows.append(f"| {arm} | {passed}/{len(scored)} | {rate:.0f}% | {low:.0f}-{high:.0f}% | {errors} "
-                    f"| {tokens:,.0f} | {minutes:.1f} | {AUTHORS.get(arm, '-')} |")
+                    f"| {tokens} | {minutes:.1f} | {AUTHORS.get(arm, '-')} |")
     return rows
 
 

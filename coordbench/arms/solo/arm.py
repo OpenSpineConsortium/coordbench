@@ -12,8 +12,13 @@ build_instruction in src/cooperbench/agents/_coop/prompt.py, given no
 partners, adds only the submission block after another rule. The text is
 kept identical so a solo run through coordbench can be set beside a solo
 run through CooperBench's runner; the tests check it against CooperBench's
-own function when its source is at hand. The skill restates the prompt
-and adds nothing, so loading the plugin tells the agent nothing more.
+own function when its source is at hand.
+
+The plugin directory holds no skill and no .mcp.json: CooperBench's solo
+agent had no MCP server and no skill, so a Claude Code that loads this
+plugin sees nothing beyond the prompt, as the authors' agent did. What is
+here is the plugin's name (.claude-plugin/plugin.json), arm.json and this
+file.
 """
 
 import kit

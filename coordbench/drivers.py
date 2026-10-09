@@ -13,8 +13,15 @@ container's /workspace/repo/patch.txt, where every arm's prompt asks for it:
   as CooperBench's claude_code adapter does (src/cooperbench/agents/
   claude_code/adapter.py at 63b9d44, MIT licence), with the arm loaded as
   a Claude Code plugin, so the hub's tools arrive over MCP and the arm's
-  skill rides along. Usage and turns come from the stream's final result
-  event, parsed as the adapter's parsers.py parses it.
+  skill rides along; the arm's extra plugins go along as directories
+  copied into the container (--plugin-dir) or, for a .zip URL, as the URL
+  itself (--plugin-url). Usage, cost and turns come from the stream's
+  final result event, parsed as the adapter's parsers.py parses it. The
+  agent's time limit holds inside the container: claude runs under
+  coreutils timeout, which ends it when the limit passes whether or not
+  the docker client that started it is still there, and the shell leaves
+  its pid in a file so the runner can stop the agent early with the shell
+  builtin kill, since the task images have no pkill.
 - SessionDriver hands the agent to a Claude Code session's own subagents,
   which run on the host. The agent's repository is a host directory
   bind-mounted at /workspace/repo in its container, so the subagent edits
@@ -23,13 +30,16 @@ container's /workspace/repo/patch.txt, where every arm's prompt asks for it:
   prompt the orchestrating session gives its subagent, and wait() watches
   for the marker the prompt asks the subagent to leave last. Because its
   handle is plain JSON, the wait can happen in another process (run.py's
-  prepare and finish).
+  prepare and finish). It sees no stream, so it measures no usage.
 
 A driver of one's own is any class with start() and wait(); run.py loads
 it from path/to/file.py:ClassName. Class attributes tell the runner what
 the driver wants: `host_workspace` (the repository as a host directory),
-`resumable` (start and wait may run in different processes), and
-`framework` (the agent_framework recorded in result.json).
+`resumable` (start and wait may run in different processes), `framework`
+(the agent_framework recorded in result.json) and `measures_usage`
+(whether the outcome's token counts, steps and cost were measured; a
+driver without the attribute is taken not to measure them, and
+result.json then holds null in their place rather than zeros).
 
 Every docker command goes through docker() below, so tests swap in a fake.
 """
@@ -45,14 +55,23 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from arm import builtin_arms_dir
+
 CONTAINER_REPO = "/workspace/repo"
 CONTAINER_COORDBENCH = "/opt/coordbench"
 CONTAINER_PLUGINS = "/opt/coordbench-plugins"
+# Arms from outside coordbench's own arms/ live under a root of their own
+# in the container, never beside the built-in ones (container_arm_dir).
+CONTAINER_ARMS = "/opt/coordbench-arms"
 CONTAINER_PROMPT = "/tmp/coord-prompt.txt"
 CONTAINER_MCP_CONFIG = "/tmp/coord-mcp.json"
 # The adapter keeps Claude Code's state under /tmp, so the session
 # transcript is always in one known place after the run.
 CONTAINER_CLAUDE_CONFIG_DIR = "/tmp/claude-cfg"
+# Where the shell that runs claude leaves its pid, for stop_claude.
+CONTAINER_PID_FILE = "/tmp/coord-claude.pid"
+# How long timeout gives claude to end on SIGTERM before SIGKILL.
+KILL_GRACE_SECONDS = 30
 DONE_MARKER = ".coordbench-done"
 
 # Secrets reach the agent by name only: `docker exec -e NAME` makes the
@@ -72,6 +91,11 @@ CLAUDE_ENVIRONMENT = {
     "FORCE_AUTO_BACKGROUND_TASKS": "1",
     "ENABLE_BACKGROUND_TASKS": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    # Claude Code aborts an HTTP MCP tool call after 60 s by default, and
+    # the team arm's request tool waits up to 300 s. Each arm's .mcp.json
+    # sets the same per-server timeout; this is the belt to those braces,
+    # since an arm author may rewrite a plugin's .mcp.json. Milliseconds.
+    "MCP_TOOL_TIMEOUT": "330000",
 }
 
 SECTION_RULE = "\n\n---\n\n"
@@ -134,6 +158,8 @@ class AgentJob:
     env: dict
     arm_dir: str
     plugins: list = field(default_factory=list)
+    # Plugin .zip URLs, handed to Claude Code as they are (--plugin-url).
+    plugin_urls: list = field(default_factory=list)
     mcp_servers: dict = field(default_factory=dict)
     model: str = ""
     timeout_s: float = 7200.0
@@ -145,7 +171,8 @@ class AgentJob:
 @dataclass
 class AgentOutcome:
     """How an agent ended, in CooperBench's terms: status is Submitted,
-    LimitsExceeded or Error. `patch` is the agent's patch.txt."""
+    LimitsExceeded or Error; cost is the result event's total_cost_usd.
+    `patch` is the agent's patch.txt."""
 
     status: str = "Error"
     input_tokens: int = 0
@@ -153,6 +180,7 @@ class AgentOutcome:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     steps: int = 0
+    cost: float = 0.0
     error: str | None = None
     patch: str = ""
 
@@ -180,9 +208,10 @@ def status_of(result_event):
 
 
 def summarize_stream(text):
-    """Usage, turns and status from Claude Code's stream-json, read from the
-    first result event as parse_stream_json reads it. A stream without one
-    (the CLI crashed or was killed) is an Error with nothing counted."""
+    """Usage, cost, turns and status from Claude Code's stream-json, read
+    from the first result event as parse_stream_json reads it. A stream
+    without one (the CLI crashed or was killed) is an Error with nothing
+    counted."""
     for event in json_lines(text):
         if event.get("type") != "result":
             continue
@@ -195,6 +224,7 @@ def summarize_stream(text):
             cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
             cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0),
             steps=int(event.get("num_turns") or 0),
+            cost=float(event.get("total_cost_usd") or 0),
             error=None if status == "Submitted" else str(event.get("result") or event.get("subtype"))[:500],
         )
     return AgentOutcome(status="Error", error=NO_RESULT)
@@ -214,8 +244,21 @@ def bare_model(model):
     return model.split("/", 1)[1] if "/" in model else model
 
 
+def arm_is_builtin(arm_dir):
+    """Whether the arm is one shipped under coordbench's own arms/, which
+    the copy of coordbench into every container brings along."""
+    return Path(arm_dir).resolve().parent == builtin_arms_dir().resolve()
+
+
 def container_arm_dir(arm_dir):
-    return f"{CONTAINER_COORDBENCH}/arms/{Path(arm_dir).name}"
+    """Where the arm is in the agent's container: a built-in arm where the
+    copy of coordbench put it; any other under a root of its own, named
+    for its resolved path, so an arm from elsewhere that bears a built-in
+    arm's name is never copied over the built-in one."""
+    path = Path(arm_dir).resolve()
+    if arm_is_builtin(path):
+        return f"{CONTAINER_COORDBENCH}/arms/{path.name}"
+    return f"{CONTAINER_ARMS}/{safe_name(path)}"
 
 
 def read_container_file(container, path):
@@ -235,6 +278,8 @@ def claude_flags(job):
              "--plugin-dir", container_arm_dir(job.arm_dir)]
     for plugin in job.plugins:
         flags += ["--plugin-dir", plugin]
+    for url in job.plugin_urls:
+        flags += ["--plugin-url", url]
     if job.mcp_servers:
         flags += ["--mcp-config", CONTAINER_MCP_CONFIG]
     if job.max_turns:
@@ -245,10 +290,18 @@ def claude_flags(job):
 def claude_script(job):
     """The adapter's command line, with the arm's plugin added. The prompt
     is read from a file, as the adapter reads it, so a long prompt neither
-    meets argv limits nor needs escaping."""
+    meets argv limits nor needs escaping. The shell writes its pid to
+    CONTAINER_PID_FILE and execs claude under coreutils timeout, so that
+    pid is the timeout's: the time limit then holds inside the container
+    however the docker client that started it ends, and stop_claude has a
+    pid to signal, which timeout passes on to claude and follows with
+    SIGKILL after KILL_GRACE_SECONDS. Debian slim and busybox both have
+    timeout; the task images have no pkill."""
+    limit = f"timeout -k {KILL_GRACE_SECONDS} {max(1, int(job.timeout_s))}"
     return ('export PATH="$HOME/.local/bin:$PATH"; '
             f"mkdir -p {CONTAINER_CLAUDE_CONFIG_DIR}; "
-            f"cd {CONTAINER_REPO} && claude {shlex.join(claude_flags(job))} "
+            f"echo $$ > {CONTAINER_PID_FILE}; "
+            f"cd {CONTAINER_REPO} && exec {limit} claude {shlex.join(claude_flags(job))} "
             f'--print -- "$(cat {CONTAINER_PROMPT})" 2>&1')
 
 
@@ -272,11 +325,23 @@ def claude_exec_arguments(job):
     return arguments + [job.container, "bash", "-lc", claude_script(job)]
 
 
+def stop_script():
+    """The shell line that stops the agent: the pid claude_script left is
+    the timeout's, and the shell builtin kill sends it SIGTERM, which it
+    passes on to claude. A builtin because the Debian slim task images
+    have no pkill (none installs procps); nothing is said when the file is
+    missing or the process already gone."""
+    return f'pid=$(cat {CONTAINER_PID_FILE} 2>/dev/null) && kill "$pid" 2>/dev/null; true'
+
+
 def stop_claude(container):
-    """Best effort: a timed-out agent must not keep working in a container
-    the runner keeps (--keep); otherwise teardown removes it anyway."""
+    """Best effort, the second line behind the timeout claude runs under
+    (claude_script): when the docker client that ran the agent is killed at
+    the deadline, the agent in the container runs on until its own timeout
+    fires, and in a container the runner keeps (--keep) nothing else would
+    end it; otherwise teardown removes the container anyway."""
     try:
-        docker("exec", container, "sh", "-c", "pkill -f 'claude --verbose' 2>/dev/null; true", timeout=30)
+        docker("exec", container, "sh", "-c", stop_script(), timeout=30)
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -328,6 +393,7 @@ class ClaudeCliDriver:
     framework = "claude_code"
     host_workspace = False
     resumable = False
+    measures_usage = True
 
     def start(self, job):
         put_container_file(job.container, CONTAINER_PROMPT, job.prompt)
@@ -401,6 +467,9 @@ class SessionDriver:
     framework = "claude_code_subagent"
     host_workspace = True
     resumable = True
+    # A subagent leaves no stream on the host, so its tokens, steps and
+    # cost are unknown, and result.json says so rather than count zero.
+    measures_usage = False
 
     def __init__(self, poll_seconds=10.0):
         self.poll_seconds = poll_seconds

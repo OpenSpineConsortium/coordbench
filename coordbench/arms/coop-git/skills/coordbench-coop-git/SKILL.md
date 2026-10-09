@@ -28,9 +28,6 @@ a shell command; both reach the same inbox, one per agent.
 | `peek_messages` | `coop-peek` | how many unread messages you have |
 | `list_agents` | `coop-agents` | every agent id in the run |
 
-Messages are never pushed into your conversation; you see them only when
-you receive them.
-
 ## The shared remote
 
 In `/workspace/repo` the remote `team` is already configured. Your

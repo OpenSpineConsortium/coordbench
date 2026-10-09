@@ -51,7 +51,8 @@ when there is no such task; coop-task-update exits 3 for a task you do
 not own and 4 for an unknown status; coop-request with --wait exits 5
 when no response came in time; coop-respond exits 6 for an unknown or
 closed request and 7 for one addressed to another agent. A command given
-too few words, or a --wait that is not a number, exits 2.
+too few or too many words (a title or a body of several words wants its
+quotes), or a --wait that is not a number, exits 2.
 
 At the start the list holds one task per member, "Implement feature N",
 assigned to that member, and the lead's "Lead-only: integrate and submit

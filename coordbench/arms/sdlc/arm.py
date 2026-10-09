@@ -100,6 +100,12 @@ HEADING_LABEL = re.compile(r"^(title|feature(\s+\d+)?)\s*:\s*", re.IGNORECASE)
 TITLE_LIMIT = 120
 
 ISSUE_ARGUMENT = {"type": "integer", "description": "the issue's number, which is its feature's number"}
+# An issue as an agent writes it: the number, or the board's "#3", in ASCII
+# digits only. str.isdigit would also take superscripts, which int()
+# refuses, and Arabic-Indic digits, which it reads as numbers; and a run
+# of digits longer than int() parses would crash where a refusal belongs.
+# Nine digits is far more than any run has features.
+ISSUE_TEXT = re.compile(r"#?\s*([0-9]{1,9})")
 
 # What each tool does, in a few words, for the table in the prompt; a tool
 # missing here is described by the first sentence of its description.
@@ -410,12 +416,13 @@ def gate_of(run):
 
 def issue_number(call):
     """The issue argument as a number; "#3" and "3" are read as 3, since an
-    agent may write an issue the way the board does."""
+    agent may write an issue the way the board does. Anything ISSUE_TEXT
+    does not match is refused, never handed to int()."""
     value = call.arg("issue", required=True)
-    text = str(value).strip().lstrip("#")
-    if isinstance(value, bool) or not text.isdigit():
+    match = ISSUE_TEXT.fullmatch(str(value).strip())
+    if isinstance(value, bool) or match is None:
         raise ToolError(f"issue must be an issue number, such as 1, not {value!r}")
-    return int(text)
+    return int(match.group(1))
 
 
 def standings(run, branches):

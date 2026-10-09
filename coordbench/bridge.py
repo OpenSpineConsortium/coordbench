@@ -19,6 +19,14 @@ block (wait_for_message waits up to 30 seconds) and a client that calls
 tools in parallel must not see a quick send queue behind a slow wait.
 initialize alone runs before anything else is read, so the session id and
 the protocol version it yields are known to every request that follows.
+
+A hub that has forgotten the session (it restarted, or the run was
+released) answers 404 to a request that carries its id, and the transport
+says the client MUST then start a new session. The stdio client has no
+session of its own and cannot, so the bridge does it for it: it sends the
+client's initialize again, with the params it kept, then
+notifications/initialized, neither written to the client, and retries the
+request once with the new session.
 """
 
 import json
@@ -45,6 +53,17 @@ class HubFailure(Exception):
     """The hub could not be reached, or answered with an HTTP error."""
 
 
+class SessionLost(Exception):
+    """The hub answered 404 to a request that carried a session id: it no
+    longer knows the session, and a new one must be opened. Carries the
+    id the hub refused, so one re-initialize serves every request that
+    failed on the same stale id."""
+
+    def __init__(self, session_id):
+        super().__init__(session_id)
+        self.session_id = session_id
+
+
 def error(request_id, code, message):
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
@@ -62,6 +81,16 @@ def request_ids(message):
 
 def is_initialize(message):
     return any(isinstance(m, dict) and m.get("method") == "initialize" for m in as_list(message))
+
+
+def initialize_params(message):
+    """The params of the initialize in a message or a batch, as the client
+    sent them, so the handshake can be repeated word for word."""
+    for item in as_list(message):
+        if isinstance(item, dict) and item.get("method") == "initialize":
+            params = item.get("params")
+            return params if isinstance(params, dict) else {}
+    return None
 
 
 def is_jsonrpc(payload):
@@ -129,7 +158,10 @@ class Bridge:
         self.timeout = timeout
         self.session_id = None
         self.protocol_version = None
+        self.initialize_params = None
+        self.reopened = 0
         self.write_lock = threading.Lock()
+        self.session_lock = threading.Lock()
         self.workers = []
 
     def serve(self, lines):
@@ -178,17 +210,59 @@ class Bridge:
             self.write(errors if isinstance(message, list) else errors[0])
 
     def post(self, message):
-        """Yield the JSON-RPC messages the hub answers to one message."""
+        """Yield the JSON-RPC messages the hub answers to one message. A
+        session the hub has forgotten is reopened and the message sent
+        once more; a second refusal is the hub's answer."""
         if is_initialize(message):
             self.session_id = self.protocol_version = None
+            self.initialize_params = initialize_params(message)
+        try:
+            yield from self.exchange(message)
+        except SessionLost as lost:
+            self.reopen_session(lost.session_id)
+            yield from self.exchange(message, reopen=False)
+
+    def exchange(self, message, reopen=True):
+        """Post one message once and yield what the hub answers. With
+        `reopen`, a 404 to a request sent with a session id is raised as
+        SessionLost before anything is yielded, so a retry repeats no
+        answer; without it, a 404 is an HTTP error like any other."""
+        sent_with = self.session_id
         body = json.dumps(message).encode("utf-8")
         request = urllib.request.Request(self.url, data=body, headers=self.headers(), method="POST")
         try:
             with OPENER.open(request, timeout=self.timeout) as response:
                 self.session_id = response.headers.get("Mcp-Session-Id") or self.session_id
                 yield from self.answers_in(response)
+        except urllib.error.HTTPError as problem:
+            if reopen and problem.code == 404 and sent_with:
+                problem.close()
+                raise SessionLost(sent_with) from None
+            raise HubFailure(self.explain(problem))
         except (OSError, HTTPException) as problem:
             raise HubFailure(self.explain(problem))
+
+    def reopen_session(self, lost):
+        """Start a new session as the transport asks after a 404: the
+        client's initialize again, then notifications/initialized, their
+        answers kept from the client, which already had its handshake.
+        Requests run in parallel, so the first to find the session gone
+        reopens it and the others, failed on the same id, reuse it."""
+        with self.session_lock:
+            if self.session_id != lost:
+                return
+            self.session_id = self.protocol_version = None
+            if self.initialize_params is None:
+                raise HubFailure(f"the coordbench hub at {self.url} forgot the session "
+                                 "and no initialize was sent to repeat")
+            self.reopened += 1
+            initialize = {"jsonrpc": "2.0", "id": f"coordbench-bridge-initialize-{self.reopened}",
+                          "method": "initialize", "params": self.initialize_params}
+            for answer in self.exchange(initialize, reopen=False):
+                self.learn_from(initialize, answer)
+            for _ in self.exchange({"jsonrpc": "2.0", "method": "notifications/initialized"},
+                                   reopen=False):
+                pass
 
     def explain(self, problem):
         """One line naming what went wrong between the bridge and the hub."""

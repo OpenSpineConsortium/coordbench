@@ -14,8 +14,24 @@ prompt. Agents then reach the same tools three ways, all answered here:
 Every request runs in a thread of its own, so a blocking tool such as
 wait_for_message holds up only the agent that called it. The hub keeps
 everything in memory; with a log directory it also appends each run's
-events to <log_dir>/<run>/events.jsonl as they happen, so a crashed hub
-still leaves the record behind.
+events to <log_dir>/<run>/events.jsonl as they happen, best effort, so a
+crashed hub still leaves the record behind. A run stays hosted, with its
+events, prompts and sessions, until the runner releases it with
+DELETE /api/runs/{run} once it has fetched the metrics and the events;
+that closes the run first if it is still open, then forgets it, so a hub
+that serves many runs does not grow with every one it ever hosted.
+
+On /mcp a body the hub cannot read as a request (not JSON, or a lone
+message with no id to answer under: no JSON-RPC object, an id that is
+not a string or an integer, an empty batch) is answered 400 with a
+JSON-RPC error that has no id, as the Streamable HTTP transport asks, and
+so is an MCP-Protocol-Version the hub does not speak on anything but an
+initialize; what the hub can read is answered 200 message by message,
+each request of a batch on its own, and a session id is issued only to
+an initialize that was answered with a result. An error the hub itself
+causes while answering is -32603 for the request it failed on, with the
+traceback in the hub's log; a client that drops its connection leaves no
+trace there, since that is the client's doing.
 
 Command line:
 
@@ -49,9 +65,13 @@ from urllib.parse import quote, unquote, urlsplit
 import os
 
 import mcp
-from arm import Arm, Run, builtin_arms_dir, load_arm, unmet_needs
+from arm import Arm, Run, builtin_arms_dir, load_arm_class, unmet_needs
 
 MAX_BODY = 1024 * 1024
+# A task pair is two features; the room above that is for arms that lay
+# out more agents, not for a run whose prompts and inboxes grow with the
+# square of the count.
+MAX_FEATURES = 16
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # The MCP specification asks servers to check Origin against DNS
 # rebinding: a web page the operator happens to open must not be able to
@@ -60,7 +80,7 @@ RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 LOCAL_ORIGIN = re.compile(r"https?://(localhost|127\.0\.0\.1|host\.docker\.internal)(:\d{1,5})?",
                           re.IGNORECASE)
 JSON_MEDIA = ("application/json", "application/*", "*/*")
-FAILED = "the hub failed while answering; its log has the details"
+FAILED = mcp.FAILED
 
 
 class HubError(Exception):
@@ -97,6 +117,9 @@ class Hub:
         self.bound_url = None
         self.lock = threading.Lock()
         self.runs = {}
+        # The (class, config) of each arm directory loaded so far, so that
+        # arm.py runs once per directory, not once per run.
+        self.arm_classes = {}
 
     @property
     def base_url(self):
@@ -151,8 +174,9 @@ class Hub:
 
     def events_path(self, run_id):
         """A fresh events.jsonl for the run. An id reused after the hub
-        restarts names a new run, since the old one died with its process,
-        so its log starts empty rather than mixing two runs."""
+        restarts, or after its run was released, names a new run, since
+        the old one is gone, so its log starts empty rather than mixing
+        two runs."""
         if not self.log_dir:
             return None
         run_dir = self.log_dir / run_id
@@ -192,6 +216,16 @@ class Hub:
                 complain(f"the {arm_name(run.arm)} arm's teardown of run {run.id} failed")
         return metrics
 
+    def release_run(self, run_id):
+        """Forget the run, closing it first if it is still open, so the
+        teardown runs once however the runner ends; the runner releases a
+        run once it holds the metrics and the events, and a hub that
+        hosts many runs keeps none of the finished ones."""
+        self.close_run(run_id)
+        with self.lock:
+            self.runs.pop(run_id, None)
+        return {"run_id": run_id, "released": True}
+
     def events(self, run_id):
         run = self.hosted(run_id).run
         with run.lock:
@@ -230,10 +264,6 @@ class Hub:
         with self.lock:
             return session in hosted.sessions.get(agent, ())
 
-    def instructions(self, run, agent):
-        return (f"coordbench run {run.id} under the {arm_name(run.arm)} arm: you are {agent}, "
-                f"role {run.role_of(agent)}; these tools are how you coordinate with the other agents.")
-
     def describe_tools(self, run, agent):
         return [{**tool.describe(), "alias": tool.alias, "argv": list(tool.argv), "flags": dict(tool.flags)}
                 for tool in run.arm.tools_for(run, agent).values()]
@@ -260,14 +290,29 @@ class Hub:
             raise HubError(400, "arm must name a built-in arm or a directory holding arm.json")
         builtin = builtin_arms_dir() / arm
         if "/" not in arm and (builtin / "arm.json").exists():
-            return load_arm(builtin)
+            return self.instantiate(builtin.resolve())
         path = Path(arm).resolve()
         if not any(path == root or root in path.parents for root in self.arm_dirs):
             raise HubError(403, f"{arm!r} is neither a built-in arm nor under a directory the hub "
                                 "was started with (--arm-dir)")
         if not (path / "arm.json").exists():
             raise HubError(400, f"no arm.json in {arm!r}")
-        return load_arm(path)
+        return self.instantiate(path)
+
+    def instantiate(self, root):
+        """A fresh arm object for one run from the arm directory `root`,
+        whose class is loaded once and kept: running arm.py for every run
+        (and, for the team arm, the arms it imports) grew a long-lived hub
+        without bound. The load runs outside the lock, since it executes
+        the arm's code; two first loads at once keep the first."""
+        with self.lock:
+            loaded = self.arm_classes.get(root)
+        if loaded is None:
+            loaded = load_arm_class(root)
+            with self.lock:
+                loaded = self.arm_classes.setdefault(root, loaded)
+        cls, config = loaded
+        return cls(root, config)
 
     def check_admin(self, authorization):
         if self.admin_token and authorization != f"Bearer {self.admin_token}":
@@ -279,12 +324,21 @@ def arm_name(arm):
 
 
 def parse_features(features):
+    """The feature numbers of a run, refused before the arm lays anything
+    out: a repeated feature would give two agents one issue (the sdlc arm
+    maps it to the last of them), and a long list would grow every
+    prompt and inbox with the square of its length."""
     if not isinstance(features, (list, tuple)) or not features:
         raise HubError(400, "features must be a non-empty list of feature numbers")
+    if len(features) > MAX_FEATURES:
+        raise HubError(400, f"at most {MAX_FEATURES} features in one run; a task pair is 2")
     try:
-        return [int(number) for number in features]
+        numbers = [int(number) for number in features]
     except (TypeError, ValueError):
         raise HubError(400, "features must be numbers") from None
+    if len(set(numbers)) != len(numbers):
+        raise HubError(400, "features must not repeat; each agent gets a feature of its own")
+    return numbers
 
 
 def parse_specs(specs, features):
@@ -322,14 +376,42 @@ def accepts_json(accept):
     return any(media in JSON_MEDIA for media in ranges)
 
 
-def opens_session(body):
-    """Whether the body holds an initialize request, which starts a session."""
+def as_list(parsed):
+    return parsed if isinstance(parsed, list) else [parsed]
+
+
+def initialize_ids(body):
+    """The ids of the initialize requests in a body; one of them answered
+    with a result starts a session."""
     try:
         parsed = json.loads(body)
     except ValueError:
-        return False
-    messages = parsed if isinstance(parsed, list) else [parsed]
-    return any(isinstance(m, dict) and m.get("method") == "initialize" and "id" in m for m in messages)
+        return []
+    return [m["id"] for m in as_list(parsed)
+            if isinstance(m, dict) and m.get("method") == "initialize" and "id" in m]
+
+
+def opens_session(body):
+    """Whether the body holds an initialize request."""
+    return bool(initialize_ids(body))
+
+
+def opened_session(body, answer):
+    """Whether an initialize in the body was answered with a result. One
+    refused for its shape starts no session: a client holding a session
+    id for a handshake that failed would send it with every request."""
+    asked = initialize_ids(body)
+    return any(isinstance(a, dict) and "result" in a and a.get("id") in asked
+               for a in as_list(answer))
+
+
+def unreadable(answer):
+    """Whether a lone answer says the hub could not read the request at
+    all: not JSON, or no request with an id to answer under. The
+    transport wants an HTTP error status for such input, with a JSON-RPC
+    error that has no id; an error that can name its request goes back
+    as a normal JSON-RPC answer, which the client matches to it."""
+    return isinstance(answer, dict) and "error" in answer and "id" not in answer
 
 
 def internal_errors(body):
@@ -339,9 +421,8 @@ def internal_errors(body):
         parsed = json.loads(body)
     except ValueError:
         return mcp.error(None, mcp.INTERNAL_ERROR, FAILED)
-    messages = parsed if isinstance(parsed, list) else [parsed]
-    answers = [mcp.error(m.get("id"), mcp.INTERNAL_ERROR, FAILED)
-               for m in messages if isinstance(m, dict) and "id" in m and m.get("method")]
+    answers = [mcp.error(mcp.request_id_of(m), mcp.INTERNAL_ERROR, FAILED)
+               for m in as_list(parsed) if isinstance(m, dict) and "id" in m and "method" in m]
     if isinstance(parsed, list):
         return answers or None
     return answers[0] if answers else None
@@ -376,7 +457,7 @@ ROUTES = {
     "rpc": {"GET": "get_rpc", "POST": "post_rpc"},
     "health": {"GET": "get_health"},
     "runs": {"POST": "post_runs"},
-    "run": {"GET": "get_run"},
+    "run": {"GET": "get_run", "DELETE": "delete_run"},
     "events": {"GET": "get_events"},
     "close": {"POST": "post_close"},
 }
@@ -491,21 +572,31 @@ class HubHandler(BaseHTTPRequestHandler):
         hosted = self.hub.hosted(run_id, agent)
         if not accepts_json(self.headers.get("Accept")):
             raise HubError(406, "the hub answers in application/json only")
+        version = self.headers.get("MCP-Protocol-Version")
+        if version is not None and version not in mcp.PROTOCOL_VERSIONS and not opens_session(self.body):
+            # The transport asks for 400 on a version the server does not
+            # speak, and a client probing with a newer binding (Claude
+            # Code does, with 2026-07-28) reads the 4xx as "fall back to
+            # initialize"; an initialize names its version in its params.
+            self.reply(400, mcp.error(None, mcp.INVALID_REQUEST,
+                                      f"unsupported MCP-Protocol-Version {version!r}; the hub speaks "
+                                      + ", ".join(mcp.PROTOCOL_VERSIONS)))
+            return
         session = self.headers.get("Mcp-Session-Id")
         if session is not None and not self.hub.knows_session(hosted, agent, session):
             raise HubError(404, "unknown Mcp-Session-Id; send initialize again without one")
         answer = self.answer_mcp(hosted.run, agent)
         headers = {}
-        if opens_session(self.body):
+        if opened_session(self.body, answer):
             headers["Mcp-Session-Id"] = self.hub.open_session(hosted, agent)
         if answer is None:
             self.reply(202, None, headers)
         else:
-            self.reply(200, answer, headers)
+            self.reply(400 if unreadable(answer) else 200, answer, headers)
 
     def answer_mcp(self, run, agent):
         try:
-            return mcp.handle_body(self.body, run, agent, self.hub.instructions(run, agent))
+            return mcp.handle_body(self.body, run, agent, run.arm.instructions(run, agent))
         except Exception:
             complain(f"MCP request from {agent} in run {run.id} failed")
             return internal_errors(self.body)
@@ -535,6 +626,10 @@ class HubHandler(BaseHTTPRequestHandler):
         self.hub.check_admin(self.headers.get("Authorization"))
         self.reply(200, self.hub.get_run(run_id))
 
+    def delete_run(self, run_id):
+        self.hub.check_admin(self.headers.get("Authorization"))
+        self.reply(200, self.hub.release_run(run_id))
+
     def get_events(self, run_id):
         self.hub.check_admin(self.headers.get("Authorization"))
         self.reply(200, {"events": self.hub.events(run_id)})
@@ -553,6 +648,16 @@ class HubServer(ThreadingHTTPServer):
         super().__init__(address, HubHandler)
         self.hub = hub
         self.verbose = verbose
+
+    def handle_error(self, request, client_address):
+        """A client that drops its keep-alive connection (Claude Code does,
+        each time it exits) fails the handler's wait for the next request
+        line, outside any answer. That is the client's doing, not a hub
+        failure, so it leaves no traceback in the log; anything else is
+        reported as socketserver does."""
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
 
 
 def make_server(hub, host, port, verbose=False):

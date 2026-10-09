@@ -13,7 +13,14 @@ dataset, provisions what the arm needs (a shared git remote, a shared
 volume), asks the hub for a run (POST /api/runs), starts one container per
 agent from the task's image with coordbench inside it, hands each agent to
 the driver, and once they stop collects their patches, closes the run on
-the hub and scores the patches with CooperBench's own evaluation.
+the hub, takes its metrics and events, releases it (DELETE /api/runs/{run},
+so the hub forgets it) and scores the patches with CooperBench's own
+evaluation.
+
+An arm's extra plugins (arm.json "plugins") are directories, copied into
+each agent's container and loaded with --plugin-dir; git URLs, cloned on
+this host and copied the same way; or .zip URLs, which Claude Code is
+handed as --plugin-url and the runner copies nothing for.
 
 The hub is the one named by --hub, or hub.py started here on a free port.
 A hub started here may load the built-in arms, the arm when --arm names a
@@ -30,6 +37,14 @@ The logs take CooperBench's layout, so experiment/report.py and
     <log_dir>/<run_name>/<setting>/<repo>/<task>/f<a>_f<b>/
         result.json  eval.json  solo.patch or agent<feature>.patch
         <agent>_stream.jsonl  <agent>_prompt.md  events.jsonl  metrics.json  plan.json
+
+result.json holds what CooperBench's coop.py and solo.py write: per agent
+the status, cost, steps, the four token counts, patch_lines and error,
+and for the run total_cost and total_steps; plus the arm, the driver and
+the hub's metrics. A driver that measures no usage (drivers.py,
+measures_usage) leaves cost, steps and the token counts null rather than
+zero, and the totals null when no agent was measured, so a report shows
+them as unknown instead of counting nothing.
 
 The setting is "solo" when the arm lays out one agent and "coop"
 otherwise, which is what decides how CooperBench scores the pair. A pair
@@ -79,8 +94,8 @@ if str(HERE) not in sys.path:
 
 import cli  # noqa: E402
 import drivers  # noqa: E402
-from arm import NEED_OPTIONS, builtin_arms_dir, find_arm  # noqa: E402
-from drivers import CONTAINER_REPO, checked, safe_name  # noqa: E402
+from arm import NEED_OPTIONS, find_arm  # noqa: E402
+from drivers import CONTAINER_REPO, arm_is_builtin, checked, safe_name  # noqa: E402
 
 NETWORK = "coordbench"
 # Named apart from CooperBench's own cooperbench-git, which publishes no
@@ -123,7 +138,10 @@ def now():
 # The dataset.
 
 def cooperbench_home():
-    return Path(os.environ.get("COOPERBENCH_DIR") or Path.home() / "cooperbench")
+    """CooperBench's checkout, absolute: the scorer runs with it as its
+    working directory and is handed paths under it, and docker reads a
+    relative path in `-v` as a volume name."""
+    return Path(os.environ.get("COOPERBENCH_DIR") or Path.home() / "cooperbench").resolve()
 
 
 def read_spec(dataset_dir, repo, task_id, feature):
@@ -243,6 +261,11 @@ class HubClient:
 
     def events(self, run_id):
         return self.request("GET", f"/api/runs/{run_id}/events").get("events") or []
+
+    def release(self, run_id):
+        """Let the hub forget the run (DELETE /api/runs/{run}), answered
+        {"run_id", "released": true}; 404 for a run it does not hold."""
+        return self.request("DELETE", f"/api/runs/{run_id}")
 
 
 def free_port(host):
@@ -433,6 +456,7 @@ def new_plan(settings, driver, repo, task_id, features):
         "mcp_servers": dict(arm.config.get("mcp_servers") or {}),
         "driver": settings["driver"], "agent_framework": getattr(driver, "framework", settings["driver"]),
         "host_workspace": bool(getattr(driver, "host_workspace", False)),
+        "measures_usage": bool(getattr(driver, "measures_usage", False)),
         "model": settings["model"], "image": image_name(repo, task_id),
         "timeout_s": settings["timeout_s"], "max_turns": settings["max_turns"], "keep": settings["keep"],
         "cooperbench_dir": str(settings["cooperbench_dir"]),
@@ -570,10 +594,17 @@ def provision_shared(plan):
     return options
 
 
-# Extra plugins an arm brings: directories, or git URLs fetched on this host.
+# Extra plugins an arm brings: directories, git URLs fetched on this host,
+# or plugin .zip URLs handed to Claude Code as they are.
 
 def is_url(entry):
     return "://" in entry or entry.startswith("git@")
+
+
+def is_zip_url(entry):
+    """A URL Claude Code loads itself with --plugin-url, which takes a .zip
+    and nothing else; any other URL is a git repository to clone here."""
+    return "://" in entry and urlsplit(entry).path.lower().endswith(".zip")
 
 
 def fetch_plugin(url, destination):
@@ -599,11 +630,25 @@ def resolve_plugin(entry, arm_dir, cache_dir, index):
 
 
 def resolve_plugins(plan):
+    """Each plugin as the plan records it: a .zip URL as {"url"}, which
+    nothing is copied for; a directory, or a git URL cloned into one, as
+    {"source", "container"}, the host path and where the container gets it."""
     cache = Path(plan["run_dir"]) / "plugins"
     for index, entry in enumerate(plan["plugin_entries"]):
+        if is_zip_url(entry):
+            plan["plugins"].append({"url": entry})
+            continue
         source = resolve_plugin(entry, plan["arm_dir"], cache, index)
         plan["plugins"].append({"source": str(source),
                                 "container": f"{drivers.CONTAINER_PLUGINS}/{index}-{safe_name(source.name)}"})
+
+
+def copied_plugins(plan):
+    return [plugin for plugin in plan["plugins"] if "container" in plugin]
+
+
+def plugin_urls(plan):
+    return [plugin["url"] for plugin in plan["plugins"] if "url" in plugin]
 
 
 # One agent's container.
@@ -665,14 +710,14 @@ def container_arguments(plan, agent):
     return arguments + ["-w", CONTAINER_REPO, "--entrypoint", "sh", plan["image"], "-c", KEEP_ALIVE]
 
 
-def arm_is_builtin(arm_dir):
-    return Path(arm_dir).resolve().parent == builtin_arms_dir().resolve()
-
-
 def install_coordbench(plan, container):
     """coordbench at /opt/coordbench, so the arm's plugin and cli.py are
-    there; an arm from elsewhere and its extra plugins beside it."""
-    checked(drivers.docker("exec", container, "mkdir", "-p", "/opt", drivers.CONTAINER_PLUGINS),
+    there; an arm from elsewhere under a root of its own
+    (drivers.container_arm_dir), so it never lands on a built-in arm of
+    the same name; its copied plugins beside it. A .zip URL plugin is
+    Claude Code's to fetch, so nothing is copied for it."""
+    checked(drivers.docker("exec", container, "mkdir", "-p", "/opt", drivers.CONTAINER_PLUGINS,
+                           drivers.CONTAINER_ARMS),
             "making /opt in the container")
     checked(drivers.docker("cp", f"{HERE}/.", f"{container}:{drivers.CONTAINER_COORDBENCH}"),
             "copying coordbench into the container")
@@ -680,7 +725,7 @@ def install_coordbench(plan, container):
         inside = drivers.container_arm_dir(plan["arm_dir"])
         checked(drivers.docker("cp", f"{plan['arm_dir']}/.", f"{container}:{inside}"),
                 "copying the arm into the container")
-    for plugin in plan["plugins"]:
+    for plugin in copied_plugins(plan):
         checked(drivers.docker("cp", f"{plugin['source']}/.", f"{container}:{plugin['container']}"),
                 f"copying the plugin {plugin['source']} into the container")
 
@@ -826,7 +871,8 @@ def agent_job(plan, agent):
         run_id=plan["run_id"], agent=agent["id"], role=agent["role"], features=tuple(agent["features"]),
         container=agent["container"], prompt=Path(agent["prompt_file"]).read_text(encoding="utf-8"),
         env={"COORD_MCP_URL": agent["mcp_url"], "COORD_RPC_URL": agent["rpc_url"]},
-        arm_dir=plan["arm_dir"], plugins=[p["container"] for p in plan["plugins"]],
+        arm_dir=plan["arm_dir"], plugins=[p["container"] for p in copied_plugins(plan)],
+        plugin_urls=plugin_urls(plan),
         mcp_servers=plan["mcp_servers"], model=plan["model"], timeout_s=plan["timeout_s"],
         max_turns=plan["max_turns"], log_path=agent["log_path"], workspace=agent.get("workspace", ""))
 
@@ -887,16 +933,34 @@ def wait_agents(plan, driver, handles):
 
 
 def close_run(plan, hub):
-    """The run's metrics and events, final once it is closed; a hub that has
-    gone away leaves them empty and says so."""
+    """The run's metrics and events, final once it is closed, after which
+    the hub is asked to forget the run; a hub that has gone away leaves
+    them empty and says so."""
     if not plan["hub_run"]:
         return {}, []
     try:
         metrics = hub.close_run(plan["run_id"])
-        return metrics, hub.events(plan["run_id"])
+        events = hub.events(plan["run_id"])
     except HubError as problem:
         plan["warnings"].append(f"closing the run on the hub failed: {problem}")
         return {}, []
+    release_run(plan, hub)
+    return metrics, events
+
+
+def release_run(plan, hub):
+    """Let the hub forget the run now that its metrics and events are in
+    hand, so a hub that serves many runs keeps none of the finished ones.
+    Once released the plan holds no run on the hub, so closing again
+    (abandon, after a failure past this point) does nothing. A hub that
+    cannot release (one without the route answers 405) only keeps the run,
+    which is a warning, never the pair's error."""
+    try:
+        hub.release(plan["run_id"])
+    except HubError as problem:
+        plan["warnings"].append(f"releasing the run on the hub failed: {problem}")
+        return
+    plan["hub_run"] = False
 
 
 def finish_pair(plan, driver, handles, hub):
@@ -957,23 +1021,44 @@ def patch_files(plan, outcomes):
     return files
 
 
-def agent_record(agent, outcome):
+USAGE_FIELDS = ("cost", "steps", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+def agent_record(agent, outcome, measured):
+    """One agent's block of result.json, with the fields CooperBench's
+    coop.py writes per agent and the agent's role besides. The usage
+    fields (USAGE_FIELDS) are numbers when the driver measured them and
+    null when it could not (drivers.py, measures_usage): a null is unknown,
+    a zero is a measurement, and a report shows '-' when every agent's
+    usage is null rather than sum unknowns into a total."""
     features = agent["features"]
+    usage = {name: getattr(outcome, name) if measured else None for name in USAGE_FIELDS}
     return {"feature_id": features[0] if len(features) == 1 else features, "role": agent["role"],
-            "status": outcome.status, "input_tokens": outcome.input_tokens,
-            "output_tokens": outcome.output_tokens, "cache_read_tokens": outcome.cache_read_tokens,
-            "cache_write_tokens": outcome.cache_write_tokens, "steps": outcome.steps, "error": outcome.error}
+            "status": outcome.status, **usage, "patch_lines": len(outcome.patch.splitlines()),
+            "error": outcome.error}
+
+
+def usage_totals(agents):
+    """total_cost and total_steps as coop.py sums them, over the agents
+    whose usage was measured; null when none was."""
+    measured = [record for record in agents.values() if record["cost"] is not None]
+    if not measured:
+        return {"total_cost": None, "total_steps": None}
+    return {"total_cost": sum(record["cost"] for record in measured),
+            "total_steps": sum(record["steps"] for record in measured)}
 
 
 def result_record(plan, outcomes, metrics, ended):
     started = datetime.fromisoformat(plan["started_at"])
+    agents = {a["id"]: agent_record(a, outcomes[a["id"]], plan.get("measures_usage", False))
+              for a in plan["agents"]}
     record = {
         "repo": plan["repo"], "task_id": plan["task_id"], "features": plan["features"],
         "setting": plan["setting"], "run_id": plan["run_id"], "run_name": plan["run_name"],
         "agent_framework": plan["agent_framework"], "model": plan["model"], "arm": plan["arm_name"],
         "driver": plan["driver"], "started_at": plan["started_at"], "ended_at": ended.isoformat(),
         "duration_seconds": (ended - started).total_seconds(),
-        "agents": {a["id"]: agent_record(a, outcomes[a["id"]]) for a in plan["agents"]},
+        "agents": agents, **usage_totals(agents),
         "metrics": metrics,
     }
     if plan["error"]:
@@ -1112,11 +1197,15 @@ def parse_option(text):
 
 
 def settings_from(args, default_driver):
-    cooperbench_dir = Path(args.cooperbench_dir) if args.cooperbench_dir else cooperbench_home()
+    """The command line as settings. Both directories are made absolute
+    here, once: a relative workspace path in `docker run -v` is read as a
+    volume name, and the scorer runs with CooperBench's checkout as its
+    working directory while being handed paths under it."""
+    cooperbench_dir = Path(args.cooperbench_dir).resolve() if args.cooperbench_dir else cooperbench_home()
     return {
         "arm": args.arm, "driver": args.driver or default_driver, "model": args.model,
         "run_name": args.name or f"coordbench-{arm_name(find_arm(args.arm))}",
-        "log_dir": Path(args.log_dir) if args.log_dir else cooperbench_dir / "logs",
+        "log_dir": Path(args.log_dir).resolve() if args.log_dir else cooperbench_dir / "logs",
         "cooperbench_dir": cooperbench_dir, "hub": args.hub, "timeout_s": args.timeout_min * 60,
         "max_turns": args.max_turns, "keep": args.keep, "force": args.force, "options": dict(args.option),
         "arm_dirs": [Path(directory).resolve() for directory in args.arm_dir],
