@@ -35,19 +35,32 @@ itself only drives shell scripts, so it spends almost none of the usage.
   (go_chi), where the session's glibc binary cannot run, the overlay
   copies Node from the official Alpine image and installs the same Claude
   Code version from npm. Neither touches a prompt, a tool or the scoring.
-- The same policy blocks openaipublic.blob.core.windows.net, where
-  tiktoken's tests download their encodings, so openai_tiktoken/0 (3 of
-  the 50 pairs) cannot be graded here: its gold patches fail for want of
-  the file. Adding that host to the environment's allowed domains is the
-  owner's call; the containers also resolve only the hosts the
-  environment reaches directly, so the overlay would then need the
-  encodings baked in (TIKTOKEN_CACHE_DIR) rather than fetched by the
-  tests.
-- The scorer passes the gold patches here: every feature's tests fail on
-  the base commit and pass with its gold patch, 12 of 12 on
-  pallets_click/2068, 10 of 10 on each of pallets_jinja/1621 and
-  pallets_jinja/1465, and 4 of 4 on go_chi/26 (prepare_task.sh runs this
-  check for every task it prepares).
+- Every task of the flash subset was prepared here and its gold patches
+  checked (each feature's tests must fail on the base commit and pass with
+  its gold patch). 42 of the 50 pairs grade here as they stand:
+
+  | Task | Pairs | Grade here | Why not |
+  | --- | --- | --- | --- |
+  | pallets_click 2068, 2800, 2956 | 6, 4, 1 | all | |
+  | pallets_jinja 1465, 1559, 1621 | 2, 4, 6 | all | |
+  | pillow 25, 68, 290 | 2, 1, 3 | all | |
+  | typst 6554 | 4 | all | |
+  | dottxt_ai_outlines 1655 | 2 | all | |
+  | dspy 8394 | 2 | all | |
+  | huggingface_datasets 3997, 6252 | 1, 1 | all | |
+  | samuelcolvin_dirty_equals 43 | 2 | all | |
+  | go_chi 26 | 1 | all | |
+  | go_chi 56 | 1 | flaky | feature 1 passed by hand and in one of three checks; the other two failed with no output, the sandbox's fault rather than the code's |
+  | openai_tiktoken 0 | 3 | none | its tests download encodings from openaipublic.blob.core.windows.net |
+  | dottxt_ai_outlines 1706 | 2 | none | its tests download models from huggingface.co |
+  | llama_index 18813 | 2 | none | its test run installs from pypi.nvidia.com |
+
+  The three hosts are outside this environment's network policy. Allowing
+  them is the owner's call (the environment's settings, Network access);
+  the task containers also resolve only the hosts the environment reaches
+  directly, so a test that downloads at run time would then still need its
+  files baked into the overlay image rather than fetched. Until then the
+  run covers the 42 pairs, and the report says which pairs each arm ran.
 - A team run with a shared remote on pallets_click/2068, given a
   placeholder token, brought every piece up (the agents' containers on the
   team network, the git server, the task list seeded in Redis, the team's
@@ -90,7 +103,8 @@ and 12 each for the other three arms, 42 sessions in all.
 The authors' own claude_code team run on the 10-pair core subset cost
 about $8.50 at API prices, about $0.43 per agent session with Sonnet 4.5.
 The flash subset over four arms is 50 solo sessions and 100 for each of
-the other three arms, 350 sessions in all, about $150 at API prices. On
+the other three arms, 350 sessions in all, about $150 at API prices
+(294 sessions, about $125, for the 42 pairs that grade here). On
 a subscription that is usage drawn from the plan's limits, not a bill,
 and it will likely span several usage windows. A pair whose agents stop
 on a usage limit is marked Error, and running the same command again
