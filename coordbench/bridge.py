@@ -30,6 +30,15 @@ session of its own and cannot, so the bridge does it for it: it sends the
 client's initialize again, with the params it kept, then
 notifications/initialized, neither written to the client, and retries the
 request once with the new session.
+
+A hub that cannot read a message as a request (an id that is null or a
+boolean, a lone object with no method) answers 400 with a JSON-RPC error
+that names no id, as the transport asks. The stdio client sent that
+message and is waiting on its ids, so the bridge writes it the hub's own
+error, code and message, under each id the hub left unanswered, as the
+hub would have answered on stdio; a 400 whose body is no JSON-RPC error
+is a hub failure like any other HTTP error, an internal error (-32603)
+that quotes the status and the body.
 """
 
 import json
@@ -54,6 +63,17 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 class HubFailure(Exception):
     """The hub could not be reached, or answered with an HTTP error."""
+
+
+class HubRefused(HubFailure):
+    """The hub answered 400 with a JSON-RPC error that names no request:
+    it could not read the message. Carries the hub's code and message,
+    which the client hears under each id it is waiting on."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 class SessionLost(Exception):
@@ -140,15 +160,34 @@ def messages_in_stream(lines):
             yield message
 
 
-def http_error_text(problem):
+def http_error_body(problem):
+    """The body of an HTTP error, read once and the response closed."""
     try:
-        body = problem.read().decode("utf-8", "replace")
+        return problem.read().decode("utf-8", "replace")
     except (OSError, HTTPException):
-        body = ""
+        return ""
     finally:
         problem.close()
+
+
+def http_error_text(problem, body):
     detail = f": {one_line(body)}" if body.strip() else ""
     return f"HTTP {problem.code} {problem.reason}{detail}"
+
+
+def jsonrpc_error_in(body):
+    """The error of a lone JSON-RPC error message, when the body is one
+    (an integer code and a string message under "error"); else None."""
+    try:
+        message = json.loads(body)
+    except ValueError:
+        return None
+    if isinstance(message, list) or not is_jsonrpc(message):
+        return None
+    found = message.get("error")
+    if isinstance(found, dict) and isinstance(found.get("code"), int) and isinstance(found.get("message"), str):
+        return found
+    return None
 
 
 class Bridge:
@@ -197,21 +236,24 @@ class Bridge:
 
     def forward(self, message):
         """Post one message and write back every JSON-RPC message the hub
-        answers. A request the hub leaves unanswered, for a failure or
-        any other reason, gets an internal error, so the client never
-        waits on an id forever."""
+        answers. A request the hub leaves unanswered gets an error under
+        its id, so the client never waits on an id forever: the hub's own
+        error when the hub refused the message as unreadable (HubRefused),
+        an internal error for a failure or any other reason."""
         unanswered = request_ids(message)
-        problem = "the hub gave no answer to this request"
+        code, problem = INTERNAL_ERROR, "the hub gave no answer to this request"
         try:
             for answer in self.post(message):
                 self.learn_from(message, answer)
                 self.write(answer)
                 answered = [a.get("id") for a in as_list(answer) if isinstance(a, dict)]
                 unanswered = [i for i in unanswered if i not in answered]
+        except HubRefused as refused:
+            code, problem = refused.code, refused.message
         except HubFailure as failure:
             problem = str(failure)
         if unanswered:
-            errors = [error(i, INTERNAL_ERROR, problem) for i in unanswered]
+            errors = [error(i, code, problem) for i in unanswered]
             self.write(errors if isinstance(message, list) else errors[0])
 
     def post(self, message):
@@ -243,9 +285,19 @@ class Bridge:
             if reopen and problem.code == 404 and sent_with:
                 problem.close()
                 raise SessionLost(sent_with) from None
-            raise HubFailure(self.explain(problem))
+            raise self.refusal(problem)
         except (OSError, HTTPException) as problem:
             raise HubFailure(self.explain(problem))
+
+    def refusal(self, problem):
+        """What an HTTP error from the hub is to the client: the hub's own
+        JSON-RPC error when a 400 carries one (HubRefused), else a
+        HubFailure naming the status and the body."""
+        body = http_error_body(problem)
+        found = jsonrpc_error_in(body) if problem.code == 400 else None
+        if found is not None:
+            return HubRefused(found["code"], found["message"])
+        return HubFailure(f"the coordbench hub at {self.url} answered {http_error_text(problem, body)}")
 
     def reopen_session(self, lost):
         """Start a new session as the transport asks after a 404: the
@@ -270,10 +322,9 @@ class Bridge:
                 pass
 
     def explain(self, problem):
-        """One line naming what went wrong between the bridge and the hub."""
+        """One line naming what went wrong between the bridge and the hub
+        when no HTTP answer came; an HTTP error is refusal's."""
         hub = f"the coordbench hub at {self.url}"
-        if isinstance(problem, urllib.error.HTTPError):
-            return f"{hub} answered {http_error_text(problem)}"
         if isinstance(problem, urllib.error.URLError):
             return f"cannot reach {hub}: {one_line(problem.reason)}"
         return f"lost {hub}: {one_line(problem) or type(problem).__name__}"

@@ -16,8 +16,11 @@ container's /workspace/repo/patch.txt, where every arm's prompt asks for it:
   skill rides along; the arm's extra plugins go along as directories
   copied into the container (--plugin-dir) or, for a .zip URL, as the URL
   itself (--plugin-url). Usage, cost and turns come from the stream's
-  final result event, parsed as the adapter's parsers.py parses it. The
-  agent's time limit holds inside the container: claude runs under
+  final result event, parsed as the adapter's parsers.py parses it, and
+  so do the agent's wall time and the part of it spent waiting on the
+  API (the event's duration_ms and duration_api_ms, which parsers.py
+  keeps only inside its raw copy of the event). The agent's time limit
+  holds inside the container: claude runs under
   coreutils timeout, which ends it when the limit passes whether or not
   the docker client that started it is still there, and the shell leaves
   its pid in a file so the runner can stop the agent early with the shell
@@ -30,7 +33,8 @@ container's /workspace/repo/patch.txt, where every arm's prompt asks for it:
   prompt the orchestrating session gives its subagent, and wait() watches
   for the marker the prompt asks the subagent to leave last. Because its
   handle is plain JSON, the wait can happen in another process (run.py's
-  prepare and finish). It sees no stream, so it measures no usage.
+  prepare and finish). It sees no stream, so it measures no usage and
+  knows no duration; result.json holds null for both.
 
 A driver of one's own is any class with start() and wait(); run.py loads
 it from path/to/file.py:ClassName. Class attributes tell the runner what
@@ -182,7 +186,12 @@ class AgentJob:
 class AgentOutcome:
     """How an agent ended, in CooperBench's terms: status is Submitted,
     LimitsExceeded or Error; cost is the result event's total_cost_usd.
-    `patch` is the agent's patch.txt."""
+    `patch` is the agent's patch.txt. duration_ms is the agent's wall
+    time as Claude Code measured it and api_duration_ms the part of it
+    spent waiting on the API (the result event's duration_ms and
+    duration_api_ms); a driver that cannot know them leaves them None,
+    which result.json writes as null, since a zero would read as a
+    measurement."""
 
     status: str = "Error"
     input_tokens: int = 0
@@ -191,6 +200,8 @@ class AgentOutcome:
     cache_write_tokens: int = 0
     steps: int = 0
     cost: float = 0.0
+    duration_ms: int | None = None
+    api_duration_ms: int | None = None
     error: str | None = None
     patch: str = ""
 
@@ -217,11 +228,16 @@ def status_of(result_event):
     return "Error"
 
 
+def milliseconds_or_none(value):
+    """A duration the result event may carry: None when it does not."""
+    return None if value is None else int(value)
+
+
 def summarize_stream(text):
-    """Usage, cost, turns and status from Claude Code's stream-json, read
-    from the first result event as parse_stream_json reads it. A stream
-    without one (the CLI crashed or was killed) is an Error with nothing
-    counted."""
+    """Usage, cost, turns, status and the two durations from Claude Code's
+    stream-json, read from the first result event as parse_stream_json
+    reads it. A stream without one (the CLI crashed or was killed) is an
+    Error with nothing counted and no duration known."""
     for event in json_lines(text):
         if event.get("type") != "result":
             continue
@@ -235,6 +251,8 @@ def summarize_stream(text):
             cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0),
             steps=int(event.get("num_turns") or 0),
             cost=float(event.get("total_cost_usd") or 0),
+            duration_ms=milliseconds_or_none(event.get("duration_ms")),
+            api_duration_ms=milliseconds_or_none(event.get("duration_api_ms")),
             error=None if status == "Submitted" else str(event.get("result") or event.get("subtype"))[:500],
         )
     return AgentOutcome(status="Error", error=NO_RESULT)
@@ -477,8 +495,10 @@ class SessionDriver:
     framework = "claude_code_subagent"
     host_workspace = True
     resumable = True
-    # A subagent leaves no stream on the host, so its tokens, steps and
-    # cost are unknown, and result.json says so rather than count zero.
+    # A subagent leaves no stream on the host, so its tokens, steps, cost
+    # and durations are unknown, and result.json says so rather than
+    # count zero; the agent's wall time the runner measures itself, in
+    # result.json's timings.
     measures_usage = False
 
     def __init__(self, poll_seconds=10.0):

@@ -62,26 +62,45 @@ atomic in fact, where CooperBench reads the owner and then writes it. A
 request's --wait is capped at 300 seconds, where coop_task.py waits as
 long as asked: the callers give up above that cap on purpose (Claude Code
 after the 330-second timeout the arm's .mcp.json sets, cli.py after 600),
-so an unbounded wait would be cut off by the client anyway; a wait the
-client cancels takes no response, and one whose answer the client was not
-there to read puts the response back. wait_for_message returns a message,
-which CooperBench's never did at 63b9d44: the tool its team mode registers
-for its CLI agents (team_harness/mcp_server.py) strips the #run:<id>
-fragment from CB_TEAM_REDIS_URL and BLPOPs <agent>:inbox, while
-coop_msg.py keeps the same fragment of COOP_REDIS_URL as a key prefix and
-pushes to run:<id>:<agent>:inbox, so every call there timed out with the
-no-message marker and left the inbox for coop-recv. coordbench's
-wait_for_message carries CooperBench's description and schema word for
-word but works: it hands over the oldest message, removes it from the
-inbox, and holds the wait to the schema's range of 100 to 30000 ms, where
-CooperBench clamps only the lower end. The mirror of the list under
+so an unbounded wait would be cut off by the client anyway. A wait the
+client cancels takes no response; a wait cancelled after it took its
+response, or whose answer the client was not there to read, has the
+response put back on the board by the hub, through the undo the request
+tool registers, so it is there for the next wait. wait_for_message
+returns a message, which CooperBench's never did at 63b9d44: the tool its
+team mode registers for its CLI agents (team_harness/mcp_server.py)
+strips the #run:<id> fragment from CB_TEAM_REDIS_URL and BLPOPs
+<agent>:inbox, while coop_msg.py keeps the same fragment of
+COOP_REDIS_URL as a key prefix and pushes to run:<id>:<agent>:inbox, so
+every call there timed out with the no-message marker and left the inbox
+for coop-recv. coordbench's wait_for_message carries CooperBench's
+description and schema word for word (but for the empty "required" list
+kit.schema adds) and works: it hands over the oldest message, removes it
+from the inbox, and holds the wait between 100 ms and 300 s
+(kit.LONGEST_WAIT_MS), where CooperBench clamps only the lower end. The
+schema keeps CooperBench's advertised maximum of 30000, so an MCP client
+that validates its arguments against the schema stops there, exactly as
+with CooperBench's server; the shell commands and /rpc check nothing
+against it, and a call from there may ask for up to 300 s, which is the
+team arm's cap on a request's wait and sits under the 330 s the arms'
+.mcp.json gives one call. The mirror of the list under
 /workspace/shared/tasks is written by the hub from its host, so it needs
 the volume's host path (the run option shared_dir_host); it writes only
 into a real directory named tasks, never through a symlink an agent
-planted in its place, and not once the run has closed. Everything else an
-agent sees is CooperBench's: a request is queued for whatever name it is
-addressed to, a title or a body of several words wants its quotes and a
-word too many exits 2, and an empty title or body is accepted.
+planted in its place, and not when the run was already closed when the
+list was read. A close that lands between that read and the writes still
+gets one mirror, which is harmless: the runner removes the volume only
+after the close has answered, and only the tasks leaf is ever made, so a
+mirror after the removal lands nowhere. Everything else an agent sees is
+CooperBench's: a request is queued for whatever name it is addressed to,
+a title or a body of several words wants its quotes and a word too many
+exits 2, and an empty title or body is accepted. A missing argument exits
+2 with argparse's words, as coop_task.py does: the shell command sends a
+required positional it has no word for as missing (an optional body is
+still read from stdin), and the hub refuses it. A --wait that is not a
+number is refused by the shell command before anything is sent; so are
+the words true, false and null, which would otherwise be read as 1.0,
+0.0 and no wait.
 
 ## An arm is a Claude Code plugin
 
@@ -119,16 +138,70 @@ through the stdio bridge for clients that only speak stdio:
 ```
 
 The bridge reads COORD_AGENT_TOKEN from its environment as well, when the
-run wants one. Any shell reaches the tools as commands: `python3 cli.py
-install /usr/local/bin` writes one wrapper per tool, under the tool's
-alias (coop-send) and as coord-<tool>, and the wrappers send the same
-token on every request.
+run wants one. When the hub refuses a message it cannot read as a request
+(an id that is null or a boolean, say) with a 400 carrying a JSON-RPC
+error that names no id, the bridge writes that error, the hub's code and
+message, to the stdio client under each id of the message, as the hub
+would have answered on stdio; a 400 whose body is no JSON-RPC error
+reaches the client as an internal error (-32603) quoting the status and
+the body, like any other HTTP error. Any shell reaches the tools as
+commands: `python3 cli.py install /usr/local/bin` writes one wrapper per
+tool, under the tool's alias (coop-send) and as coord-<tool>, and the
+wrappers send the same token on every request; `install --token-file
+PATH` writes PATH absolute into the wrappers, so they read the token from
+any directory. A command's last positional word comes from stdin when it
+is missing and the tool's schema does not require it (coop-send's text
+and coop-request's body, as coop_msg.py and coop_task.py read theirs), so
+`coop-send agent2 < note.txt` works; a required one left missing
+(coop-task-create's title, coop-task-claim's task_id, coop-task-update's
+status) is sent as missing and the hub refuses it with exit 2 in
+argparse's words, so the stdin at /dev/null every command gets from the
+drivers never becomes a task titled "". A word for an argument the schema
+types as a number is refused with exit 2 and argparse's wording when it
+is true, false or null, as coop_task.py's --wait (type=float) refuses
+them.
 
 .mcp.json and skills/ are optional. An arm with no tools has no .mcp.json,
 since there is nothing for the MCP server to list, and an arm whose prompt
 already says everything ships no skill. solo is both: its directory holds
 .claude-plugin/plugin.json, arm.json and arm.py and nothing else, so a
 Claude Code that loads the plugin sees what CooperBench's solo agent saw.
+
+## Starting a new arm
+
+new_arm.py writes the directory above, complete and loadable, from a
+name, so a new arm starts from a working directory rather than from the
+prose that follows:
+
+```
+python3 experiment/coordbench/new_arm.py my-arm path/to/arms [--description TEXT]
+python3 experiment/coordbench/new_arm.py --check path/to/arms/my-arm
+```
+
+The first command writes path/to/arms/my-arm/: .claude-plugin/plugin.json
+(coordbench-my-arm, version 0.1.0, the description), the .mcp.json every
+built-in arm carries, skills/coordbench-my-arm/SKILL.md naming every tool
+and shell command, arm.json, and arm.py, a documented subclass of Arm that
+gives every agent CooperBench's messaging (kit.messaging_tools()) and the
+notice board of the example below (post_notice and read_board, board-post
+and board-read in the shell), puts one paragraph about the board before
+the submission block of the prompt, counts the notices in its metrics,
+and carries a commented one-line stub for each override it does not make
+(layout, setup, instructions, teardown, needs) with the sentence from
+this file that says what the override is for. The name is a plugin name,
+lowercase letters, digits and dashes starting with a letter; a directory
+that exists is never written over; every file written is ASCII with LF.
+The command ends with one line saying how to try the arm: --check, then
+the hub with --arm-dir path/to/arms and POST /api/runs with the arm's
+directory, or run.py run --arm path/to/arms/my-arm, which does both. The
+second command is the smoke test: it loads the arm as the hub does,
+builds a run of two agents in-process, lists the tools, pins a notice as
+agent1 and reads the board as agent2, sends a message, closes the run and
+prints the metrics; any step that fails ends it with exit 1 and the
+exception's one line. examples/board/ is the generator's own output for
+the name "board", kept in the tree as the worked example; a test
+regenerates it and compares every byte, so the archetype and the example
+cannot drift apart.
 
 ## Writing an arm
 
@@ -186,8 +259,14 @@ What the base class gives and what an arm may override:
   and every built-in arm leaves it so, because CooperBench's agents got
   none (its team server sends no instructions and its other modes have no
   server); the key is left out of initialize when it is empty.
-- `metrics(run)`: numbers from run.events (every tool call and every
-  `run.emit(kind, agent, ...)`) and run.state.
+- `metrics(run)`: numbers from run.events (every tool call, framed by a
+  "tool" event before its handler runs and a "tool_done" event after it
+  returns, the second with duration_ms, the handler's wall time,
+  blocked_ms, the part of it spent waiting for another agent, is_error
+  and cancelled; and every `run.emit(kind, agent, ...)`) and run.state.
+  The default metrics count events by kind, so that count includes
+  tool_done. Both durations are milliseconds as floats rounded to three
+  decimals, so a hub cost below a millisecond still shows.
 - `teardown(run)`: free what setup took, once, when the run closes.
 - `needs`: "git_remote" (a bare repository, remote `team` in every agent's
   repository; run.options git_remote, git_remote_host and base_ref say
@@ -207,16 +286,35 @@ is written best effort: a write the disk refuses is complained about once
 per run on the hub's stderr, and the event stays in memory, where the
 runner reads it.
 
-A tool that blocks has two more things to do, both on the Call it is
+A tool that blocks has three more things to do, all on the Call it is
 given. Its wait predicate reads `call.cancelled`, a threading.Event the
 hub sets when the client cancels the request (MCP's
 notifications/cancelled); once it is set the tool takes nothing and
 returns, since its answer would reach nobody. After it takes something
 from run.state for the caller, it registers `call.on_lost(undo)`: the hub
-runs the undo, under run.lock, if the reply to the call could not be
-written because the connection dropped, so what was taken goes back for
-the next call. kit.py's wait_for_message and the team arm's request do
-both.
+runs the undo, under run.lock, when the reply to the call reaches nobody,
+because the connection dropped before the reply was written or because
+the call was cancelled after its take, so what was taken goes back for
+the next call, once. Around each wait it calls `call.waited(seconds)`
+with the time the wait took, so the "tool_done" event the hub emits when
+the handler returns can say how much of the call's wall time
+(duration_ms) was spent waiting for another agent (blocked_ms); the
+difference is what the hub itself cost. kit.py's wait_for_message and the
+team arm's request do all three.
+
+A reader of events.jsonl tells the hub's time from the agent's by those
+two framing events. For wait_for_message, the "tool_done" event's
+blocked_ms is the time spent in the wait itself, so a wait that ran out
+shows blocked_ms close to duration_ms, and a hub that was slow shows the
+gap between them; for the team arm's request with a wait, blocked_ms is
+the time spent in the wait for the peer's response, so duration_ms minus
+blocked_ms is the hub's own cost of the call. A "receive_lost" event
+follows a "receive" whose reply reached nobody (the hub could not write
+it, or the call was cancelled after its take), for a drain (coop-recv) as
+for a wait, with count the number of messages put back at the head of
+the inbox in their order; the "receive" stays, so a reader subtracts the
+one from the other rather than count the messages twice when the next
+call takes them.
 
 ## Bringing in existing Claude extensions
 
@@ -262,8 +360,10 @@ benchmarked as coordination:
   of prompts; the session spawns one subagent per prompt (the Workflow
   tool); `run.py finish` waits for each agent's marker, scores and tears
   down. A subagent leaves no stream on the host, so result.json records
-  its tokens, steps and cost as null (unknown), never as zero, and
-  experiment/report.py shows them as '-'.
+  its tokens, steps, cost, duration_ms and api_duration_ms as null
+  (unknown), never as zero, and experiment/report.py shows them as '-';
+  the agent's wall time is still in result.json's timings, measured by
+  the runner from prepare's start to the marker.
 - your own: `--driver path/to/driver.py:Class`, any class with start(job)
   and wait(handle) (drivers.py says what they take and return; the class
   attributes host_workspace, resumable, framework and measures_usage tell
@@ -289,16 +389,61 @@ metrics. A driver that cannot measure usage (drivers.py, measures_usage)
 writes null, not 0, for an agent's cost, steps and token counts, and null
 totals when no agent was measured; report.py takes a null as unknown,
 leaves such a pair out of "Tokens per pair", and shows '-' when no pair of
-the arm was measured. report.py reads a pair's agents from the "agents"
-block that coordbench and CooperBench's coop and team runners write, or
-from the one "agent" block CooperBench's solo runner writes, and sets a
-pair an agent left in Error apart in both, so a coordbench solo row and
-the authors' solo row are measured the same way. Once a pair's metrics
-and events are fetched the runner releases the run (DELETE
-/api/runs/{run}), so a long-lived hub forgets finished runs; a hub without
-that route only keeps them, which the runner reports as a warning. A new
-arm needs no change to anything but its own directory: `--arm
-path/to/my-arm`, and the hub is started with that directory allowed.
+the arm was measured.
+
+Each agent's record also carries duration_ms and api_duration_ms, Claude
+Code's own wall time for the agent and the part of it spent waiting on
+the API, read from its result event; the session driver, which sees no
+stream, writes null for both. result.json's "timings" is the harness's
+own clock: one record per phase of the pair, with the phase, the agent it
+was for (null for the run's own phases), its start and end as ISO 8601
+and its seconds. The phases are hub (starting or connecting to the hub;
+the run command does this once, so a --subset run repeats the same record
+in every pair), run_create (POST /api/runs), git_remote, shared_volume,
+provision (one per agent, from its docker run through its wrappers),
+agent (one per agent, from the driver's start to its wait's return; for
+the session driver, from prepare's start to the marker finish sees),
+close (close and release on the hub), score (CooperBench's evaluation)
+and teardown. Only the phases that happened are recorded, and run and
+finish end with one line such as `timings: provision 42 s, agents 1040 s
+(agent1 1030 s, agent2 980 s), score 95 s, teardown 6.0 s`, where the
+agents' figure is the span from the first start to the last end, since
+they run at once.
+
+report.py reads a pair's agents from the "agents" block that coordbench
+and CooperBench's coop and team runners write, or from the one "agent"
+block CooperBench's solo runner writes, and sets a pair an agent left in
+Error apart in both, so a coordbench solo row and the authors' solo row
+are measured the same way. Once a pair's metrics and events are fetched
+the runner releases the run (DELETE /api/runs/{run}), so a long-lived hub
+forgets finished runs; a hub without that route only keeps them, which
+the runner reports as a warning. A hub that closed the run but could not
+give its events leaves events.jsonl empty under a warning that says so,
+keeps the metrics in result.json and is still asked to forget the run;
+only a hub that could not close the run at all leaves the metrics empty
+and the run unreleased. A new arm needs no change to anything but its own
+directory: `--arm path/to/my-arm`, and the hub is started with that
+directory allowed.
+
+Reading the time. result.json's timings, each agent's duration_ms and
+api_duration_ms, and the hub's tool_done events (every call's
+duration_ms, its blocked_ms, whether it was an error or cancelled) are
+read into one page by `python3 experiment/coordbench/timeline.py
+<run_dir>` (the pair's directory, the one holding result.json; `--json`
+for the same as data). Infrastructure is the harness's cost: the phases
+around the agents, summed as recorded, plus the hub's handling time,
+duration less blocked over every call. The Agents table gives each agent
+its wall time, the seconds it was blocked waiting on a peer, which is the
+arm's coordination cost rather than a slow hub, its seconds in hub calls,
+its call, error and cancellation counts, Claude Code's model time when
+the driver reported it, and what is left, the agent's own shell commands,
+edits and thinking. Idle stretches lists each agent's three longest gaps
+between one call's end and its next call: a long gap with no coordination
+is the agent working or thinking alone, where a long blocked time is the
+agent waiting. A run from before these fields (the pilots) prints "not
+recorded" in their place and measures its idle stretches from one call's
+start to the next; a run with no events.jsonl still prints what
+result.json holds.
 
 ## The hub, for other harnesses
 
@@ -316,14 +461,24 @@ serves:
   finished ones (the runner sends it once it holds the metrics and the
   events); `GET /api/health`;
 - `POST /mcp/{run}/{agent}`: MCP over Streamable HTTP (2025-06-18; JSON
-  answers, an Mcp-Session-Id from an initialize answered with a result; a
-  notifications/cancelled on the session ends the tools/call it names
-  without that call taking anything, and a reply the client was not there
-  to read has what its calls took put back). A body the hub cannot read as
-  a request, or an MCP-Protocol-Version it does not speak on anything but
-  an initialize, is answered 400 with a JSON-RPC error that has no id;
-  each request of a batch is answered on its own. The server instructions
-  in initialize are the arm's (Arm.instructions), none by default;
+  answers, an Mcp-Session-Id from an initialize answered with
+  initialize's own result under its own id; a notifications/cancelled on
+  the session ends the tools/call it names without that call taking
+  anything, or with what it had already taken put back, and a reply the
+  client was not there to read has what its calls took put back). A body
+  the hub cannot read as a request (not JSON, nested too deep to parse, an
+  object that is neither a request nor a response, an id that is not a
+  string or an integer, an empty batch), or an MCP-Protocol-Version it
+  does not speak on anything but an initialize, is answered 400 with a
+  JSON-RPC error that has no id; each request of a batch is answered on
+  its own. A tools/call whose arguments are not an object, or name
+  something the tool's inputSchema does not list (when the schema lists
+  properties and does not set additionalProperties), is refused -32602
+  before anything runs, the second naming the stray key and the names the
+  tool takes; over /rpc the same refusal is a 400 whose reason the shell
+  command exits 2 with, so an agent that types timeout=180 for timeout_ms
+  hears so instead of waiting the default. The server instructions in
+  initialize are the arm's (Arm.instructions), none by default;
 - `GET` and `POST /rpc/{run}/{agent}`: the tools as plain JSON for shell
   commands.
 

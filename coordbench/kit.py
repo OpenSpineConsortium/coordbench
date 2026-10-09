@@ -4,28 +4,33 @@ messaging_tools() is CooperBench's messaging (src/cooperbench/agents/_coop/
 coop_msg.py at 63b9d44): one inbox per agent, send to one peer or to all,
 drain the inbox as a JSON list, count what is unread, list the agents.
 The tools carry CooperBench's command names as aliases (coop-send and the
-rest) and keep coop_msg.py's arguments, exit codes and output, so an agent
-can use them as MCP tools or as the shell commands the authors' prompts
-name. That means: a message goes to whatever name it is addressed to, an
-inbox being made for the name, since coop_msg.py pushes to
-<recipient>:inbox without looking at COOP_AGENTS, and list_agents is how
-an agent learns the names; an empty text is sent, and a missing one is
-sent as "", since coop_msg.py reads stdin and finds it empty; a missing
-recipient is refused with exit code 2 in argparse's words; coop-send says
-"sent to <recipient>" on stderr and nothing on stdout, coop-broadcast
-says nothing at all; and every entry carries timestamp and timestamp_iso.
+rest) and keep coop_msg.py's arguments, exit codes and output, with one
+exception that cli.py chooses and says: a text word that starts with a
+dash is sent as the message, where coop_msg.py's argparse would take it
+for an option and refuse it. The rest is kept as it is: a message goes to
+whatever name it is addressed to, an inbox being made for the name, since
+coop_msg.py pushes to <recipient>:inbox without looking at COOP_AGENTS,
+and list_agents is how an agent learns the names; an empty text is sent,
+and a missing one is sent as "", since coop_msg.py reads stdin and finds
+it empty; a missing recipient is refused with exit code 2 in argparse's
+words; coop-send says "sent to <recipient>" on stderr and nothing on
+stdout, coop-broadcast says nothing at all; and every entry carries
+timestamp and timestamp_iso.
 
 wait_for_message is the tool CooperBench's team mode registers for its
-CLI agents (team_harness/mcp_server.py), with its text and its schema,
-and one deliberate difference. At 63b9d44 the tool never finds a message:
-coop_msg.py keeps the #run:<id> fragment of COOP_REDIS_URL as a key prefix
-and pushes to run:<id>:<agent>:inbox, while mcp_server.py strips the same
-fragment from CB_TEAM_REDIS_URL and BLPOPs <agent>:inbox, so every call
-there times out with the no-message marker and the inbox is left for
-coop-recv. coordbench's wait_for_message works on purpose: it hands over
-the oldest message and removes it from the inbox, and it holds the wait
-to the schema's range (100 to 30000 ms, where CooperBench clamps only the
-lower end). README names this among the team arm's deviations.
+CLI agents (team_harness/mcp_server.py), with its text and its schema's
+properties (kit.schema adds "required": [], which mcp_server.py's schema
+leaves out), and one deliberate difference. At 63b9d44 the tool never
+finds a message: coop_msg.py keeps the #run:<id> fragment of
+COOP_REDIS_URL as a key prefix and pushes to run:<id>:<agent>:inbox,
+while mcp_server.py strips the same fragment from CB_TEAM_REDIS_URL and
+BLPOPs <agent>:inbox, so every call there times out with the no-message
+marker and the inbox is left for coop-recv. coordbench's wait_for_message
+works on purpose: it hands over the oldest message and removes it from
+the inbox. The wait is held between SHORTEST_WAIT_MS and LONGEST_WAIT_MS,
+where CooperBench clamps only the lower end; wait_seconds says why the
+cap stands above the maximum the schema advertises. README names this
+among the team arm's deviations.
 """
 
 import json
@@ -37,9 +42,15 @@ from arm import Tool, ToolError
 
 TEXT = {"type": "string"}
 
-# The bounds mcp_server.py's schema puts on timeout_ms; the upper one is
-# also the cap a wait is held to, which is coordbench's own choice.
-SHORTEST_WAIT_MS, LONGEST_WAIT_MS, DEFAULT_WAIT_MS = 100, 30000, 5000
+# The bounds mcp_server.py's schema puts on timeout_ms, and its default.
+# The schema keeps the advertised maximum; the handler takes more, up to
+# LONGEST_WAIT_MS, for the reason wait_seconds gives.
+SHORTEST_WAIT_MS, ADVERTISED_LONGEST_WAIT_MS, DEFAULT_WAIT_MS = 100, 30000, 5000
+
+# The cap a wait is held to, coordbench's own: the team arm's cap on a
+# request's wait (300 seconds, its LONGEST_WAIT_SECONDS), under the 330
+# seconds every arm's .mcp.json lets one call to the hub run.
+LONGEST_WAIT_MS = 300000
 
 NO_MESSAGE = "(no message arrived within the timeout)"
 
@@ -120,10 +131,20 @@ def broadcast(call):
 
 
 def receive(call):
-    with call.run.lock:
-        box = inbox(call.run, call.agent)
+    """Drain the inbox and hand over everything in it, oldest first. What
+    was drained for a reply the hub then could not write (the client was
+    gone) goes back at the head of the inbox, in its order, through
+    call.on_lost, as a wait's one message does: in a pilot the reply to
+    a drain met a broken pipe and the messages were lost with it. A
+    drain of an empty inbox has nothing to put back and registers no
+    undo."""
+    run, me = call.run, call.agent
+    with run.lock:
+        box = inbox(run, me)
         messages, box[:] = list(box), []
-    call.run.emit("receive", call.agent, count=len(messages))
+        if messages:
+            call.on_lost(lambda: put_back(run, me, messages))
+    run.emit("receive", me, count=len(messages))
     return json.dumps(messages, indent=2)
 
 
@@ -138,8 +159,18 @@ def list_agents(call):
 
 def wait_seconds(timeout_ms):
     """timeout_ms as the seconds to wait: a number, or a string holding
-    one, finite, held to the schema's range; anything else is refused
-    rather than crashed on."""
+    one, finite, held between SHORTEST_WAIT_MS and LONGEST_WAIT_MS;
+    anything else is refused rather than crashed on.
+
+    The cap stands above the maximum the schema advertises, and the two
+    differ on purpose. The schema keeps CooperBench's 30000, so an MCP
+    client that validates the arguments against it stops there, exactly
+    as with CooperBench's server; the shell command and the hub's /rpc
+    path check nothing against the schema, and an agent idle between
+    actions is better served by one long wait than by ten short ones,
+    each a turn of its own. 300 seconds is the team arm's cap on a
+    request's wait, and sits under the 330 seconds the arms' .mcp.json
+    gives one call, so the hub answers before the client gives up."""
     try:
         milliseconds = float(timeout_ms)
     except (TypeError, ValueError):
@@ -154,35 +185,43 @@ def wait_for_message(call):
 
     The wait and the pop are one hold of run.lock, which wait_for lets go
     of while it waits, so a receive_messages or a second wait by the same
-    agent cannot empty the inbox between the two. A closed run wakes the
-    wait, which then gives the marker at once rather than sleeping on;
-    so does a cancelled call, which takes nothing, since its answer
-    would reach nobody. A message taken for a reply the hub then could
-    not write (the client was gone) goes back at the head of the inbox
-    through call.on_lost, for the next call to find."""
+    agent cannot empty the inbox between the two. The seconds spent in
+    wait_for are reported through call.waited, so the hub's tool_done
+    event tells a call that waited for another agent (blocked_ms) from
+    one the hub was slow to answer. A closed run wakes the wait, which
+    then hands over a message the inbox already holds, or gives the
+    marker at once rather than sleeping on. A cancelled call takes
+    nothing, since its answer would reach nobody; one cancelled after
+    the take has its message put back by the hub, through the undo
+    registered with call.on_lost, the same undo that serves a reply the
+    hub could not write (the client was gone): the message goes back at
+    the head of the inbox, for the next call to find."""
     timeout_ms = call.arg("timeout_ms")
     seconds = wait_seconds(DEFAULT_WAIT_MS if timeout_ms is None else timeout_ms)
     run, me = call.run, call.agent
     with run.lock:
+        started = time.monotonic()
         run.lock.wait_for(lambda: run.closed or call.cancelled.is_set() or bool(inbox(run, me)),
                           timeout=seconds)
+        call.waited(time.monotonic() - started)
         if call.cancelled.is_set() or not inbox(run, me):
             return NO_MESSAGE
         message = inbox(run, me).pop(0)
-        call.on_lost(lambda: put_back(run, me, message))
+        call.on_lost(lambda: put_back(run, me, [message]))
     run.emit("receive", me, count=1)
     return json.dumps(message)
 
 
-def put_back(run, agent, message):
-    """The undo of a wait whose reply was never written: the message goes
-    back at the head of the inbox, and the record says so. The "receive"
-    event stays, since the hub did hand the message over; the
-    "receive_lost" that follows it is what lets a reader of the events
-    tell that handover from one the agent saw, rather than count a
-    message received twice when the next wait takes it again."""
-    inbox(run, agent).insert(0, message)
-    run.emit("receive_lost", agent, count=1)
+def put_back(run, agent, messages):
+    """The undo of a take whose reply was never written: the messages go
+    back at the head of the inbox, in the order they were taken, and the
+    record says so. The "receive" event stays, since the hub did hand
+    them over; the "receive_lost" that follows it, with the same count,
+    is what lets a reader of the events tell that handover from one the
+    agent saw, rather than count a message received twice when the next
+    call takes it again."""
+    inbox(run, agent)[0:0] = messages
+    run.emit("receive_lost", agent, count=len(messages))
 
 
 def messaging_tools(wait=True):
@@ -202,8 +241,9 @@ def messaging_tools(wait=True):
     if wait:
         tools.append(Tool(
             "wait_for_message", WAIT_DESCRIPTION, wait_for_message,
-            schema(timeout_ms={"type": "integer", "minimum": SHORTEST_WAIT_MS, "maximum": LONGEST_WAIT_MS,
-                               "default": DEFAULT_WAIT_MS, "description": WAIT_TIMEOUT_DESCRIPTION})))
+            schema(timeout_ms={"type": "integer", "minimum": SHORTEST_WAIT_MS,
+                               "maximum": ADVERTISED_LONGEST_WAIT_MS, "default": DEFAULT_WAIT_MS,
+                               "description": WAIT_TIMEOUT_DESCRIPTION})))
     return tools
 
 

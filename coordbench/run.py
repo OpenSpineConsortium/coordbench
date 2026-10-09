@@ -48,7 +48,21 @@ and for the run total_cost and total_steps; plus the arm, the driver and
 the hub's metrics. A driver that measures no usage (drivers.py,
 measures_usage) leaves cost, steps and the token counts null rather than
 zero, and the totals null when no agent was measured, so a report shows
-them as unknown instead of counting nothing.
+them as unknown instead of counting nothing. Each agent also gets
+duration_ms and api_duration_ms, Claude Code's own wall and API time
+from its result event, null when the driver cannot know them.
+
+result.json also holds "timings", one record per phase of the pair with
+its start and end (ISO 8601) and its seconds, so a slow run can be laid
+at the harness's door or the agents': "hub" (starting or connecting to
+the hub), "run_create" (POST /api/runs), "git_remote", "shared_volume",
+"provision" (one per agent, its container start through its wrappers),
+"agent" (one per agent, from the driver's start to its wait's return;
+for the session driver, from prepare's start to the marker finish sees),
+"close" (close and release on the hub), "score" (CooperBench's
+evaluation) and "teardown". Only the phases that happened are there, and
+run and finish end with one line summing them up (timings_summary).
+timeline.py prints the same breakdown for a run directory.
 
 The setting is "solo" when the arm lays out one agent and "coop"
 otherwise, which is what decides how CooperBench scores the pair. A pair
@@ -146,6 +160,68 @@ def say(text):
 
 def now():
     return datetime.now()
+
+
+# Timings: when each phase of a pair began and ended, kept on the plan
+# (and before the plan exists, for the hub, on the settings) and written to
+# result.json, so a reader can tell the harness's time from the agents'.
+
+# The phases in the order the summary names them; "agent" reads "agents".
+PHASES = ("hub", "run_create", "git_remote", "shared_volume", "provision", "agent", "close", "score", "teardown")
+
+
+def record_timing(holder, phase, agent, started, ended):
+    """One phase's record under holder["timings"]: the phase, the agent it
+    was for (None for the run's own phases), when it started and ended as
+    ISO 8601, and its seconds, which is what the summary and timeline.py
+    read."""
+    holder.setdefault("timings", []).append({
+        "phase": phase, "agent": agent, "started": started.isoformat(), "ended": ended.isoformat(),
+        "seconds": (ended - started).total_seconds()})
+
+
+@contextlib.contextmanager
+def timed(holder, phase, agent=None):
+    """Record the phase the block is, however the block ends: a phase that
+    failed still took its time, and the record says where the pair was."""
+    started = now()
+    try:
+        yield
+    finally:
+        record_timing(holder, phase, agent, started, now())
+
+
+def phase_records(plan, phase):
+    return [record for record in plan.get("timings") or [] if record["phase"] == phase]
+
+
+def span_seconds(records):
+    """The wall time a phase took over all its records, from the first
+    start to the last end: the agents run at once, so their phase is as
+    long as the slowest of them, not the sum."""
+    started = min(datetime.fromisoformat(record["started"]) for record in records)
+    ended = max(datetime.fromisoformat(record["ended"]) for record in records)
+    return (ended - started).total_seconds()
+
+
+def seconds_text(seconds):
+    return f"{seconds:.0f} s" if seconds >= 10 else f"{seconds:.1f} s"
+
+
+def timings_summary(plan):
+    """One line over the phases that happened, as "timings: provision 42 s,
+    agents 1040 s (agent1 1030 s, agent2 980 s), score 95 s, teardown 6 s";
+    the agents are told apart, since one slow agent is the run's length."""
+    parts = []
+    for phase in PHASES:
+        records = phase_records(plan, phase)
+        if not records:
+            continue
+        part = f"{'agents' if phase == 'agent' else phase} {seconds_text(span_seconds(records))}"
+        if phase == "agent" and len(records) > 1:
+            part += " (" + ", ".join(f"{r['agent']} {seconds_text(r['seconds'])}" for r in records) + ")"
+        parts.append(part)
+    return "timings: " + (", ".join(parts) if parts else "nothing recorded")
 
 
 # The dataset.
@@ -488,7 +564,7 @@ def new_plan(settings, driver, repo, task_id, features):
         "cooperbench_dir": str(settings["cooperbench_dir"]),
         "run_dir": str(pair_dir(settings["log_dir"], settings["run_name"], setting, repo, task_id, features)),
         "hub_url": "", "hub_pid": None, "hub_run": False, "started_at": now().isoformat(), "error": None,
-        "plugins": [], "warnings": [],
+        "plugins": [], "warnings": [], "timings": list(settings.get("timings") or []),
         "resources": {"containers": [], "volume": None, "git_repo": None, "workspaces": None},
         "agents": [{"id": a.id, "role": a.role, "features": list(a.features)} for a in layout],
     }
@@ -617,9 +693,11 @@ def provision_shared(plan):
     ensure_network()
     options = {}
     if "git_remote" in plan["needs"]:
-        options.update(create_git_repository(plan))
+        with timed(plan, "git_remote"):
+            options.update(create_git_repository(plan))
     if "shared_volume" in plan["needs"]:
-        options.update(create_shared_volume(plan))
+        with timed(plan, "shared_volume"):
+            options.update(create_shared_volume(plan))
     missing = [name for need in plan["needs"] for name in PROVIDED_OPTIONS[need] if not options.get(name)]
     if missing:
         raise drivers.DockerError(f"provisioning left the run without {', '.join(missing)}")
@@ -938,9 +1016,12 @@ def agent_job(plan, agent):
 
 def start_agents(plan, driver):
     """Start every agent; one that fails to start is recorded and the rest
-    run on, as CooperBench lets one agent's error leave the other running."""
+    run on, as CooperBench lets one agent's error leave the other running.
+    Each agent's start goes in the plan, which prepare saves, so a finish
+    in another process measures the agent's phase from there."""
     handles = {}
     for agent in plan["agents"]:
+        agent["started_at"] = now().isoformat()
         try:
             handle = driver.start(agent_job(plan, agent))
         except Exception as problem:
@@ -960,13 +1041,15 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
         specs = read_specs(Path(settings["cooperbench_dir"]) / "dataset", repo, task_id, features)
         resolve_plugins(plan)
         options = {**settings["options"], **provision_shared(plan)}
-        answer = hub.create_run(plan["arm"], plan["run_id"], plan["features"], specs, options)
+        with timed(plan, "run_create"):
+            answer = hub.create_run(plan["arm"], plan["run_id"], plan["features"], specs, options)
         plan["hub_run"] = True
         adopt_agents(plan, answer)
         if "git_remote" in plan["needs"]:
             add_agent_branches(plan)
         for agent in plan["agents"]:
-            provision_agent(plan, agent, hub, options)
+            with timed(plan, "provision", agent["id"]):
+                provision_agent(plan, agent, hub, options)
     except Exception as problem:
         record_failure(plan, hub, problem)
         raise PairFailed(plan["error"]) from problem
@@ -979,6 +1062,9 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
 
 
 def wait_agents(plan, driver, handles):
+    """Each started agent's outcome, and its "agent" phase from the start
+    the plan recorded to the wait's return; a plan from before the
+    timings, with no start to measure from, gets no record."""
     outcomes = {}
     for agent in plan["agents"]:
         if agent["id"] not in handles:
@@ -988,22 +1074,41 @@ def wait_agents(plan, driver, handles):
             outcomes[agent["id"]] = driver.wait(handles[agent["id"]])
         except Exception as problem:
             outcomes[agent["id"]] = drivers.AgentOutcome(error=f"{type(problem).__name__}: {problem}")
+        if agent.get("started_at"):
+            record_timing(plan, "agent", agent["id"], datetime.fromisoformat(agent["started_at"]), now())
     return outcomes
+
+
+def fetch_events(plan, hub):
+    """The closed run's events; a hub that cannot give them leaves the
+    events.jsonl empty and a warning, while the metrics already fetched
+    stay what they are."""
+    try:
+        return hub.events(plan["run_id"])
+    except HubError as problem:
+        plan["warnings"].append(f"fetching the run's events from the hub failed, so events.jsonl is empty "
+                                f"and only result.json's metrics describe it: {problem}")
+        return []
 
 
 def close_run(plan, hub):
     """The run's metrics and events, final once it is closed, after which
-    the hub is asked to forget the run; a hub that has gone away leaves
-    them empty and says so."""
+    the hub is asked to forget the run. A hub that cannot close the run
+    leaves both empty and says so, and the run is not released, since it
+    may still be open; one that closed it but could not give its events
+    keeps the metrics, warns about the events alone (fetch_events) and is
+    still asked to forget the run, whose events it keeps on disk when it
+    has a log directory."""
     if not plan["hub_run"]:
         return {}, []
-    try:
-        metrics = hub.close_run(plan["run_id"])
-        events = hub.events(plan["run_id"])
-    except HubError as problem:
-        plan["warnings"].append(f"closing the run on the hub failed: {problem}")
-        return {}, []
-    release_run(plan, hub)
+    with timed(plan, "close"):
+        try:
+            metrics = hub.close_run(plan["run_id"])
+        except HubError as problem:
+            plan["warnings"].append(f"closing the run on the hub failed: {problem}")
+            return {}, []
+        events = fetch_events(plan, hub)
+        release_run(plan, hub)
     return metrics, events
 
 
@@ -1035,7 +1140,22 @@ def finish_pair(plan, driver, handles, hub):
         abandon(plan, hub)
         raise
     teardown(plan)
-    return verdict(outcomes, score(plan))
+    evaluation = score(plan)
+    conclude(plan)
+    return verdict(outcomes, evaluation)
+
+
+def conclude(plan):
+    """The pair is over: its timings, complete now that the teardown and
+    the score are in, go into result.json, which was written before them
+    because the scorer reads the patches written beside it; and one line
+    sums them up for whoever is watching."""
+    path = Path(plan["run_dir"]) / "result.json"
+    result = read_json(path)
+    if result is not None:
+        result["timings"] = plan.get("timings") or []
+        write_json(path, result)
+    say(f"{plan['run_id']}: {timings_summary(plan)}")
 
 
 def abandon(plan, hub):
@@ -1054,6 +1174,7 @@ def record_failure(plan, hub, problem):
     metrics, events = close_run(plan, hub)
     write_outputs(plan, outcomes, metrics, events, now())
     teardown(plan)
+    conclude(plan)
     save_plan(plan)
 
 
@@ -1089,11 +1210,14 @@ def agent_record(agent, outcome, measured):
     fields (USAGE_FIELDS) are numbers when the driver measured them and
     null when it could not (drivers.py, measures_usage): a null is unknown,
     a zero is a measurement, and a report shows '-' when every agent's
-    usage is null rather than sum unknowns into a total."""
+    usage is null rather than sum unknowns into a total. duration_ms and
+    api_duration_ms are Claude Code's own wall and API time for the agent,
+    null when the driver saw no result event to read them from."""
     features = agent["features"]
     usage = {name: getattr(outcome, name) if measured else None for name in USAGE_FIELDS}
     return {"feature_id": features[0] if len(features) == 1 else features, "role": agent["role"],
-            "status": outcome.status, **usage, "patch_lines": len(outcome.patch.splitlines()),
+            "status": outcome.status, **usage, "duration_ms": outcome.duration_ms,
+            "api_duration_ms": outcome.api_duration_ms, "patch_lines": len(outcome.patch.splitlines()),
             "error": outcome.error}
 
 
@@ -1118,7 +1242,7 @@ def result_record(plan, outcomes, metrics, ended):
         "driver": plan["driver"], "started_at": plan["started_at"], "ended_at": ended.isoformat(),
         "duration_seconds": (ended - started).total_seconds(),
         "agents": agents, **usage_totals(agents),
-        "metrics": metrics,
+        "metrics": metrics, "timings": plan.get("timings") or [],
     }
     if plan["error"]:
         record["error"] = plan["error"]
@@ -1145,14 +1269,15 @@ def teardown(plan):
     if plan["keep"]:
         say(f"kept for inspection: {json.dumps(resources)}")
         return
-    if resources["containers"]:
-        drivers.docker("rm", "-f", *resources["containers"])
-    if resources["volume"]:
-        drivers.docker("volume", "rm", "-f", resources["volume"])
-    if resources["git_repo"]:
-        drivers.docker("exec", GIT_SERVER, "rm", "-rf", resources["git_repo"])
-    if resources["workspaces"]:
-        shutil.rmtree(resources["workspaces"], ignore_errors=True)
+    with timed(plan, "teardown"):
+        if resources["containers"]:
+            drivers.docker("rm", "-f", *resources["containers"])
+        if resources["volume"]:
+            drivers.docker("volume", "rm", "-f", resources["volume"])
+        if resources["git_repo"]:
+            drivers.docker("exec", GIT_SERVER, "rm", "-rf", resources["git_repo"])
+        if resources["workspaces"]:
+            shutil.rmtree(resources["workspaces"], ignore_errors=True)
     plan["resources"] = {"containers": [], "volume": None, "git_repo": None, "workspaces": None}
 
 
@@ -1231,7 +1356,8 @@ def evaluation_record(plan, result):
 def score(plan):
     if plan["error"]:
         return {"error": plan["error"]}
-    record = evaluation_record(plan, run_cooperbench_tests(plan))
+    with timed(plan, "score"):
+        record = evaluation_record(plan, run_cooperbench_tests(plan))
     write_json(Path(plan["run_dir"]) / "eval.json", record)
     return record
 
@@ -1315,7 +1441,8 @@ def command_run(args):
     pairs = [args.features] if args.features else subset_pairs(dataset, args.subset, args.repo, args.task)
     driver = drivers.load_driver(settings["driver"])
     warn_about_credentials(driver)
-    hub, process = connect_hub(settings)
+    with timed(settings, "hub"):
+        hub, process = connect_hub(settings)
     failures = 0
     try:
         for features in pairs:
@@ -1334,7 +1461,8 @@ def command_prepare(args):
     if not getattr(driver, "resumable", False):
         raise SystemExit(f"prepare needs a driver whose wait can run in another process, "
                          f"and {settings['driver']} is not one")
-    hub, process = connect_hub(settings)
+    with timed(settings, "hub"):
+        hub, process = connect_hub(settings)
     try:
         plan, handles = prepare_pair(settings, hub, driver, args.repo, args.task, args.features)
     except PairFailed as failure:

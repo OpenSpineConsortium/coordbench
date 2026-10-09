@@ -1,0 +1,8 @@
+{
+  "entry": "arm.py:BoardArm",
+  "name": "board",
+  "description": "coordbench's board arm: CooperBench's messaging plus a shared notice board every agent can pin a line on.",
+  "needs": [],
+  "plugins": [],
+  "mcp_servers": {}
+}

@@ -34,11 +34,15 @@ types as a boolean is a switch (--mine), any other takes the next word
 (-n "a note") or the value after "=" (--wait=10). The words left go onto
 the tool's argv in order, one word per name, a name ending in "..."
 taking the rest of the line; the last name, "..." or not, takes the text
-on stdin when no word is left for it (`coop-send agent2 < note.txt`, as
-coop_msg.py reads its content from stdin when the word is missing). A
-word beyond the names is refused, as argparse refuses it. A word that is
-not one of the tool's flags stays a word even when it starts with a
-dash, since a message may.
+on stdin when no word is left for it and the tool's schema does not
+require it (`coop-send agent2 < note.txt`, as coop_msg.py reads its
+content from stdin when the word is missing; coop-task-create with no
+title sends none, and the hub refuses it with exit 2, as argparse refuses
+coop_task.py's). A word beyond the names is refused, as argparse refuses
+it. A word that is not one of the tool's flags stays a word even when it
+starts with a dash, since a message may. A word for an argument the
+schema types as a number is refused, exit 2 and argparse's wording, when
+it is true, false or null, which Python would read as 1.0, 0.0 or None.
 
 What a command prints: the tool's text on stdout and exit 0, or on stderr
 when the tool's schema says so ("x-coordbench-prints": "stderr", which
@@ -67,8 +71,9 @@ from pathlib import Path
 
 OK, TOOL_ERROR, FAILURE = 0, 1, 2
 
-# Generous, because a tool may block by design (wait_for_message waits up
-# to 30 seconds); the hub decides how long a call lasts.
+# Generous, because a tool may block by design (wait_for_message and the
+# team arm's request wait up to 300 seconds); the hub decides how long a
+# call lasts.
 TIMEOUT_SECONDS = 600
 
 # The hub is local to the agent (localhost or the Docker host), so a proxy
@@ -83,6 +88,7 @@ SAFE_COMMAND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_VARIABLE = "COORD_AGENT_TOKEN"
 
 TYPES_PARSED_AS_JSON = {"integer", "number", "boolean", "array", "object", "null"}
+NUMBER_TYPES = {"integer", "number"}
 
 
 class Failure(Exception):
@@ -208,16 +214,36 @@ def is_switch(tool, name):
     return "boolean" in property_types(tool, name)
 
 
-def coerce(tool, name, value):
+def coerce(tool, name, value, label=None):
     """A word from the shell is a string; a property the schema types as a
-    number, a boolean or JSON gets the word parsed, when it parses."""
+    number, a boolean or JSON gets the word parsed, when it parses. The
+    words true, false and null are refused for a property typed as a
+    number alone, in argparse's words for its type=float or type=int
+    (label is the flag or the name argparse would show), since the hub
+    would read the parsed JSON as 1.0, 0.0 or None where coop_task.py
+    exits 2 on them."""
     types = property_types(tool, name)
     if "string" in types or not types & TYPES_PARSED_AS_JSON:
         return value
     try:
-        return json.loads(value)
+        parsed = json.loads(value)
     except ValueError:
         return value
+    if not_a_number(types, parsed):
+        kind = "int" if (types & NUMBER_TYPES) == {"integer"} else "float"
+        raise Failure(f"argument {label or name}: invalid {kind} value: {value!r}")
+    return parsed
+
+
+def not_a_number(types, parsed):
+    """True for a boolean or a null parsed from a word the schema types as
+    a number and not also as that: what Python's float() would take and
+    argparse's type=float refuses."""
+    if not types & NUMBER_TYPES:
+        return False
+    if isinstance(parsed, bool):
+        return "boolean" not in types
+    return parsed is None and "null" not in types
 
 
 def parse_arguments(words, tool=None):
@@ -240,8 +266,11 @@ def parse_arguments(words, tool=None):
 
 
 def stdin_has_text():
-    """True when stdin is a pipe or a file rather than a terminal, which is
-    when CooperBench's coop-send reads its message from it."""
+    """True when stdin is a pipe or a file rather than a terminal. The
+    terminal check is coordbench's own rule: coop_msg.py reads stdin
+    whenever its content word is missing, terminal or not, and a person
+    who types `coop-send agent2` at a terminal then sits in a read that
+    nothing ends; here the word is left missing instead."""
     try:
         return sys.stdin is not None and not sys.stdin.isatty()
     except (ValueError, OSError):
@@ -270,7 +299,7 @@ def flag_value(tool, flag, inline, words):
     value = inline if inline is not None else next(words, None)
     if value is None:
         raise Failure(f"{flag} takes a value; usage: {usage(tool)}")
-    return coerce(tool, name, value)
+    return coerce(tool, name, value, label=flag)
 
 
 def split_flags(tool, words):
@@ -294,35 +323,50 @@ def words_to_arguments(tool, words):
     return {**argv_arguments(tool, rest), **flagged}
 
 
+def required_names(tool):
+    """The arguments the tool's schema lists as required; none from a hub
+    that lists none."""
+    required = ((tool or {}).get("inputSchema") or {}).get("required")
+    return set(required) if isinstance(required, list) else set()
+
+
 def argv_arguments(tool, words):
     """Map words onto the tool's argv names in order: one word per name,
     the rest of the words joined by spaces for a name ending in "...",
     which is the last, and for the last name, "..." or not, the text on
-    stdin when no word is left for it but every earlier name got one.
-    That is coop_msg.py's content at 63b9d44, an optional positional read
-    from stdin when missing, so `coop-send agent2 < note.txt` works as in
-    CooperBench. Words beyond the names are refused, as argparse refuses
-    them. A tool with no argv takes key=value words or one JSON object."""
+    stdin when no word is left for it, every earlier name got one, and
+    the schema does not require it. That is coop_msg.py's content and
+    coop_task.py's body at 63b9d44, optional positionals read from stdin
+    when missing, so `coop-send agent2 < note.txt` works as in
+    CooperBench; a required one left missing (coop-task-create's title,
+    coop-task-claim's task_id, coop-task-update's status) is sent as
+    missing, for the hub to refuse with exit 2 as argparse refuses it,
+    rather than read as "" from a stdin at /dev/null. Words beyond the
+    names are refused, as argparse refuses them. A tool with no argv
+    takes key=value words or one JSON object."""
     argv = list(tool.get("argv") or [])
     if not argv:
         return parse_arguments(words, tool)
     if not argv[-1].endswith("...") and len(words) > len(argv):
         raise Failure(f"too many words; usage: {usage(tool)}")
-    arguments = {}
+    arguments, required = {}, required_names(tool)
     for index, name in enumerate(argv):
-        value = argv_word(name, index, words, last=index == len(argv) - 1)
+        key = name.removesuffix("...")
+        from_stdin = index == len(argv) - 1 and key not in required
+        value = argv_word(name, index, words, from_stdin)
         if value is not None:
-            arguments[name.removesuffix("...")] = coerce(tool, name.removesuffix("..."), value)
+            arguments[key] = coerce(tool, key, value)
     return arguments
 
 
-def argv_word(name, index, words, last):
+def argv_word(name, index, words, from_stdin):
     """The word for the argv name at index: the word at its place, or the
-    rest of the words joined for a name ending in "..."; for the last name
+    rest of the words joined for a name ending in "..."; for a name that
+    may come from stdin (the last, when the schema does not require it)
     with no word left for it, the text on stdin, when there is some."""
     if index < len(words):
         return " ".join(words[index:]) if name.endswith("...") else words[index]
-    if last and index == len(words) and stdin_has_text():
+    if from_stdin and index == len(words) and stdin_has_text():
         return sys.stdin.read()
     return None
 
@@ -403,7 +447,9 @@ def alias_run(args):
 def wrapper_script(tool_name, python, url=None, token_file=None):
     """The wrapper's text. A token file is read when the command runs,
     with cat, so the token is in neither this text nor a process list;
-    the shell drops the newline the file ends with."""
+    the shell drops the newline the file ends with. The path is written
+    absolute (install makes it so), since the command runs from whatever
+    directory the agent is in, not the one install ran in."""
     cli = Path(__file__).resolve()
     lines = ["#!/bin/sh"]
     if url:
@@ -435,11 +481,12 @@ def install(args):
     """Write the wrappers. The tools come from the hub, so what an agent
     can type is exactly what its role in the arm allows."""
     baked_url = args.install_url or args.global_url
+    token_file = Path(args.token_file).absolute() if args.token_file else None
     bin_dir = Path(args.bin_dir)
     bin_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for tool in describe_agent(args.url, args.token).get("tools") or []:
-        script = wrapper_script(tool["name"], args.python, baked_url, args.token_file)
+        script = wrapper_script(tool["name"], args.python, baked_url, token_file)
         for command in commands_for(tool):
             if not SAFE_COMMAND.match(command):
                 print(f"coordbench: skipped the command {command!r}: not a safe file name",

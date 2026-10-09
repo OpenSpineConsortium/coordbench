@@ -106,15 +106,24 @@ class Call:
     the request (MCP's notifications/cancelled); a blocking tool reads it
     in its wait predicate and, once it is set, takes nothing and returns,
     since the answer would reach nobody. on_lost(undo) registers a
-    callable the hub runs, through lost(), if the reply to this call is
-    never written because the connection dropped, so a handler that took
-    something from shared state can put it back for the next call."""
+    callable the hub runs, through lost(), when the reply to this call
+    reaches nobody: the connection dropped before it was written, or the
+    call was cancelled after it took something; a handler that took
+    something from shared state puts it back there for the next call.
+
+    `blocked_s` is the time the handler spent waiting on the run's lock
+    for another agent (a long poll for a message, a request's wait for its
+    response), which the handler books with waited(seconds) around each
+    wait. The hub reports it beside the call's wall time in the
+    "tool_done" event (Run), so a reader can tell a slow hub from an
+    agent that chose to wait."""
 
     run: "Run"
     agent: str
     arguments: dict
     cancelled: threading.Event = field(default_factory=threading.Event)
     undos: list = field(default_factory=list)
+    blocked_s: float = 0.0
 
     def arg(self, name, default=None, required=False):
         value = self.arguments.get(name, default)
@@ -122,16 +131,23 @@ class Call:
             raise ToolError(f"{name} is required")
         return value
 
+    def waited(self, seconds):
+        """Book time the handler spent waiting for another agent."""
+        self.blocked_s += seconds
+
     def on_lost(self, undo):
         self.undos.append(undo)
 
     def lost(self):
         """Put back what this call took: every undo registered, newest
         first, under the run's lock, which is then woken so a tool waiting
-        for what went back sees it. An undo that fails is a bug in the
-        arm; it costs the log a traceback, not the other undos."""
+        for what went back sees it. Each undo runs once: a call cancelled
+        after its take, whose reply then also fails to be written, puts
+        back what it took one time, not two. An undo that fails is a bug
+        in the arm; it costs the log a traceback, not the other undos."""
         with self.run.lock:
-            for undo in reversed(self.undos):
+            undos, self.undos = self.undos, []
+            for undo in reversed(undos):
                 try:
                     undo()
                 except Exception:
@@ -168,7 +184,25 @@ class Tool:
 class Run:
     """The shared state of one task pair under one arm. The hub serves it
     from many threads at once, so every change goes through `lock`, a
-    condition that blocking tools wait on and every change wakes."""
+    condition that blocking tools wait on and every change wakes.
+
+    Every event (emit) carries "seq", "t" (seconds since the run started),
+    "kind" and "agent", plus what its kind adds. Two kinds frame every
+    tool call, on the MCP path and the /rpc path alike, so a reader of
+    events.jsonl can tell what the hub spent from what the agent chose:
+
+    - {"kind": "tool", "tool": name} when the call starts, before its
+      handler runs;
+    - {"kind": "tool_done", "tool": name, "duration_ms", "blocked_ms",
+      "is_error", "cancelled"} when the handler has returned. duration_ms
+      is the handler's wall time; blocked_ms is the part of it the tool
+      spent waiting on this lock for another agent (Call.waited), so that
+      duration_ms minus blocked_ms is the hub's own cost; is_error is true
+      for a ToolError or a crash in the handler; cancelled is whether the
+      client had cancelled the call by then.
+
+    A call refused before its handler runs (an unknown tool, an argument
+    the tool does not take) leaves no event: nothing ran."""
 
     def __init__(self, run_id, arm, agents, options=None, events_path=None, specs=None):
         self.id = run_id

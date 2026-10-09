@@ -31,9 +31,14 @@ call exits with coop_task.py's own code, so the prompt's "exit 0 if you
 got it, 2 if someone else owns it" stays true: 1 for a task that does not
 exist, 2 for a claim another agent holds, 3 for an update by a non-owner,
 4 for a bad status, 5 for a wait that ran out, 6 for an unknown request
-and 7 for a request addressed to someone else. A missing argument or a
---wait that is not a number exits 2, as argparse makes coop_task.py exit
-before it reaches Redis.
+and 7 for a request addressed to someone else. A missing argument exits
+2 with argparse's words, as coop_task.py exits before it reaches Redis:
+the shell command sends a required positional it has no word for as
+missing, rather than reading it from stdin as it reads a body left off,
+and required() refuses it. A --wait that is not a number is refused by
+the shell command itself, before anything is sent, and so are the words
+true, false and null, which the handler would otherwise read as 1.0,
+0.0 and no wait at all.
 
 setup() seeds the list as runner/team.py does: one task per member
 feature, assigned to that member, and the lead's integrate-and-submit
@@ -56,23 +61,31 @@ Where this differs from CooperBench, and why:
   which sit above it on purpose: Claude Code gives up on an MCP call after
   the timeout the arm's .mcp.json sets (330 seconds) and cli.py after 600,
   so an unbounded wait would be cut off by the client anyway. A wait the
-  client cancels takes no response, and one whose answer the client was
-  not there to read puts the response back (hub.py says how), so the cap
-  is about answering the caller, not about what a cut-off wait would lose.
+  client cancels takes no response; one cancelled after the take, or
+  whose answer the client was not there to read, has its response put
+  back by the hub (hub.py says how), through the undo send_request
+  registers. The cap is about answering the caller, not about what a
+  cut-off wait would lose.
 - wait_for_message returns a message. At 63b9d44 CooperBench's never did:
   its server BLPOPs <agent>:inbox, with no prefix, while coop_msg.py
   pushes to run:<id>:<agent>:inbox, so every call there ran out with the
   no-message marker and left the inbox for coop-recv. Here the tool hands
   over the oldest message and removes it from the inbox, and holds the
-  wait to the schema's range (kit.py says how). The difference is
-  deliberate: a long poll that never answers measures nothing.
+  wait between 100 ms and 300 s, the same cap as a request's wait
+  (kit.py says why the cap stands above the schema's 30000). The
+  difference is deliberate: a long poll that never answers measures
+  nothing.
 - The mirror of the list under /workspace/shared/tasks, which coop-task-list
   writes as it lists, is written by the hub from its host, so it needs the
   shared directory as the hub's host sees it (the run option
   "shared_dir_host"); without one there is no mirror. The volume is the
   agents' to write, so the hub treats it as untrusted: it writes only into
   a real directory named tasks at the top of the volume, never through a
-  symlink an agent put in its place, and not once the run has closed.
+  symlink an agent put in its place, and not when the run was already
+  closed when the list was read. A close that lands between that read
+  and the writes still gets one mirror, which is harmless: the runner
+  removes the volume only after the close has answered, so that mirror
+  goes into a volume about to go, or nowhere once it is gone.
 
 Every ported piece is from CooperBench at 63b9d44 (MIT licence) and says
 where it came from.
@@ -224,18 +237,24 @@ class Board:
             self.record("request", request_id=request_id, by=sender, to=recipient, request_kind=kind)
         return request_id
 
-    def await_response(self, request_id, seconds, cancelled=None):
+    def await_response(self, request_id, seconds, call=None):
         """protocol.py's await_response, a BLPOP on the request's responses:
         the oldest response once one is queued, or None when the time is
-        up, the run has closed, or `cancelled` (the calling Call's event)
-        is set, which takes nothing: the caller has given up and its
+        up, the run has closed, or `call` (the calling Call) has been
+        cancelled, which takes nothing: the caller has given up and its
         answer would reach nobody. The wait and the pop are one hold of
-        the lock, so no second wait can empty the queue between them."""
+        the lock, so no second wait can empty the queue between them. The
+        seconds spent in wait_for are booked on the call (Call.waited),
+        so the hub's tool_done event carries them as blocked_ms: time
+        spent waiting for another agent, not the hub's own."""
         run = self.run
-        gone = cancelled.is_set if cancelled is not None else (lambda: False)
+        gone = call.cancelled.is_set if call is not None else (lambda: False)
         with run.lock:
+            started = time.monotonic()
             run.lock.wait_for(lambda: run.closed or gone() or bool(self.responses.get(request_id)),
                               timeout=seconds)
+            if call is not None:
+                call.waited(time.monotonic() - started)
             queue = self.responses.get(request_id)
             return queue.pop(0) if queue and not gone() else None
 
@@ -359,7 +378,7 @@ def send_request(call):
     request_id = board.request(call.agent, recipient, kind, optional_text(call, "body") or "")
     if seconds is None:
         return request_id
-    response = board.await_response(request_id, seconds, call.cancelled)
+    response = board.await_response(request_id, seconds, call)
     if response is None:
         # Also the cancelled case: the caller gave up, and hears what
         # coop-request says of a wait that ran out.
@@ -497,8 +516,13 @@ def mirror_task_list(directory, tasks, log):
 
 def mirror_if_shared(run, tasks, log, closed):
     """The side effect of coop-task-list, best effort as CooperBench's is,
-    and not for a closed run: the runner removes the volume once the run
-    is closed, and a mirror then would leave a directory of its own."""
+    and not for a run that was already closed when the list was read: the
+    runner removes the volume once the run is closed, and a mirror then
+    would leave a directory of its own. A close that lands between the
+    read and these writes still gets one mirror, harmlessly: the volume
+    goes only after the close has answered, so the mirror lands in a
+    volume about to be removed or, the root already gone, nowhere, since
+    open_tasks_directory makes the leaf and never the root."""
     shared = run.options.get("shared_dir_host")
     if not shared or closed:
         return

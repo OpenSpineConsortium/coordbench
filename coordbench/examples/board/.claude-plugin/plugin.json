@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-board",
+  "version": "0.1.0",
+  "description": "coordbench's board arm: CooperBench's messaging plus a shared notice board every agent can pin a line on."
+}

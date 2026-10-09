@@ -21,33 +21,43 @@ DELETE /api/runs/{run} once it has fetched the metrics and the events;
 that closes the run first if it is still open, then forgets it, so a hub
 that serves many runs does not grow with every one it ever hosted.
 
-On /mcp a body the hub cannot read as a request (not JSON, or a lone
-message with no id to answer under: no JSON-RPC object, an id that is
-not a string or an integer, an empty batch) is answered 400 with a
+On /mcp a body the hub cannot read as a request (not JSON, or nested too
+deep to parse, or a lone message with no id to answer under: no JSON-RPC
+object, an object with no method that is no response either, an id that
+is not a string or an integer, an empty batch) is answered 400 with a
 JSON-RPC error that has no id, as the Streamable HTTP transport asks, and
 so is an MCP-Protocol-Version the hub does not speak on anything but an
 initialize; what the hub can read is answered 200 message by message,
 each request of a batch on its own, and a session id is issued only to
-an initialize that was answered with a result. An error the hub itself
-causes while answering is -32603 for the request it failed on, with the
-traceback in the hub's log; a client that drops its connection leaves no
-trace there, since that is the client's doing.
+an initialize that was answered with initialize's own result under that
+very id (one id, by type as well as value: an initialize with id true,
+refused for its shape, gets no session from a ping with id 1 answered
+beside it). An error the hub itself causes while answering is -32603 for
+the request it failed on, with the traceback in the hub's log; a client
+that drops its connection leaves no trace there, since that is the
+client's doing.
 
 A client may give up on a tool that blocks, and the hub then makes sure
-nothing is taken for nobody. A notifications/cancelled, which Streamable
-HTTP carries as a second POST on the same Mcp-Session-Id, reaches the
-tools/call it names among the calls in flight on that session (kept per
-session, by request id, on the hosted run): mcp.handle sets the call's
-cancelled event and wakes the run, the blocking tool returns without
-taking what it waited for, and the cancelled call still produces its
-result (for a wait, the no-message marker), which the hub tries to
-write; a client that still listens discards a response to a cancelled
-request, as the specification tells it to, and one that has gone makes
-the write fail. When writing the answer to a request that ran tool calls
-(on /mcp or /rpc) fails because the connection dropped, the hub runs the
-undo each of its calls registered (Call.on_lost), newest first, under
-the run's lock, and wakes the run: a message or a response taken for a
-reply that reached nobody goes back where the next call finds it.
+nothing is taken for nobody: a cancelled call takes nothing, and one
+cancelled after it took something puts it back. A notifications/cancelled,
+which Streamable HTTP carries as a second POST on the same
+Mcp-Session-Id, reaches the tools/call it names among the calls in
+flight on that session (kept per session, by request id, on the hosted
+run): mcp.handle sets the call's cancelled event under the run's lock
+and wakes the run, and the blocking tool returns without taking what it
+waited for. A call that had already taken something when the cancel
+landed (the message was popped, the reply not yet on its way) sees the
+cancel when its handler returns, since it leaves the calls in flight
+under the same lock, and puts back what it took (Call.lost) before its
+answer is written. The answer is still written, the no-message marker or
+the message that went back; a client that still listens discards a
+response to a cancelled request, as the specification tells it to, and
+one that has gone makes the write fail. When writing the answer to a
+request that ran tool calls (on /mcp or /rpc) fails because the
+connection dropped, the hub runs the undo each of its calls registered
+(Call.on_lost), newest first, under the run's lock, and wakes the run: a
+message or a response taken for a reply that reached nobody goes back
+where the next call finds it, and once only, however the reply was lost.
 
 Command line:
 
@@ -241,10 +251,13 @@ class Hub:
         return self.describe(self.hosted(run_id), with_prompts=False)
 
     def close_run(self, run_id):
+        return self.close(self.hosted(run_id))
+
+    def close(self, hosted):
         """Mark the run closed and give its metrics. Tools keep answering,
         since an agent may still be finishing its last call; the runner
         decides what a closed run's late events mean."""
-        run = self.hosted(run_id).run
+        run = hosted.run
         with run.lock:
             first_close = not run.closed
             run.closed = True
@@ -263,10 +276,16 @@ class Hub:
         """Forget the run, closing it first if it is still open, so the
         teardown runs once however the runner ends; the runner releases a
         run once it holds the metrics and the events, and a hub that
-        hosts many runs keeps none of the finished ones."""
-        self.close_run(run_id)
+        hosts many runs keeps none of the finished ones. Only the run that
+        was closed here is forgotten: a second release that overlaps the
+        first answers while the first is still in the teardown, and a run
+        created under the same id meanwhile is another run, which stays
+        hosted, open, until its own release."""
+        hosted = self.hosted(run_id)
+        self.close(hosted)
         with self.lock:
-            self.runs.pop(run_id, None)
+            if self.runs.get(run_id) is hosted:
+                del self.runs[run_id]
         return {"run_id": run_id, "released": True}
 
     def events(self, run_id):
@@ -306,8 +325,10 @@ class Hub:
 
     def check_agent(self, hosted, agent, authorization):
         """For a run made with agent_tokens, the request must carry this
-        agent's own token, in constant time so the comparison tells a
-        guesser nothing; a run made without wants none."""
+        agent's own token, compared in constant time for two strings of
+        one length, so the time taken tells a guesser nothing about where
+        a wrong token of the right length diverges; a run made without
+        wants none."""
         token = hosted.tokens.get(agent)
         if token is None:
             return
@@ -340,8 +361,10 @@ class Hub:
 
     def call(self, run, agent, name, arguments, sink=None):
         """One tool call outside MCP, for /rpc: the same checks and events
-        as tools/call, answered as {"text", "isError"}. The Call goes onto
-        `sink`, a list, before its handler runs, as mcp.handle's does."""
+        as tools/call, answered as {"text", "isError"}; arguments left out
+        mean none, and arguments that are not an object are refused as
+        tools/call refuses them. The Call goes onto `sink`, a list, before
+        its handler runs, as mcp.handle's does."""
         tools = run.arm.tools_for(run, agent)
         started = None if sink is None else sink.append
         result, problem = mcp.call_tool(run, agent, tools, {"name": name, "arguments": arguments}, started)
@@ -454,9 +477,9 @@ def as_list(parsed):
 
 def initialize_ids(body):
     """The ids of the initialize requests in a body; one of them answered
-    with a result starts a session."""
+    with initialize's result starts a session."""
     try:
-        parsed = json.loads(body)
+        parsed = mcp.loads(body)
     except ValueError:
         return []
     return [m["id"] for m in as_list(parsed)
@@ -469,11 +492,17 @@ def opens_session(body):
 
 
 def opened_session(body, answer):
-    """Whether an initialize in the body was answered with a result. One
-    refused for its shape starts no session: a client holding a session
-    id for a handshake that failed would send it with every request."""
+    """Whether an initialize in the body was answered with a result: an
+    answer carrying initialize's own result (mcp.is_initialize_result)
+    under an id that is one of an initialize's by type and value, so a
+    ping's result with id 1 says nothing for an initialize with id true,
+    and a ping's empty result nothing for an initialize that shares its
+    id and was refused. One refused for its shape starts no session: a
+    client holding a session id for a handshake that failed would send
+    it with every request."""
     asked = initialize_ids(body)
-    return any(isinstance(a, dict) and "result" in a and a.get("id") in asked
+    return any(isinstance(a, dict) and mcp.is_initialize_result(a.get("result"))
+               and any(mcp.same_id(a.get("id"), request_id) for request_id in asked)
                for a in as_list(answer))
 
 
@@ -490,7 +519,7 @@ def internal_errors(body):
     """A JSON-RPC error for each request of a body the hub failed on, so a
     client waiting on an id hears back rather than hangs."""
     try:
-        parsed = json.loads(body)
+        parsed = mcp.loads(body)
     except ValueError:
         return mcp.error(None, mcp.INTERNAL_ERROR, FAILED)
     answers = [mcp.error(mcp.request_id_of(m), mcp.INTERNAL_ERROR, FAILED)
@@ -617,7 +646,7 @@ class HubHandler(BaseHTTPRequestHandler):
 
     def json_body(self):
         try:
-            payload = json.loads(self.body or b"{}")
+            payload = mcp.loads(self.body or b"{}")
         except ValueError:
             raise HubError(400, "the body is not JSON") from None
         if not isinstance(payload, dict):
@@ -712,7 +741,7 @@ class HubHandler(BaseHTTPRequestHandler):
         run = hosted.run
         payload = self.json_body()
         calls = []
-        answer = self.hub.call(run, agent, payload.get("tool"), payload.get("arguments") or {}, calls)
+        answer = self.hub.call(run, agent, payload.get("tool"), payload.get("arguments"), calls)
         self.reply_or_undo(200, answer, None, calls)
 
     def get_health(self):
