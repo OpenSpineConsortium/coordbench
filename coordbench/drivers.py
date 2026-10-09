@@ -191,7 +191,12 @@ class AgentOutcome:
     spent waiting on the API (the result event's duration_ms and
     duration_api_ms); a driver that cannot know them leaves them None,
     which result.json writes as null, since a zero would read as a
-    measurement."""
+    measurement. ended_at is when the agent itself stopped, as epoch
+    seconds, for a driver that knows it better than the moment wait()
+    returned: the session driver reads its marker's mtime, the CLI driver
+    the moment docker exec returned; None means "when wait returned", so
+    an agent's wall time in the timings is never stretched by a late
+    finish."""
 
     status: str = "Error"
     input_tokens: int = 0
@@ -200,6 +205,7 @@ class AgentOutcome:
     cache_write_tokens: int = 0
     steps: int = 0
     cost: float = 0.0
+    ended_at: float | None = None
     duration_ms: int | None = None
     api_duration_ms: int | None = None
     error: str | None = None
@@ -381,6 +387,7 @@ class CliRun:
     def __init__(self, job):
         self.job = job
         self.problem = None
+        self.ended_at = None
         self.thread = threading.Thread(target=self.run, name=f"coordbench-{job.agent}", daemon=True)
 
     def run(self):
@@ -391,6 +398,8 @@ class CliRun:
             stop_claude(self.job.container)
         except Exception as problem:  # the thread must report, never die silently
             self.problem = f"{type(problem).__name__}: {problem}"
+        finally:
+            self.ended_at = time.time()
 
     def outcome(self):
         log = Path(self.job.log_path)
@@ -402,6 +411,7 @@ class CliRun:
             outcome.error += f"; its last line: {text.strip().splitlines()[-1][:300]}"
         if self.problem:
             outcome.status, outcome.error = "Error", self.problem
+        outcome.ended_at = self.ended_at
         outcome.patch = normalize_patch(read_container_file(self.job.container, f"{CONTAINER_REPO}/patch.txt"))
         return outcome
 
@@ -522,6 +532,8 @@ class SessionDriver:
         if not marker.exists():
             minutes = handle.get("timeout_s", 0) / 60
             outcome = AgentOutcome(status="Error", error=f"no {DONE_MARKER} within {minutes:.0f} minutes")
+        else:
+            outcome.ended_at = marker.stat().st_mtime
         patch = Path(handle["workspace"]) / "patch.txt"
         if patch.exists():
             outcome.patch = normalize_patch(patch.read_text(encoding="utf-8", errors="replace"))

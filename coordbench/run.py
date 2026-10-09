@@ -1061,10 +1061,20 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
     return plan, handles
 
 
+def agent_ended(outcome):
+    """When the agent's phase ended: the moment the driver says the agent
+    itself stopped (the session driver's marker, the CLI driver's exec),
+    else now. finish may look long after a marker appeared, and the
+    agents' wall times must not carry that delay."""
+    if outcome.ended_at:
+        return datetime.fromtimestamp(outcome.ended_at, now().tzinfo)
+    return now()
+
+
 def wait_agents(plan, driver, handles):
     """Each started agent's outcome, and its "agent" phase from the start
-    the plan recorded to the wait's return; a plan from before the
-    timings, with no start to measure from, gets no record."""
+    the plan recorded to the moment the agent stopped (agent_ended); a plan
+    from before the timings, with no start to measure from, gets no record."""
     outcomes = {}
     for agent in plan["agents"]:
         if agent["id"] not in handles:
@@ -1075,7 +1085,8 @@ def wait_agents(plan, driver, handles):
         except Exception as problem:
             outcomes[agent["id"]] = drivers.AgentOutcome(error=f"{type(problem).__name__}: {problem}")
         if agent.get("started_at"):
-            record_timing(plan, "agent", agent["id"], datetime.fromisoformat(agent["started_at"]), now())
+            record_timing(plan, "agent", agent["id"], datetime.fromisoformat(agent["started_at"]),
+                          agent_ended(outcomes[agent["id"]]))
     return outcomes
 
 
