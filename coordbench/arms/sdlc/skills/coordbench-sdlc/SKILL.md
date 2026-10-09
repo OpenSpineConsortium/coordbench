@@ -36,16 +36,35 @@ command; both act on the same board and the same inboxes.
 Messages are this project's comments. They are never pushed into your
 conversation; you see them only when you receive them.
 
+## Exit codes
+
+A shell command that did what it says prints its answer and exits 0. One
+that is refused prints why on stderr, and its exit code says what kind of
+refusal it is, so a script can branch on it. Over MCP the refusal is an
+error result, with the same code in its `_meta` as `coordbench/exitCode`.
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| 0 | done | carry on |
+| 1 | refused: no such issue, an issue number that is not one, a branch not pushed yet, nothing new to merge, an issue already closed or already yours | fix what the message names and try again |
+| 2 | someone else's: another agent holds the claim, the issue was given to another agent, or the pull request is another agent's | pick another issue, or leave it to its holder |
+| 3 | main moved: the merge gate left main as it was | merge team/main into your branch, resolve, push, and mark ready again |
+| 4 | the merge gate could not act: git failed or timed out, the shared remote cannot be read, or the run has closed | try once more; if it persists, submit your own branch |
+
+Code 2 is the one CooperBench's coop-task-claim gives a task someone else
+owns: you lost the race, not made a mistake.
+
 ## The protocol
 
-1. Pick: read the board. It lists every issue with its label (todo,
-   claimed, in-review or closed), the claims held, and the pull requests
-   with their states and how each branch stands to main: clean, behind
-   (main moved but the branch still merges cleanly) or conflicting.
+1. Pick: read the board. It lists every issue with its title (its
+   feature's first heading) and its label (todo, claimed, in-review or
+   closed), the claims held, and the pull requests with their states and
+   how each branch stands to main: clean, behind (main moved but the
+   branch still merges cleanly) or conflicting.
 2. Claim: a claim is exclusive and first come, first served. It succeeds
-   once; a claim of an issue another agent holds is refused, and then you
-   pick another. Each agent claims only the issue it was given, unless
-   the prompt says the queue is open.
+   once; a claim of an issue another agent holds is refused (exit 2), and
+   then you pick another. Each agent claims only the issue it was given,
+   unless the prompt says the queue is open.
 3. Branch: start `claude/<issue>` from the base ref your prompt names and
    push it to the remote `team`.
 4. Work in the open: once the branch is pushed, open the pull request at
@@ -59,8 +78,9 @@ conversation; you see them only when you receive them.
    with the current main, pushes main, and answers with the merge commit.
 6. Main moved: when another pull request landed first and yours no
    longer merges cleanly with main, the gate leaves main as it was and
-   answers "main moved: merge team/main into your branch, resolve the
-   conflicts, push, and call mark_ready again". Do exactly that:
+   answers (exit 3) "main moved: merge team/main into your branch,
+   resolve the conflicts, push, and call mark_ready again". Do exactly
+   that:
 
 ```bash
 cd /workspace/repo

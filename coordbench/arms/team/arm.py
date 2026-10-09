@@ -14,15 +14,26 @@ as runner/team.py lays them out. Every agent gets the same tools:
   mode registers for CLI agents (team_harness/mcp_server.py).
 
 Each tool carries the shell command CooperBench installs for it
-(install_snippet.sh) as its alias, so `coop-task-claim <id>` works as in
-the authors' runs. setup() seeds the list as runner/team.py does: one task
-per member feature, assigned to that member, and the lead's
-integrate-and-submit task. The prompt is build_team_instruction's
-(team_harness/prompt.py), word for word, with one sentence added after the
-command list naming the MCP tool behind each command. The arm needs the
-shared scratchpad the prompt names (/workspace/shared) and runs without
-git, as the authors' ablation did; given a shared remote (the run option
-"git_remote") it adds CooperBench's git block, which coop-git holds.
+(install_snippet.sh) as its alias and coop_task.py's options (--assign,
+-n/--note, --mine, --open, --wait) as its flags, so
+`coop-task-update <id> blocked -n "<why>"` works as in the authors' runs,
+and an MCP client sees the same arguments as plain fields. A refused call
+exits with coop_task.py's own code, so the prompt's "exit 0 if you got
+it, 2 if someone else owns it" stays true: 1 for a task that does not
+exist, 2 for a claim another agent holds, 3 for an update by a non-owner,
+4 for a bad status, 5 for a wait that ran out, 6 for an unknown request
+and 7 for a request addressed to someone else. A missing argument or a
+--wait that is not a number exits 2, as argparse makes coop_task.py exit
+before it reaches Redis.
+
+setup() seeds the list as runner/team.py does: one task per member
+feature, assigned to that member, and the lead's integrate-and-submit
+task. The prompt is build_team_instruction's (team_harness/prompt.py),
+word for word, with one sentence added after the command list naming the
+MCP tool behind each command. The arm needs the shared scratchpad the
+prompt names (/workspace/shared) and runs without git, as the authors'
+ablation did; given a shared remote (the run option "git_remote") it adds
+CooperBench's git block, which coop-git holds.
 
 Where this differs from CooperBench, and why:
 
@@ -30,20 +41,13 @@ Where this differs from CooperBench, and why:
   holds the run's lock, so a claim is atomic in fact; CooperBench reads
   the owner and then writes it, which its own comments call race-safe
   only because contention is small.
-- A request to an agent that is not in the run is refused, as kit's
-  messages are, rather than queued for nobody.
+- A request to an agent that is not in the run is refused (exit 1), as
+  kit's messages are, rather than queued for nobody.
 - A request's wait is capped (LONGEST_WAIT_SECONDS) and a closed run wakes
   it, so a blocked call never holds a hub thread past the run.
-- cli.py maps a command's words onto argv by position only, while
-  coop_task.py takes flags (--assign, -n, --mine, --open, --wait). The
-  tools whose commands take flags give their trailing words to argv slots
-  that only the shell fills (words, flag, second_flag), and read those
-  words back the way coop_task.py's argparse would. The slots are left out
-  of the MCP schemas, so an MCP client sees clean arguments and never has
-  a note or a body re-read as flags.
-- A refused call exits 1 from cli.py; coop_task.py exits 2 for a lost
-  claim, 3 for an update by a non-owner, and so on. The message on stderr
-  is the same.
+- A title or a body typed as several words is taken whole, joined by
+  spaces, where argparse refuses the words after the first: an agent that
+  forgot its quotes loses nothing, and one that used them sees no change.
 - The mirror of the list under /workspace/shared/tasks, which coop-task-list
   writes as it lists, is written by the hub, so it needs the shared
   directory as the hub's host sees it (the run option "shared_dir_host");
@@ -87,6 +91,20 @@ LONGEST_WAIT_SECONDS = 300
 # keeps the same trail CooperBench keeps in its task-log.
 EVENT_KINDS = {"create": "task_create", "claim": "task_claim", "update": "task_update",
                "request": "request", "response": "response"}
+
+# coop_task.py's exit codes, which its callers branch on. USAGE is
+# argparse's code for words it cannot read, which coop_task.py exits with
+# before it does anything. NO_SUCH_AGENT is this arm's own refusal, a real
+# error like any other.
+NO_SUCH_TASK = 1
+NO_SUCH_AGENT = 1
+USAGE = 2
+OWNED_BY_ANOTHER = 2
+NOT_THE_OWNER = 3
+BAD_STATUS = 4
+TIMED_OUT = 5
+UNKNOWN_REQUEST = 6
+NOT_ADDRESSED_TO_YOU = 7
 
 TEXT = kit.TEXT
 BOOLEAN = {"type": "boolean"}
@@ -142,9 +160,9 @@ class Board:
         with self.run.lock:
             task = self.tasks.get(task_id)
             if task is None:
-                raise ToolError(f"task {task_id} does not exist")
+                raise ToolError(f"task {task_id} does not exist", NO_SUCH_TASK)
             if task["owner"] not in ("", by):
-                raise ToolError(f"task {task_id} owned by {task['owner']}")
+                raise ToolError(f"task {task_id} owned by {task['owner']}", OWNED_BY_ANOTHER)
             task.update(owner=by, status="in_progress")
             self.record("claim", task_id=task_id, by=by)
 
@@ -153,11 +171,12 @@ class Board:
         with self.run.lock:
             task = self.tasks.get(task_id)
             if task is None:
-                raise ToolError(f"task {task_id} does not exist")
+                raise ToolError(f"task {task_id} does not exist", NO_SUCH_TASK)
             if task["owner"] != by:
-                raise ToolError(f"task {task_id} owned by {task['owner']!r}, not you")
+                raise ToolError(f"task {task_id} owned by {task['owner']!r}, not you", NOT_THE_OWNER)
             if status not in VALID_STATUSES:
-                raise ToolError(f"invalid status {status!r}; expected one of {sorted(VALID_STATUSES)}")
+                raise ToolError(f"invalid status {status!r}; expected one of {sorted(VALID_STATUSES)}",
+                                BAD_STATUS)
             task["status"] = status
             details = {"status": status}
             if note is not None:
@@ -175,7 +194,8 @@ class Board:
     def request(self, sender, recipient, kind, body):
         """protocol.py's request: an open request in the recipient's queue."""
         if recipient not in self.run.agents:
-            raise ToolError(f"no agent named {recipient!r}; the agents are {', '.join(self.run.agents)}")
+            raise ToolError(f"no agent named {recipient!r}; the agents are {', '.join(self.run.agents)}",
+                            NO_SUCH_AGENT)
         with self.run.lock:
             request_id = fresh_id(self.requests, self.responses)
             self.requests[request_id] = {"id": request_id, "from": sender, "to": recipient,
@@ -199,9 +219,9 @@ class Board:
         with self.run.lock:
             request = self.requests.get(request_id)
             if request is None:
-                raise ToolError(f"unknown request {request_id}")
+                raise ToolError(f"unknown request {request_id}", UNKNOWN_REQUEST)
             if request["to"] != responder:
-                raise ToolError(f"request {request_id} not addressed to {responder}")
+                raise ToolError(f"request {request_id} not addressed to {responder}", NOT_ADDRESSED_TO_YOU)
             response = {"id": request_id, "from": responder, "to": request["from"],
                         "body": body, "ts": time.time()}
             self.responses.setdefault(request_id, []).append(response)
@@ -228,112 +248,40 @@ def lead_of(run):
     return next((agent for agent, spec in run.agents.items() if spec.role == "lead"), "team-lead")
 
 
-# Shell words, read as coop_task.py's argparse reads them.
+# Arguments, as coop_task.py's argparse would hand them over. The shell's
+# words reach these as plain fields: cli.py maps them onto each tool's
+# argv and flags, so the handlers never parse a word themselves and an
+# MCP client's note is never re-read as an option.
 
-CREATE_OPTIONS = {"--assign": ("assign", True)}
-UPDATE_OPTIONS = {"-n": ("note", True), "--note": ("note", True)}
-LIST_OPTIONS = {"--mine": ("mine", False), "--open": ("open", False)}
-REQUEST_OPTIONS = {"--wait": ("wait", True)}
-
-UPDATE_ARGV = ("task_id", "status", "flag", "note")
-LIST_ARGV = ("flag", "second_flag")
-
-
-def read_words(words, options):
-    """Split shell words into options and positionals: a word naming an
-    option is that option, a switch or taking the next word (or the text
-    after '=') as its value; every other word is positional, in order."""
-    found, positionals, queue = {}, [], list(words)
-    while queue:
-        word = queue.pop(0)
-        flag, equals, attached = word.partition("=")
-        if flag not in options:
-            positionals.append(word)
-            continue
-        name, takes_value = options[flag]
-        if not takes_value:
-            found[name] = True
-        elif equals:
-            found[name] = attached
-        elif queue:
-            found[name] = queue.pop(0)
-        else:
-            raise ToolError(f"argument {flag}: expected one argument")
-    return found, positionals
+def required(call, name):
+    """An argument the command cannot go without, refused as argparse
+    refuses a missing positional: with its message, exiting 2."""
+    value = call.arguments.get(name)
+    if value is None or str(value) == "":
+        raise ToolError(f"the following arguments are required: {name}", USAGE)
+    return str(value)
 
 
-def exactly(positionals, names):
-    """The positionals for these names, refused as argparse refuses too few
-    or too many."""
-    if len(positionals) < len(names):
-        raise ToolError(f"the following arguments are required: {', '.join(names[len(positionals):])}")
-    if len(positionals) > len(names):
-        raise ToolError(f"unrecognized arguments: {' '.join(positionals[len(names):])}")
-    return positionals
+def optional_text(call, name):
+    value = call.arguments.get(name)
+    return None if value is None else str(value)
 
 
-def shell_words(call, names):
-    return [str(call.arguments[name]) for name in names if name in call.arguments]
-
-
-def truthy(value):
+def switch(call, name):
+    """A store_true option: set by its flag or an MCP client's true, and by
+    the words true, 1 or yes from a key=value shell call."""
+    value = call.arguments.get(name)
     return value is True or str(value).strip().lower() in ("true", "1", "yes")
 
 
-def create_arguments(call):
-    """(title, assign) from MCP arguments, or from coop-task-create's words:
-    `"<title>"` or `--assign <agent> "<title>"`."""
-    if "words" not in call.arguments:
-        return str(call.arg("title", required=True)), str(call.arg("assign") or "")
-    found, title_words = read_words(str(call.arguments["words"]).split(" "), CREATE_OPTIONS)
-    title = " ".join(title_words).strip()
-    if not title:
-        raise ToolError("the following arguments are required: title")
-    return title, found.get("assign", "")
-
-
-def update_arguments(call):
-    """(task_id, status, note) from MCP arguments, or from coop-task-update's
-    words: `<task_id> <status> [-n "<note>"]`, the option anywhere."""
-    if "flag" not in call.arguments:
-        note = call.arg("note")
-        return (str(call.arg("task_id", required=True)), str(call.arg("status", required=True)),
-                None if note is None else str(note))
-    found, positionals = read_words(shell_words(call, UPDATE_ARGV), UPDATE_OPTIONS)
-    task_id, status = exactly(positionals, ("task_id", "status"))
-    return task_id, status, found.get("note")
-
-
-def list_filters(call):
-    """(mine, open) from MCP arguments, or from coop-task-list's --mine and
-    --open."""
-    words = shell_words(call, LIST_ARGV)
-    if not words:
-        return truthy(call.arg("mine")), truthy(call.arg("open"))
-    found, extra = read_words(words, LIST_OPTIONS)
-    exactly(extra, ())
-    return found.get("mine", False), found.get("open", False)
-
-
-def request_arguments(call):
-    """(recipient, kind, body, wait) from MCP arguments, or from
-    coop-request's words: `<recipient> <kind> [body] [--wait N]`. The body
-    is every positional word after the kind, as the shell gave them."""
-    if "words" not in call.arguments:
-        return (str(call.arg("recipient", required=True)), str(call.arg("kind", required=True)),
-                str(call.arg("body") or ""), call.arg("wait"))
-    words = shell_words(call, ("recipient", "kind")) + str(call.arguments["words"]).split(" ")
-    found, positionals = read_words(words, REQUEST_OPTIONS)
-    recipient, kind = exactly(positionals[:2], ("recipient", "kind"))
-    return recipient, kind, " ".join(positionals[2:]), found.get("wait")
-
-
 def wait_seconds(value):
-    """protocol.py's clamp from below, and this hub's cap from above."""
+    """protocol.py's clamp from below, and this hub's cap from above. A
+    value that is not a number is refused as argparse's type=float
+    refuses it, before anything is sent."""
     try:
         seconds = float(value)
     except (TypeError, ValueError):
-        raise ToolError(f"argument --wait: invalid float value: {value!r}") from None
+        raise ToolError(f"argument --wait: invalid float value: {value!r}", USAGE) from None
     return min(LONGEST_WAIT_SECONDS, max(0.05, seconds))
 
 
@@ -341,23 +289,23 @@ def wait_seconds(value):
 # nothing at all on success.
 
 def task_create(call):
-    title, assign = create_arguments(call)
-    return board_of(call.run).create(title, call.agent, owner=assign)
+    title = required(call, "title")
+    return board_of(call.run).create(title, call.agent, owner=optional_text(call, "assign") or "")
 
 
 def task_claim(call):
-    board_of(call.run).claim(str(call.arg("task_id", required=True)), call.agent)
+    board_of(call.run).claim(required(call, "task_id"), call.agent)
     return ""
 
 
 def task_update(call):
-    task_id, status, note = update_arguments(call)
-    board_of(call.run).update(task_id, call.agent, status, note)
+    task_id, status = required(call, "task_id"), required(call, "status")
+    board_of(call.run).update(task_id, call.agent, status, optional_text(call, "note"))
     return ""
 
 
 def task_list(call):
-    mine, open_only = list_filters(call)
+    mine, open_only = switch(call, "mine"), switch(call, "open")
     tasks, log = board_of(call.run).snapshot()
     chosen = [task for task in tasks
               if (not mine or task["owner"] == call.agent) and (not open_only or task["status"] == "open")]
@@ -366,22 +314,21 @@ def task_list(call):
 
 
 def send_request(call):
-    recipient, kind, body, wait = request_arguments(call)
-    # A bad --wait is refused before anything is sent, as argparse would.
+    recipient, kind = required(call, "recipient"), required(call, "kind")
+    wait = call.arguments.get("wait")
     seconds = None if wait is None else wait_seconds(wait)
     board = board_of(call.run)
-    request_id = board.request(call.agent, recipient, kind, body)
+    request_id = board.request(call.agent, recipient, kind, optional_text(call, "body") or "")
     if seconds is None:
         return request_id
     response = board.await_response(request_id, seconds)
     if response is None:
-        raise ToolError(f"timed out waiting for response to {request_id}")
+        raise ToolError(f"timed out waiting for response to {request_id}", TIMED_OUT)
     return json.dumps(response)
 
 
 def answer_request(call):
-    board_of(call.run).respond(call.agent, str(call.arg("request_id", required=True)),
-                               str(call.arg("body") or ""))
+    board_of(call.run).respond(call.agent, required(call, "request_id"), optional_text(call, "body") or "")
     return ""
 
 
@@ -398,24 +345,25 @@ def task_tools():
              "pre-sets its owner, who must still claim it. "
              "Shell: coop-task-create [--assign <agent>] \"<title>\".",
              task_create, kit.schema(["title"], title=TEXT, assign=assign),
-             alias="coop-task-create", argv=("words...",)),
+             alias="coop-task-create", argv=("title...",), flags={"--assign": "assign"}),
         Tool("task_claim",
              "Claim a task: you become its owner and it moves to in_progress. Refused when another "
-             "agent owns it, by claim or by assignment; claiming your own again is fine. "
-             "Shell: coop-task-claim <task_id>.",
+             "agent owns it, by claim or by assignment (the command exits 2: pick another task); "
+             "claiming your own again is fine. Shell: coop-task-claim <task_id>.",
              task_claim, kit.schema(["task_id"], task_id=TEXT),
              alias="coop-task-claim", argv=("task_id",)),
         Tool("task_update",
              "Set the status of a task you own (open, in_progress, blocked or done), with an "
-             "optional note the others read as its last_note. "
+             "optional note the others read as its last_note. Refused for a task you do not own "
+             "(exit 3) or another status (exit 4). "
              "Shell: coop-task-update <task_id> <status> [-n \"<note>\"].",
              task_update, kit.schema(["task_id", "status"], task_id=TEXT, status=statuses, note=TEXT),
-             alias="coop-task-update", argv=UPDATE_ARGV),
+             alias="coop-task-update", argv=("task_id", "status"), flags={"-n": "note", "--note": "note"}),
         Tool("task_list",
              "Every task on the team's list, as JSON; mine keeps the tasks you own, open keeps "
              "those whose status is open. Shell: coop-task-list [--mine] [--open].",
              task_list, kit.schema(mine=BOOLEAN, open=BOOLEAN),
-             alias="coop-task-list", argv=LIST_ARGV),
+             alias="coop-task-list", flags={"--mine": "mine", "--open": "open"}),
     ]
 
 
@@ -426,12 +374,14 @@ def protocol_tools():
         Tool("request",
              "Send a typed request (a kind, such as plan_approval, and a body) to one agent and "
              "print its id; with wait, block up to that many seconds for the response and print it "
-             "instead. Shell: coop-request <recipient> <kind> [body] [--wait N].",
+             "instead, or exit 5 when none comes. "
+             "Shell: coop-request <recipient> <kind> [body] [--wait N].",
              send_request, kit.schema(["recipient", "kind"], recipient=TEXT, kind=TEXT, body=TEXT, wait=wait),
-             alias="coop-request", argv=("recipient", "kind", "words...")),
+             alias="coop-request", argv=("recipient", "kind", "body..."), flags={"--wait": "wait"}),
         Tool("respond",
              "Answer an open request addressed to you; the response goes to the requester waiting "
-             "on it, and the request closes. Shell: coop-respond <request_id> [body].",
+             "on it, and the request closes. Refused for an unknown or closed request (exit 6) and "
+             "for one addressed to another agent (exit 7). Shell: coop-respond <request_id> [body].",
              answer_request, kit.schema(["request_id"], request_id=TEXT, body=TEXT),
              alias="coop-respond", argv=("request_id", "body...")),
         Tool("pending",

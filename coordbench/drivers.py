@@ -59,6 +59,11 @@ DONE_MARKER = ".coordbench-done"
 # docker client copy the value from its own environment, so the value is
 # never on a command line, in a file or in a log.
 PASSED_BY_NAME = ("CLAUDE_CODE_OAUTH_TOKEN",)
+# The hub's admin token is the runner's alone: with it an agent could
+# create or close runs. It never reaches a container, nor even the docker
+# client, so no `-e` added by mistake could hand it on.
+ADMIN_TOKEN = "COORD_ADMIN_TOKEN"
+HELD_BACK = (ADMIN_TOKEN,)
 
 # The adapter's own exports beside the model and the config directory
 # (_build_claude_command), kept so the agent runs as the authors' did.
@@ -80,14 +85,22 @@ def docker(*args, input=None, timeout=None, output=None):
     stdout and stderr go to that file as they arrive instead of being
     captured, which is how a long agent run is teed to its log."""
     command = ["docker", *(str(arg) for arg in args)]
+    environment = docker_environment()
     if output is not None:
         with open(output, "w", encoding="utf-8") as stream:
             return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream,
-                                  stderr=subprocess.STDOUT, timeout=timeout)
-    text = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace", "timeout": timeout}
+                                  stderr=subprocess.STDOUT, timeout=timeout, env=environment)
+    text = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace", "timeout": timeout,
+            "env": environment}
     if input is None:
         return subprocess.run(command, stdin=subprocess.DEVNULL, **text)
     return subprocess.run(command, input=input, **text)
+
+
+def docker_environment():
+    """The docker client's environment: this process's, which holds what
+    PASSED_BY_NAME names for `-e NAME` to copy, but nothing HELD_BACK."""
+    return {name: value for name, value in os.environ.items() if name not in HELD_BACK}
 
 
 class DockerError(RuntimeError):
@@ -249,7 +262,10 @@ def claude_environment(job):
 def claude_exec_arguments(job):
     arguments = ["exec", "-w", CONTAINER_REPO]
     for name, value in claude_environment(job).items():
-        arguments += ["-e", f"{name}={value}"]
+        # A secret in job.env would put its value on the command line, so
+        # those names go by name below, or not at all.
+        if name not in PASSED_BY_NAME and name not in HELD_BACK:
+            arguments += ["-e", f"{name}={value}"]
     for name in PASSED_BY_NAME:
         if os.environ.get(name):
             arguments += ["-e", name]

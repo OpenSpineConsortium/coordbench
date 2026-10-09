@@ -2,8 +2,8 @@
 
     python3 run.py run --arm coop --repo pallets_click_task --task 2068 --features 1,6
         [--driver claude-cli|session|path/to/driver.py:Class] [--model M] [--name RUN]
-        [--log-dir DIR] [--hub URL] [--timeout-min 120] [--max-turns N] [--keep] [--force]
-        [--option KEY=VALUE ...] [--cooperbench-dir DIR]
+        [--log-dir DIR] [--hub URL] [--arm-dir DIR ...] [--timeout-min 120] [--max-turns N]
+        [--keep] [--force] [--option KEY=VALUE ...] [--cooperbench-dir DIR]
     python3 run.py run ... --subset flash     instead of --features: every flash pair of the task
     python3 run.py prepare ... --features 1,6  provision one pair for the session driver
     python3 run.py finish --run-dir DIR        wait for it, score it, write its logs, tear it down
@@ -13,8 +13,16 @@ dataset, provisions what the arm needs (a shared git remote, a shared
 volume), asks the hub for a run (POST /api/runs), starts one container per
 agent from the task's image with coordbench inside it, hands each agent to
 the driver, and once they stop collects their patches, closes the run on
-the hub and scores the patches with CooperBench's own evaluation. The hub
-is the one named by --hub, or hub.py started here on a free port.
+the hub and scores the patches with CooperBench's own evaluation.
+
+The hub is the one named by --hub, or hub.py started here on a free port.
+A hub started here may load the built-in arms, the arm when --arm names a
+directory, and the arms under each --arm-dir; and it wants a bearer token
+made for it alone (secrets.token_hex), which it gets in its environment
+as COORD_ADMIN_TOKEN and the runner sends with every management request.
+A hub named by --hub gets the runner's own COORD_ADMIN_TOKEN, when that
+is set. Agents get neither: the token is what keeps them from creating or
+closing runs.
 
 The logs take CooperBench's layout, so experiment/report.py and
 `cooperbench eval` read them as they read the authors' runs:
@@ -35,10 +43,14 @@ prepare provisions the pair, writes each agent's prompt and prints
 {"run_dir", "agents": [{"id", "prompt_file"}]}; finish waits for every
 agent's marker and does the rest. prepare keeps what finish needs in
 <run_dir>/plan.json, and a hub prepare started stays up until finish.
+That hub's token is in no file, so finish, a process of its own, reads it
+back from the hub's environment (/proc/<pid>/environ, Linux's, which only
+the hub's own user can read).
 
 Every docker command goes through drivers.docker, so tests swap in a fake.
 The subscription token reaches agents by name only (drivers.PASSED_BY_NAME)
-and is never written anywhere by this module.
+and the hub's token reaches no agent; neither is ever on a command line,
+in a log or in a file this module writes.
 """
 
 import argparse
@@ -67,7 +79,7 @@ if str(HERE) not in sys.path:
 
 import cli  # noqa: E402
 import drivers  # noqa: E402
-from arm import builtin_arms_dir, find_arm  # noqa: E402
+from arm import NEED_OPTIONS, builtin_arms_dir, find_arm  # noqa: E402
 from drivers import CONTAINER_REPO, checked, safe_name  # noqa: E402
 
 NETWORK = "coordbench"
@@ -79,7 +91,19 @@ GIT_IMAGE = "cooperbench-git-server:local"
 GIT_DATA_VOLUME = "coordbench-git-data"
 GIT_PORT = 9418
 SHARED_DIR = "/workspace/shared"
-KNOWN_NEEDS = ("git_remote", "shared_volume")
+# The run options the runner sets for each need it provisions: where the
+# thing is for the agents (git_remote, shared_dir), where it is for the
+# hub's host (git_remote_host, shared_dir_host), and the commit every agent
+# starts from. The hub insists on the first of each (arm.NEED_OPTIONS);
+# the arms rely on the rest, so a run gets all of them or does not start.
+PROVIDED_OPTIONS = {"git_remote": ("git_remote", "git_remote_host", "base_ref"),
+                    "shared_volume": ("shared_dir", "shared_dir_host")}
+KNOWN_NEEDS = tuple(PROVIDED_OPTIONS)
+# CooperBench's git block tells every agent this is its git user.email.
+GIT_EMAIL = "agent@cooperbench.local"
+# Starts each line the read-back of the git set-up prints, so whatever a
+# login shell's profile prints first is not taken for an answer.
+GIT_READ_MARK = "coordbench-promise:"
 # sleep infinity is GNU; busybox's sleep may refuse it, so fall back to a loop.
 KEEP_ALIVE = "sleep infinity 2>/dev/null || while :; do sleep 86400; done"
 SCORING_TIMEOUT_SECONDS = 3 * 3600
@@ -158,26 +182,38 @@ def pair_finished(run_dir):
 # The hub.
 
 class HubError(RuntimeError):
-    """The hub refused a request or could not be reached."""
+    """The hub refused a request or could not be reached; status is the
+    HTTP status of a refusal, None when nothing answered."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 class HubClient:
     """The runner's side of the hub's HTTP API, at the URL the runner
-    reaches it by (which is not the one containers use)."""
+    reaches it by (which is not the one containers use), with the admin
+    token its management API wants, when it wants one."""
 
-    def __init__(self, base_url):
+    def __init__(self, base_url, admin_token=None):
         self.base_url = base_url.rstrip("/")
+        self.admin_token = admin_token or None
+
+    def headers(self):
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.admin_token:
+            headers["Authorization"] = f"Bearer {self.admin_token}"
+        return headers
 
     def request(self, method, path, body=None, timeout=120):
         data = None if body is None else json.dumps(body).encode("utf-8")
-        request = urllib.request.Request(self.base_url + path, data=data, method=method,
-                                         headers={"Content-Type": "application/json",
-                                                  "Accept": "application/json"})
+        request = urllib.request.Request(self.base_url + path, data=data, method=method, headers=self.headers())
         try:
             with OPENER.open(request, timeout=timeout) as response:
                 return json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as problem:
-            raise HubError(f"{method} {path}: HTTP {problem.code}: {cli.hub_error_text(problem)}") from None
+            raise HubError(f"{method} {path}: HTTP {problem.code}: {cli.hub_error_text(problem)}",
+                           problem.code) from None
         except (OSError, ValueError) as problem:
             raise HubError(f"{method} {path}: {problem}") from None
 
@@ -186,6 +222,17 @@ class HubClient:
             return bool(self.request("GET", "/api/health", timeout=5).get("ok"))
         except HubError:
             return False
+
+    def authorized(self):
+        """Whether the management API takes this client's token, or wants
+        none; asked before anything is provisioned for a run it would then
+        refuse. The question is a run no id can name ("-"), which the hub
+        answers 401 to a wrong token before it looks for the run (404)."""
+        try:
+            self.request("GET", "/api/runs/-", timeout=5)
+        except HubError as problem:
+            return problem.status != 401
+        return True
 
     def create_run(self, arm, run_id, features, specs, options):
         return self.request("POST", "/api/runs", {"arm": arm, "run_id": run_id, "features": features,
@@ -204,10 +251,16 @@ def free_port(host):
         return probe.getsockname()[1]
 
 
+# Never handed on to a process that does not need it: the agents'
+# credential, which goes to their containers by name alone, and the hub's
+# admin token, which only the hub and the runner hold.
+SECRET_NAMES = (*drivers.PASSED_BY_NAME, *drivers.HELD_BACK)
+
+
 def environment_without_secrets():
     """For the hub, the scorer and git: none of them needs the agents'
-    credentials, so none of them gets them."""
-    return {name: value for name, value in os.environ.items() if name not in drivers.PASSED_BY_NAME}
+    credentials or the runner's hub token, so none of them gets them."""
+    return {name: value for name, value in os.environ.items() if name not in SECRET_NAMES}
 
 
 def wait_for_first_line(path, process, timeout):
@@ -220,24 +273,35 @@ def wait_for_first_line(path, process, timeout):
     return ""
 
 
-def start_hub(hub_dir, host="0.0.0.0", timeout=30):
+def hub_command(host, port, hub_dir, arm_dirs):
+    command = [sys.executable, str(HERE / "hub.py"), "--host", host, "--port", str(port),
+               "--public-url", f"http://host.docker.internal:{port}", "--log-dir", str(hub_dir)]
+    for directory in arm_dirs:
+        command += ["--arm-dir", str(Path(directory).resolve())]
+    return command
+
+
+def start_hub(hub_dir, host="0.0.0.0", timeout=30, arm_dirs=()):
     """Start hub.py on a free port, bound to `host`, telling agents to reach
-    it as host.docker.internal; returns the process and the URL this host
-    reaches it by. Its stdout goes to a file rather than a pipe, so a hub
-    left running for `finish` never writes into a pipe nobody reads."""
+    it as host.docker.internal and allowing it the arms under `arm_dirs`;
+    returns the process and a client that reaches it from this host with
+    the token it was given. The token is fresh for each hub and goes in its
+    environment, never on its command line, which any user of the host can
+    read. Its stdout goes to a file rather than a pipe, so a hub left
+    running for `finish` never writes into a pipe nobody reads."""
     hub_dir = Path(hub_dir)
     hub_dir.mkdir(parents=True, exist_ok=True)
     port = free_port(host)
-    command = [sys.executable, str(HERE / "hub.py"), "--host", host, "--port", str(port),
-               "--public-url", f"http://host.docker.internal:{port}", "--log-dir", str(hub_dir)]
+    token = secrets.token_hex(32)
     first_line = hub_dir / f"hub-{port}.out"
     with open(first_line, "w") as out, open(hub_dir / "hub.log", "a") as errors:
-        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=errors,
-                                   env=environment_without_secrets(), start_new_session=True)
+        process = subprocess.Popen(hub_command(host, port, hub_dir, arm_dirs), stdin=subprocess.DEVNULL,
+                                   stdout=out, stderr=errors, start_new_session=True,
+                                   env={**environment_without_secrets(), drivers.ADMIN_TOKEN: token})
     if not wait_for_first_line(first_line, process, timeout):
         stop_hub(process)
         raise HubError(f"hub.py did not start; see {hub_dir / 'hub.log'}")
-    return process, f"http://127.0.0.1:{port}"
+    return process, HubClient(f"http://127.0.0.1:{port}", token)
 
 
 def stop_hub(process):
@@ -249,28 +313,80 @@ def stop_hub(process):
             process.kill()
 
 
-def stop_hub_pid(pid):
-    """Stop the hub prepare left running, making sure the pid is still that
-    hub rather than whatever process took the number since."""
+def is_hub(pid, hub_url):
+    """Whether the pid is still the hub prepare started, on the port its
+    plan names, rather than whatever process took the number since."""
+    port = urlsplit(hub_url).port
     try:
-        command = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+        command = Path(f"/proc/{int(pid)}/cmdline").read_bytes().split(b"\0")
     except (OSError, ValueError):
-        return
-    if b"hub.py" in command:
+        return False
+    runs_the_hub = any(word.endswith(b"hub.py") for word in command)
+    on_its_port = any(command[i:i + 2] == [b"--port", str(port).encode()] for i in range(len(command)))
+    return runs_the_hub and on_its_port
+
+
+def stop_hub_pid(pid, hub_url):
+    """Stop the hub prepare left running, if the pid is still that hub."""
+    if is_hub(pid, hub_url):
         with contextlib.suppress(ProcessLookupError):
             os.kill(int(pid), signal.SIGTERM)
 
 
-def connect_hub(hub_url, hub_dir):
-    """The hub named by --hub, or one started here; the process is None for
-    a hub this runner did not start."""
-    if hub_url:
-        client = HubClient(hub_url)
-        if not client.healthy():
-            raise HubError(f"no hub answers at {hub_url}/api/health")
-        return client, None
-    process, url = start_hub(hub_dir)
-    return HubClient(url), process
+def hub_admin_token(pid, hub_url):
+    """The token of the hub prepare started, read from that hub's own
+    environment, the one place it is kept: finish is another process, and
+    handing the token over in a file or on a command line would leak it."""
+    if not is_hub(pid, hub_url):
+        return None
+    try:
+        environment = Path(f"/proc/{int(pid)}/environ").read_bytes()
+    except OSError:
+        return None
+    prefix = f"{drivers.ADMIN_TOKEN}=".encode()
+    for entry in environment.split(b"\0"):
+        if entry.startswith(prefix):
+            return entry[len(prefix):].decode("utf-8", "replace")
+    return None
+
+
+def finish_client(plan):
+    """A client for the hub a prepared pair was created on: the token of the
+    hub prepare started, else the runner's own, as for a hub named by --hub."""
+    token = hub_admin_token(plan["hub_pid"], plan["hub_url"]) if plan.get("hub_pid") else None
+    return HubClient(plan["hub_url"], token or os.environ.get(drivers.ADMIN_TOKEN))
+
+
+def arm_given_as_directory(arm_given):
+    return (Path(arm_given) / "arm.json").exists()
+
+
+def hub_arm_dirs(settings):
+    """The directories a hub started here may load arms from: each --arm-dir,
+    and the arm's own directory when --arm names one, since the hub loads
+    nothing else but its built-in arms."""
+    directories = [Path(directory) for directory in settings.get("arm_dirs") or ()]
+    if arm_given_as_directory(settings["arm"]):
+        directories.append(Path(settings["arm"]))
+    return directories
+
+
+def connect_hub(settings):
+    """The hub named by --hub, sent the runner's own COORD_ADMIN_TOKEN when
+    that is set, or one started here; the process is None for a hub this
+    runner did not start."""
+    if not settings["hub"]:
+        process, client = start_hub(hub_dir(settings), arm_dirs=hub_arm_dirs(settings))
+        return client, process
+    client = HubClient(settings["hub"], os.environ.get(drivers.ADMIN_TOKEN))
+    if not client.healthy():
+        raise HubError(f"no hub answers at {settings['hub']}/api/health")
+    if not client.authorized():
+        held = "refuses the token in" if client.admin_token else "wants its admin token in"
+        raise HubError(f"the hub at {settings['hub']} {held} {drivers.ADMIN_TOKEN}")
+    if settings.get("arm_dirs"):
+        say(f"--arm-dir is for a hub this runner starts; the hub at {settings['hub']} loads its own")
+    return client, None
 
 
 # The plan: everything about one pair, kept as JSON so finish can pick it up.
@@ -278,12 +394,19 @@ def connect_hub(hub_url, hub_dir):
 def arm_request(arm_given):
     """What POST /api/runs is sent: a built-in name as given, a directory
     made absolute so a hub with another working directory finds it."""
-    candidate = Path(arm_given)
-    return str(candidate.resolve()) if (candidate / "arm.json").exists() else arm_given
+    return str(Path(arm_given).resolve()) if arm_given_as_directory(arm_given) else arm_given
 
 
-def arm_needs(arm):
+def arm_needs(arm, options=None):
+    """What the runner provisions: the arm's needs, and each need whose
+    option --option names, the way CooperBench's --git gives team mode a
+    remote it does not need. Either way the runner makes the thing itself
+    and sets all of its options, so a prompt that names a shared remote
+    finds it set up as the prompt says."""
     needs = list(arm.needs) + [n for n in arm.config.get("needs") or [] if n not in arm.needs]
+    asked = [need for need, names in NEED_OPTIONS.items()
+             if need not in needs and any((options or {}).get(name) for name in names)]
+    needs += asked
     unknown = [n for n in needs if n not in KNOWN_NEEDS]
     if unknown:
         raise ValueError(f"the arm needs {', '.join(unknown)}, which this runner cannot provision")
@@ -306,7 +429,7 @@ def new_plan(settings, driver, repo, task_id, features):
         "repo": repo, "task_id": int(task_id), "features": list(features), "setting": setting,
         "run_name": settings["run_name"], "run_id": new_run_id(arm_name(arm), task_id, features),
         "arm": arm_request(settings["arm"]), "arm_name": arm_name(arm), "arm_dir": str(arm.root),
-        "needs": arm_needs(arm), "plugin_entries": list(arm.config.get("plugins") or []),
+        "needs": arm_needs(arm, settings["options"]), "plugin_entries": list(arm.config.get("plugins") or []),
         "mcp_servers": dict(arm.config.get("mcp_servers") or {}),
         "driver": settings["driver"], "agent_framework": getattr(driver, "framework", settings["driver"]),
         "host_workspace": bool(getattr(driver, "host_workspace", False)),
@@ -412,26 +535,38 @@ def add_agent_branches(plan):
 def create_shared_volume(plan):
     """CooperBench's team scratchpad: one named volume per run at
     /workspace/shared. The team arm mirrors its task list there from the
-    hub's host, so the volume's host path goes along as shared_dir_host."""
+    hub's host, so the volume's host path goes along as shared_dir_host.
+    A path this host cannot write to (docker run by another user, or in a
+    VM) is still the volume's, so it is given, and the warning says why
+    the mirror may be missing."""
     name = safe_name(f"coordbench-shared-{plan['run_id']}")
     plan["resources"]["volume"] = name
     checked(drivers.docker("volume", "create", name), "creating the shared volume")
-    options = {"shared_dir": SHARED_DIR}
-    mount = drivers.docker("volume", "inspect", "-f", "{{.Mountpoint}}", name)
-    if mount.returncode == 0 and (mount.stdout or "").strip():
-        options["shared_dir_host"] = mount.stdout.strip()
-    return options
+    mount = checked(drivers.docker("volume", "inspect", "-f", "{{.Mountpoint}}", name),
+                    "finding the shared volume on this host")
+    host_path = (mount.stdout or "").strip()
+    if not host_path:
+        raise drivers.DockerError(f"docker named no host path for the volume {name}")
+    if not os.access(host_path, os.W_OK):
+        plan["warnings"].append(f"the shared volume's host path {host_path} is not writable here, "
+                                "so a hub on this host cannot write into it")
+    return {"shared_dir": SHARED_DIR, "shared_dir_host": host_path}
 
 
 def provision_shared(plan):
     """What the arm's needs ask for, as run options; created before the run
-    exists on the hub, since the options go with POST /api/runs."""
+    exists on the hub, since the options go with POST /api/runs. Every
+    option of every need is set, or the pair fails here rather than send
+    an arm off without what it was promised."""
     ensure_network()
     options = {}
     if "git_remote" in plan["needs"]:
         options.update(create_git_repository(plan))
     if "shared_volume" in plan["needs"]:
         options.update(create_shared_volume(plan))
+    missing = [name for need in plan["needs"] for name in PROVIDED_OPTIONS[need] if not options.get(name)]
+    if missing:
+        raise drivers.DockerError(f"provisioning left the run without {', '.join(missing)}")
     return options
 
 
@@ -561,14 +696,17 @@ def install_aliases(plan, container):
             "installing the arm's shell commands (the container may not reach the hub)")
 
 
-def git_setup_command(agent_id, server_url):
-    """build_git_setup_command (_coop/runtime.py at 63b9d44), unchanged: the
-    remote `team`, the agent's own branch, pushed, and main as the base."""
+def git_setup_command(agent_id, server_url, repo=CONTAINER_REPO):
+    """build_git_setup_command (_coop/runtime.py at 63b9d44), unchanged but
+    for the repository's path, which tests point at a repository of their
+    own: the remote `team`, the agent's own branch, pushed, and main as the
+    base. It ends in `|| true`, so its exit code says nothing of whether it
+    worked; configure_git reads the outcome back instead."""
     server = shlex.quote(server_url)
     aid = shlex.quote(agent_id)
     branch = shlex.quote(agent_id)
     return (
-        f"cd {shlex.quote(CONTAINER_REPO)} && "
+        f"cd {shlex.quote(repo)} && "
         f"git config user.email 'agent@cooperbench.local' && "
         f"git config user.name {aid} && "
         f"(git remote add team {server} 2>/dev/null || git remote set-url team {server}) && "
@@ -578,12 +716,76 @@ def git_setup_command(agent_id, server_url):
     )
 
 
-def configure_git(plan, container, agent_id, server_url):
-    # The adapter only warns when this fails, and so does the runner.
-    result = drivers.docker("exec", "-w", CONTAINER_REPO, container, "bash", "-lc",
-                            git_setup_command(agent_id, server_url))
-    if result.returncode != 0:
-        plan["warnings"].append(f"git setup for {agent_id} exited {result.returncode}")
+def git_promises(agent_id, options):
+    """What CooperBench's git block (_git_block in _coop/prompt.py at
+    63b9d44) tells the agent is already so, each as what it is, the git
+    command that reads it back in the agent's repository, and what that
+    must print: the remote team, the agent's branch checked out at the base
+    commit and pushed with -u, team/main at the base commit, and the git
+    user it names."""
+    base = options["base_ref"]
+    upstream = shlex.quote(f"{agent_id}@{{upstream}}")
+    pushed = shlex.quote(f"refs/remotes/team/{agent_id}")
+    return [
+        ("the remote team", "git remote get-url team", options["git_remote"]),
+        (f"the branch {agent_id} checked out", "git symbolic-ref --short HEAD", agent_id),
+        (f"{agent_id} at the base commit", "git rev-parse HEAD", base),
+        (f"{agent_id} pushed with -u", f"git rev-parse --abbrev-ref {upstream}", f"team/{agent_id}"),
+        (f"team/{agent_id} at the base commit", f"git rev-parse --verify -q {pushed}", base),
+        ("team/main at the base commit", "git rev-parse --verify -q refs/remotes/team/main", base),
+        ("user.name the agent id", "git config user.name", agent_id),
+        (f"user.email {GIT_EMAIL}", "git config user.email", GIT_EMAIL),
+    ]
+
+
+def git_read_script(promises, repo=CONTAINER_REPO):
+    """One shell line printing each promise's answer on a marked line of
+    its own, in order, an empty answer when its command fails."""
+    reads = [f"printf '{GIT_READ_MARK}%s\\n' \"$({command} 2>/dev/null)\"" for _, command, _ in promises]
+    return f"cd {shlex.quote(repo)} && {{ {'; '.join(reads)}; }}"
+
+
+def unkept_promises(promises, output):
+    answers = [line[len(GIT_READ_MARK):].strip() for line in output.splitlines()
+               if line.startswith(GIT_READ_MARK)]
+    answers += [""] * (len(promises) - len(answers))
+    return [f"{what} (found {found or 'nothing'})"
+            for (what, _, expected), found in zip(promises, answers) if found != expected]
+
+
+def last_words(result):
+    said = (result.stderr or result.stdout or "").strip().splitlines()
+    return said[-1][:300] if said else ""
+
+
+def configure_git(container, agent_id, options):
+    """CooperBench's git set-up in the agent's repository, then each promise
+    of its git block read back. One not kept fails the pair: an agent told
+    its branch is pushed and team/main is the base, when they are not, would
+    make the run measure the harness rather than the arm. CooperBench's
+    adapter only warns, but the warning never comes, for the `|| true`."""
+    setup = drivers.docker("exec", "-w", CONTAINER_REPO, container, "bash", "-lc",
+                           git_setup_command(agent_id, options["git_remote"]))
+    promises = git_promises(agent_id, options)
+    read = checked(drivers.docker("exec", "-w", CONTAINER_REPO, container, "bash", "-lc",
+                                  git_read_script(promises)),
+                   f"reading back {agent_id}'s git set-up")
+    unkept = unkept_promises(promises, read.stdout or "")
+    if unkept:
+        said = last_words(setup)
+        raise drivers.DockerError(f"the git set-up for {agent_id} left its git block untrue: "
+                                  f"{'; '.join(unkept)}" + (f"; git said: {said}" if said else ""))
+
+
+def trust_workspace(container):
+    """A host workspace belongs to this host's user, and git in the
+    container, run as another, refuses a repository it does not own
+    ("dubious ownership"), which would fail the git set-up and every git
+    command the agent runs, `git diff > patch.txt` among them; so git in
+    the container is told to trust that one directory."""
+    checked(drivers.docker("exec", container, "git", "config", "--global", "--add", "safe.directory",
+                           CONTAINER_REPO),
+            "letting git in the container use the host workspace")
 
 
 def install_host_wrappers(plan, agent, hub):
@@ -605,8 +807,10 @@ def provision_agent(plan, agent, hub, options):
     checked(drivers.docker(*container_arguments(plan, agent)), f"starting {agent['id']}'s container")
     install_coordbench(plan, agent["container"])
     install_aliases(plan, agent["container"])
+    if plan["host_workspace"]:
+        trust_workspace(agent["container"])
     if "git_remote" in plan["needs"]:
-        configure_git(plan, agent["container"], agent["id"], options["git_remote"])
+        configure_git(agent["container"], agent["id"], options)
     if plan["host_workspace"]:
         install_host_wrappers(plan, agent, hub)
 
@@ -662,7 +866,7 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
         record_failure(plan, hub, problem)
         raise PairFailed(plan["error"]) from problem
     except BaseException:
-        teardown(plan)
+        abandon(plan, hub)
         raise
     handles = start_agents(plan, driver)
     save_plan(plan)
@@ -696,20 +900,33 @@ def close_run(plan, hub):
 
 
 def finish_pair(plan, driver, handles, hub):
-    """Wait, record, tear down, score; returns the pair's verdict. The
-    containers go even when the wait is interrupted."""
+    """Wait, record, tear down, score; returns the pair's verdict. When the
+    wait is interrupted the run is still closed, so the arm frees what it
+    took (Arm.teardown), and the containers still go."""
     try:
         outcomes = wait_agents(plan, driver, handles)
         ended = now()
         metrics, events = close_run(plan, hub)
         write_outputs(plan, outcomes, metrics, events, ended)
+    except BaseException:
+        abandon(plan, hub)
+        raise
+    teardown(plan)
+    return verdict(outcomes, score(plan))
+
+
+def abandon(plan, hub):
+    """Close the run and remove its containers when a pair stops half way;
+    closing twice is harmless, the hub tears an arm down once."""
+    try:
+        close_run(plan, hub)
     finally:
         teardown(plan)
-    return verdict(outcomes, score(plan))
 
 
 def record_failure(plan, hub, problem):
     plan["error"] = f"{type(problem).__name__}: {problem}"
+    say(f"{plan['run_id']}: {plan['error']}")
     outcomes = {a["id"]: drivers.AgentOutcome(error=plan["error"]) for a in plan["agents"]}
     metrics, events = close_run(plan, hub)
     write_outputs(plan, outcomes, metrics, events, now())
@@ -902,6 +1119,7 @@ def settings_from(args, default_driver):
         "log_dir": Path(args.log_dir) if args.log_dir else cooperbench_dir / "logs",
         "cooperbench_dir": cooperbench_dir, "hub": args.hub, "timeout_s": args.timeout_min * 60,
         "max_turns": args.max_turns, "keep": args.keep, "force": args.force, "options": dict(args.option),
+        "arm_dirs": [Path(directory).resolve() for directory in args.arm_dir],
     }
 
 
@@ -946,7 +1164,7 @@ def command_run(args):
     pairs = [args.features] if args.features else subset_pairs(dataset, args.subset, args.repo, args.task)
     driver = drivers.load_driver(settings["driver"])
     warn_about_credentials(driver)
-    hub, process = connect_hub(settings["hub"], hub_dir(settings))
+    hub, process = connect_hub(settings)
     failures = 0
     try:
         for features in pairs:
@@ -965,7 +1183,7 @@ def command_prepare(args):
     if not getattr(driver, "resumable", False):
         raise SystemExit(f"prepare needs a driver whose wait can run in another process, "
                          f"and {settings['driver']} is not one")
-    hub, process = connect_hub(settings["hub"], hub_dir(settings))
+    hub, process = connect_hub(settings)
     try:
         plan, handles = prepare_pair(settings, hub, driver, args.repo, args.task, args.features)
     except PairFailed as failure:
@@ -985,10 +1203,10 @@ def command_finish(args):
     driver = drivers.load_driver(plan["driver"])
     handles = {a["id"]: a["handle"] for a in plan["agents"] if a.get("handle") is not None}
     try:
-        outcome = finish_pair(plan, driver, handles, HubClient(plan["hub_url"]))
+        outcome = finish_pair(plan, driver, handles, finish_client(plan))
     finally:
         if plan.get("hub_pid"):
-            stop_hub_pid(plan["hub_pid"])
+            stop_hub_pid(plan["hub_pid"], plan["hub_url"])
     save_plan(plan)
     print(json.dumps({"run_dir": plan["run_dir"], "verdict": outcome}), flush=True)
     return 0 if outcome != "error" else 1
@@ -1009,11 +1227,17 @@ def add_pair_arguments(parser, subset):
     parser.add_argument("--log-dir", help="the logs' root (default <cooperbench>/logs)")
     parser.add_argument("--cooperbench-dir",
                         help="CooperBench's checkout (default $COOPERBENCH_DIR or ~/cooperbench)")
-    parser.add_argument("--hub", help="a running hub's URL as this host reaches it; else one is started")
+    parser.add_argument("--hub", help="a running hub's URL as this host reaches it, sent $COORD_ADMIN_TOKEN "
+                                      "when set; else one is started, with a token of its own")
+    parser.add_argument("--arm-dir", action="append", default=[], metavar="DIR",
+                        help="a directory whose arms a hub started here may load, beside the built-in "
+                             "ones and the --arm directory; repeatable")
     parser.add_argument("--timeout-min", type=float, default=120, help="each agent's time limit")
     parser.add_argument("--max-turns", type=int, help="each agent's turn limit (default none)")
     parser.add_argument("--option", action="append", type=parse_option, default=[], metavar="KEY=VALUE",
-                        help="a run option for the arm, the value read as JSON when it parses")
+                        help="a run option for the arm, the value read as JSON when it parses; "
+                             "git_remote or shared_dir asks for that need, which the runner then "
+                             "provisions and sets the options of itself")
     parser.add_argument("--keep", action="store_true", help="leave containers, volume and repository in place")
     parser.add_argument("--force", action="store_true", help="run a pair again even when it is finished")
 

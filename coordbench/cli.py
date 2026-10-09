@@ -18,10 +18,20 @@ install writes one small sh wrapper per alias (coop-send) and one per tool
 wrappers carry the URL themselves, which lets agents that share one host
 each have a bin directory of their own.
 
+alias-run reads the words as the tool's command line. A word naming one of
+the tool's flags sets that flag's argument wherever it stands, before,
+among or after the other words: a flag whose argument the tool's schema
+types as a boolean is a switch (--mine), any other takes the next word
+(-n "a note") or the value after "=" (--wait=10). The words left go onto
+the tool's argv in order. A word that is not one of the tool's flags stays
+a word even when it starts with a dash, since a message may.
+
 What a command prints: the tool's text on stdout and exit 0; a tool that
-refused its call, its text on stderr and exit 1; a hub that cannot be
-reached or answers with an HTTP error, or a command used wrongly, one line
-on stderr and exit 2.
+refused its call, its text on stderr and the exit code the tool gave its
+command, 1 when it gave none, so a ported command keeps the codes its
+callers branch on (coop-task-claim exits 2 for a task another agent
+holds); a hub that cannot be reached or answers with an HTTP error, or a
+command used wrongly, one line on stderr and exit 2.
 
 The file imports nothing from coordbench, so it can be copied alone into
 an agent's container and run by whatever Python 3 is there.
@@ -126,14 +136,33 @@ def command_name(tool):
     return tool.get("alias") or f"coord-{tool['name']}"
 
 
+def flags_of(tool):
+    """The tool's flags, {shell flag: argument name}; none from a hub that
+    lists none."""
+    flags = (tool or {}).get("flags")
+    return flags if isinstance(flags, dict) else {}
+
+
+def flag_usage(tool):
+    """[--mine] for a switch and [-n|--note <note>] for a flag that takes a
+    word, the flags that set the same argument shown together."""
+    spellings = {}
+    for flag, name in flags_of(tool).items():
+        spellings.setdefault(name, []).append(flag)
+    return [f"[{'|'.join(flags)}]" if is_switch(tool, name) else f"[{'|'.join(flags)} <{name}>]"
+            for name, flags in spellings.items()]
+
+
 def usage(tool):
+    """The command as it is typed: the flags first, as argparse shows them,
+    so none reads as part of a trailing text..., then the argv words. A
+    tool with no argv takes key=value words, shown when its schema has an
+    argument no flag sets."""
     argv = list(tool.get("argv") or [])
-    if argv:
-        words = [f"<{name}>" for name in argv]
-    elif (tool.get("inputSchema") or {}).get("properties"):
-        words = ["[key=value ...]"]
-    else:
-        words = []
+    words = flag_usage(tool) + [f"<{name}>" for name in argv]
+    properties = (tool.get("inputSchema") or {}).get("properties") or {}
+    if not argv and set(properties) - set(flags_of(tool).values()):
+        words.append("[key=value ...]")
     return " ".join([command_name(tool)] + words)
 
 
@@ -141,6 +170,11 @@ def property_types(tool, name):
     schema = ((tool or {}).get("inputSchema") or {}).get("properties", {}).get(name) or {}
     kind = schema.get("type", "string")
     return set(kind) if isinstance(kind, list) else {kind}
+
+
+def is_switch(tool, name):
+    """A flag whose argument the schema types as a boolean takes no word."""
+    return "boolean" in property_types(tool, name)
 
 
 def coerce(tool, name, value):
@@ -183,11 +217,58 @@ def stdin_has_text():
         return False
 
 
+def flag_in(tool, word):
+    """The flag of this tool a word names, and the value it carries after
+    "=": ("--wait", "10") for --wait=10, ("-n", None) for -n, and
+    (None, None) for a word that names none of the tool's flags."""
+    flags = flags_of(tool)
+    if word in flags:
+        return word, None
+    head, equals, value = word.partition("=")
+    if equals and head in flags:
+        return head, value
+    return None, None
+
+
+def flag_value(tool, flag, inline, words):
+    """What a flag sets its argument to: True for a switch given alone,
+    else its value after "=" or the next word, typed by the schema."""
+    name = flags_of(tool)[flag]
+    if inline is None and is_switch(tool, name):
+        return True
+    value = inline if inline is not None else next(words, None)
+    if value is None:
+        raise Failure(f"{flag} takes a value; usage: {usage(tool)}")
+    return coerce(tool, name, value)
+
+
+def split_flags(tool, words):
+    """The arguments the tool's flags set, wherever the flags stand among
+    the words, and the words left for argv, in order."""
+    arguments, rest = {}, []
+    words = iter(words)
+    for word in words:
+        flag, inline = flag_in(tool, word)
+        if flag is None:
+            rest.append(word)
+        else:
+            arguments[flags_of(tool)[flag]] = flag_value(tool, flag, inline, words)
+    return arguments, rest
+
+
 def words_to_arguments(tool, words):
-    """Map shell words onto the tool's argv names in order; a name ending
-    in "..." takes the rest of the words joined by spaces, and, when no
-    word is left for it but every earlier name got one, the text on stdin
-    (as coop-send does in CooperBench's coop_msg.py at 63b9d44)."""
+    """Map shell words onto the tool's flags (split_flags), then the words
+    left onto its argv names in order."""
+    flagged, rest = split_flags(tool, words)
+    return {**argv_arguments(tool, rest), **flagged}
+
+
+def argv_arguments(tool, words):
+    """Map words onto the tool's argv names in order; a name ending in
+    "..." takes the rest of the words joined by spaces, and, when no word
+    is left for it but every earlier name got one, the text on stdin (as
+    coop-send does in CooperBench's coop_msg.py at 63b9d44). A tool with
+    no argv takes key=value words or one JSON object instead."""
     argv = list(tool.get("argv") or [])
     if not argv:
         return parse_arguments(words, tool)
@@ -208,10 +289,11 @@ def words_to_arguments(tool, words):
 
 
 def run_tool(url, name, arguments):
+    """The hub's answer to one call: {"text", "isError", "exitCode"}."""
     answer = exchange(url, {"tool": name, "arguments": arguments})
     if not isinstance(answer, dict):
         raise Failure(f"the coordbench hub at {url} answered a call without a result")
-    return str(answer.get("text", "")), bool(answer.get("isError"))
+    return answer
 
 
 def show(text, stream):
@@ -220,9 +302,20 @@ def show(text, stream):
         stream.flush()
 
 
-def report(text, is_error):
-    show(text, sys.stderr if is_error else sys.stdout)
-    return TOOL_ERROR if is_error else OK
+def exit_code(answer):
+    """0 for a result; for a refusal, the code the tool gave its command,
+    or 1 when the hub sent none, or one no shell can exit with."""
+    if not answer.get("isError"):
+        return OK
+    code = answer.get("exitCode")
+    if isinstance(code, int) and not isinstance(code, bool) and 0 <= code <= 255:
+        return code
+    return TOOL_ERROR
+
+
+def report(answer):
+    show(str(answer.get("text", "")), sys.stderr if answer.get("isError") else sys.stdout)
+    return exit_code(answer)
 
 
 def describe_tool(tool):
@@ -246,12 +339,12 @@ def call(args):
     tool = None
     if any("=" in word for word in args.words) and not args.words[0].lstrip().startswith("{"):
         tool = find_tool(describe_agent(args.url), args.tool)
-    return report(*run_tool(args.url, args.tool, parse_arguments(args.words, tool)))
+    return report(run_tool(args.url, args.tool, parse_arguments(args.words, tool)))
 
 
 def alias_run(args):
     tool = find_tool(describe_agent(args.url), args.tool)
-    return report(*run_tool(args.url, args.tool, words_to_arguments(tool, args.words)))
+    return report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words)))
 
 
 def wrapper_script(tool_name, python, url=None):
@@ -310,7 +403,7 @@ def parser():
     calling.add_argument("tool")
     calling.add_argument("words", nargs=argparse.REMAINDER)
     calling.set_defaults(func=call)
-    aliased = commands.add_parser("alias-run", help="call a tool with words mapped onto its argv")
+    aliased = commands.add_parser("alias-run", help="call a tool with words mapped onto its flags and argv")
     aliased.add_argument("tool")
     aliased.add_argument("words", nargs=argparse.REMAINDER)
     aliased.set_defaults(func=alias_run)

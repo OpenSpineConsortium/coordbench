@@ -45,6 +45,14 @@ claim is refused with the owner's name, and you pick another task.
 Claiming a task you already own is fine. Only a task's owner can update
 it.
 
+The shell commands exit as CooperBench's do, so a script can branch on
+the code: coop-task-claim exits 2 when another agent owns the task and 1
+when there is no such task; coop-task-update exits 3 for a task you do
+not own and 4 for an unknown status; coop-request with --wait exits 5
+when no response came in time; coop-respond exits 6 for an unknown or
+closed request and 7 for one addressed to another agent. A command given
+too few words, or a --wait that is not a number, exits 2.
+
 At the start the list holds one task per member, "Implement feature N",
 assigned to that member, and the lead's "Lead-only: integrate and submit
 feature N".
