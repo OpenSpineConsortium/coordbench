@@ -62,9 +62,13 @@ Keep ANTHROPIC_API_KEY unset: the adapter prefers it, and it bills the API.
    image (`docker rmi akhatua/cooperbench-...`) to free the disk. A
    session's background command stops after two hours, so the session
    drives one task per command.
-3. Each arm's results are under `~/cooperbench/logs/<run name>/`;
-   summary.json has the pass rate, and `cooperbench eval -n <run name>
-   --backend docker -c 1` scores a run again.
+3. `python3 experiment/report.py` sets the four arms side by side: each
+   arm's pass rate with a 95% interval next to the authors' number, every
+   two arms compared on the pairs both scored (exact McNemar), and one row
+   per pair. A pair an agent left in Error is counted apart, not as a
+   failure. The raw results are under `~/cooperbench/logs/<run name>/`,
+   and `cooperbench eval -n <run name> --backend docker -c 1` scores a run
+   again.
 
 Start with a pilot on pallets_click/2068: six pairs, so 6 solo sessions
 and 12 each for the other three arms, 42 sessions in all.
@@ -109,6 +113,8 @@ which is why the steps take one task at a time.
 - prepare_task.sh: pulls or builds one task's image, adds the overlay, and
   checks that its features are gradeable.
 - run_arms.sh: runs the four arms on one task.
+- report.py: the arms side by side, from CooperBench's logs; tested in
+  tests/test_experiment_report.py.
 - overlay_task_image.sh, build_task_image.sh: the image steps on their own.
 - cooperbench-claude-code-setup.patch: the adapter's installer skips the
   install when claude is already in the image.
