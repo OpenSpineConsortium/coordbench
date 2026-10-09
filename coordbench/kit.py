@@ -155,17 +155,34 @@ def wait_for_message(call):
     The wait and the pop are one hold of run.lock, which wait_for lets go
     of while it waits, so a receive_messages or a second wait by the same
     agent cannot empty the inbox between the two. A closed run wakes the
-    wait, which then gives the marker at once rather than sleeping on."""
+    wait, which then gives the marker at once rather than sleeping on;
+    so does a cancelled call, which takes nothing, since its answer
+    would reach nobody. A message taken for a reply the hub then could
+    not write (the client was gone) goes back at the head of the inbox
+    through call.on_lost, for the next call to find."""
     timeout_ms = call.arg("timeout_ms")
     seconds = wait_seconds(DEFAULT_WAIT_MS if timeout_ms is None else timeout_ms)
     run, me = call.run, call.agent
     with run.lock:
-        run.lock.wait_for(lambda: run.closed or bool(inbox(run, me)), timeout=seconds)
-        if not inbox(run, me):
+        run.lock.wait_for(lambda: run.closed or call.cancelled.is_set() or bool(inbox(run, me)),
+                          timeout=seconds)
+        if call.cancelled.is_set() or not inbox(run, me):
             return NO_MESSAGE
         message = inbox(run, me).pop(0)
+        call.on_lost(lambda: put_back(run, me, message))
     run.emit("receive", me, count=1)
     return json.dumps(message)
+
+
+def put_back(run, agent, message):
+    """The undo of a wait whose reply was never written: the message goes
+    back at the head of the inbox, and the record says so. The "receive"
+    event stays, since the hub did hand the message over; the
+    "receive_lost" that follows it is what lets a reader of the events
+    tell that handover from one the agent saw, rather than count a
+    message received twice when the next wait takes it again."""
+    inbox(run, agent).insert(0, message)
+    run.emit("receive_lost", agent, count=1)
 
 
 def messaging_tools(wait=True):

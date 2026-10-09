@@ -32,6 +32,7 @@ import json
 import sys
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -98,17 +99,44 @@ class AgentSpec:
 
 @dataclass
 class Call:
-    """One tool call: the run, the calling agent and its arguments."""
+    """One tool call: the run, the calling agent and its arguments, and
+    what a tool that blocks needs to know about its caller.
+
+    `cancelled` is set, with the run's lock woken, when the client cancels
+    the request (MCP's notifications/cancelled); a blocking tool reads it
+    in its wait predicate and, once it is set, takes nothing and returns,
+    since the answer would reach nobody. on_lost(undo) registers a
+    callable the hub runs, through lost(), if the reply to this call is
+    never written because the connection dropped, so a handler that took
+    something from shared state can put it back for the next call."""
 
     run: "Run"
     agent: str
     arguments: dict
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    undos: list = field(default_factory=list)
 
     def arg(self, name, default=None, required=False):
         value = self.arguments.get(name, default)
         if required and value in (None, ""):
             raise ToolError(f"{name} is required")
         return value
+
+    def on_lost(self, undo):
+        self.undos.append(undo)
+
+    def lost(self):
+        """Put back what this call took: every undo registered, newest
+        first, under the run's lock, which is then woken so a tool waiting
+        for what went back sees it. An undo that fails is a bug in the
+        arm; it costs the log a traceback, not the other undos."""
+        with self.run.lock:
+            for undo in reversed(self.undos):
+                try:
+                    undo()
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
+            self.run.lock.notify_all()
 
 
 @dataclass

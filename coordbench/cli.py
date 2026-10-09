@@ -10,13 +10,22 @@ or --url) lists the tools with their aliases and runs them:
     python3 cli.py call <tool> '{"to": "agent2", "text": "hi"}'
     python3 cli.py call <tool> to=agent2 text=hi
     python3 cli.py alias-run <tool> agent2 "hi there"
-    python3 cli.py install /usr/local/bin [--url URL] [--python PATH]
+    python3 cli.py install /usr/local/bin [--url URL] [--python PATH] [--token-file PATH]
 
 install writes one small sh wrapper per alias (coop-send) and one per tool
 (coord-send_message), each running `alias-run <tool>`, so the agent types
 `coop-send agent2 "hi there"` as in the authors' runs. Given --url, the
 wrappers carry the URL themselves, which lets agents that share one host
 each have a bin directory of their own.
+
+A run the hub made with agent tokens wants this agent's bearer token on
+every request, so each request to /rpc carries
+"Authorization: Bearer <COORD_AGENT_TOKEN>" when that variable is set and
+not empty. Given --token-file, install reads the token from that file for
+its own request and writes wrappers that read it with cat at run time and
+export it, so the token is in no wrapper's text and on no command line. A
+401 from the hub is reported as the hub's own words, exit 2, as any other
+HTTP error is.
 
 alias-run reads the words as the tool's command line. A word naming one of
 the tool's flags sets that flag's argument wherever it stands, before,
@@ -70,6 +79,9 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 # refused rather than written somewhere unexpected.
 SAFE_COMMAND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# Where the agent's bearer token is, when the run wants one.
+TOKEN_VARIABLE = "COORD_AGENT_TOKEN"
+
 TYPES_PARSED_AS_JSON = {"integer", "number", "boolean", "array", "object", "null"}
 
 
@@ -108,12 +120,19 @@ def explain(url, problem):
     return f"lost {hub}: {one_line(problem) or type(problem).__name__}"
 
 
-def exchange(url, body=None):
-    """GET the url, or POST body to it as JSON; the answer as JSON."""
+def request_headers(token):
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def exchange(url, body=None, token=None):
+    """GET the url, or POST body to it as JSON, with the agent's bearer
+    token when there is one; the answer as JSON."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="GET" if data is None else "POST",
-                                     headers={"Content-Type": "application/json",
-                                              "Accept": "application/json"})
+                                     headers=request_headers(token))
     try:
         with OPENER.open(request, timeout=TIMEOUT_SECONDS) as response:
             raw = response.read()
@@ -125,8 +144,8 @@ def exchange(url, body=None):
         raise Failure(f"the coordbench hub at {url} answered something that is not JSON")
 
 
-def describe_agent(url):
-    answer = exchange(url)
+def describe_agent(url, token=None):
+    answer = exchange(url, token=token)
     if not isinstance(answer, dict):
         raise Failure(f"the coordbench hub at {url} did not describe this agent")
     return answer
@@ -308,9 +327,9 @@ def argv_word(name, index, words, last):
     return None
 
 
-def run_tool(url, name, arguments):
+def run_tool(url, name, arguments, token=None):
     """The hub's answer to one call: {"text", "isError", "exitCode"}."""
-    answer = exchange(url, {"tool": name, "arguments": arguments})
+    answer = exchange(url, {"tool": name, "arguments": arguments}, token)
     if not isinstance(answer, dict):
         raise Failure(f"the coordbench hub at {url} answered a call without a result")
     return answer
@@ -358,13 +377,13 @@ def describe_tool(tool):
 
 
 def list_tools(args):
-    description = describe_agent(args.url)
+    description = describe_agent(args.url, args.token)
     show("\n".join(describe_tool(t) for t in description.get("tools") or []), sys.stdout)
     return OK
 
 
 def print_prompt(args):
-    show(describe_agent(args.url).get("prompt") or "", sys.stdout)
+    show(describe_agent(args.url, args.token).get("prompt") or "", sys.stdout)
     return OK
 
 
@@ -372,20 +391,25 @@ def call(args):
     """A tool by name with its arguments as given. The description types
     the key=value words and says where the text goes; a name the hub does
     not list is left for the hub to refuse, with its own reason."""
-    tool = tool_named(describe_agent(args.url), args.tool)
-    return report(run_tool(args.url, args.tool, parse_arguments(args.words, tool)), tool)
+    tool = tool_named(describe_agent(args.url, args.token), args.tool)
+    return report(run_tool(args.url, args.tool, parse_arguments(args.words, tool), args.token), tool)
 
 
 def alias_run(args):
-    tool = find_tool(describe_agent(args.url), args.tool)
-    return report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words)), tool)
+    tool = find_tool(describe_agent(args.url, args.token), args.tool)
+    return report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words), args.token), tool)
 
 
-def wrapper_script(tool_name, python, url=None):
+def wrapper_script(tool_name, python, url=None, token_file=None):
+    """The wrapper's text. A token file is read when the command runs,
+    with cat, so the token is in neither this text nor a process list;
+    the shell drops the newline the file ends with."""
     cli = Path(__file__).resolve()
     lines = ["#!/bin/sh"]
     if url:
         lines.append(f"export COORD_RPC_URL={shlex.quote(url)}")
+    if token_file:
+        lines.append(f'export {TOKEN_VARIABLE}="$(cat {shlex.quote(str(token_file))})"')
     lines.append(f"exec {shlex.quote(python)} {shlex.quote(str(cli))} alias-run "
                  f"{shlex.quote(tool_name)} \"$@\"")
     return "\n".join(lines) + "\n"
@@ -414,8 +438,8 @@ def install(args):
     bin_dir = Path(args.bin_dir)
     bin_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for tool in describe_agent(args.url).get("tools") or []:
-        script = wrapper_script(tool["name"], args.python, baked_url)
+    for tool in describe_agent(args.url, args.token).get("tools") or []:
+        script = wrapper_script(tool["name"], args.python, baked_url, args.token_file)
         for command in commands_for(tool):
             if not SAFE_COMMAND.match(command):
                 print(f"coordbench: skipped the command {command!r}: not a safe file name",
@@ -446,6 +470,9 @@ def parser():
     installing.add_argument("--url", dest="install_url", help="bake this /rpc URL into the commands")
     installing.add_argument("--python", default=sys.executable or "python3",
                             help="the Python the commands run (default: this one)")
+    installing.add_argument("--token-file", metavar="PATH",
+                            help=f"have the commands read this agent's bearer token from PATH when they "
+                                 f"run, as {TOKEN_VARIABLE} (default: the variable as set)")
     installing.set_defaults(func=install)
     return top
 
@@ -457,6 +484,18 @@ def hub_url(args):
     return url.strip()
 
 
+def agent_token(args):
+    """The bearer token the hub wants for this agent: the --token-file's
+    text on install, else the variable's; empty when there is neither."""
+    path = getattr(args, "token_file", None)
+    if not path:
+        return os.environ.get(TOKEN_VARIABLE, "").strip()
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError as problem:
+        raise Failure(f"cannot read the token file {path}: {problem}")
+
+
 def main(argv=None):
     try:
         args = parser().parse_args(argv)
@@ -464,6 +503,7 @@ def main(argv=None):
         return stop.code if isinstance(stop.code, int) else FAILURE
     try:
         args.url = hub_url(args)
+        args.token = agent_token(args)
         return args.func(args)
     except Failure as failure:
         print(f"coordbench: {failure}", file=sys.stderr)

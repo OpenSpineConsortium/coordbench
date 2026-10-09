@@ -82,7 +82,14 @@ PASSED_BY_NAME = ("CLAUDE_CODE_OAUTH_TOKEN",)
 # create or close runs. It never reaches a container, nor even the docker
 # client, so no `-e` added by mistake could hand it on.
 ADMIN_TOKEN = "COORD_ADMIN_TOKEN"
-HELD_BACK = (ADMIN_TOKEN,)
+# Each agent's own hub token, which its /mcp and /rpc want as a bearer
+# token. It is the agent's, not the runner's: run.py gives it to the
+# docker client's environment for the one `docker run` that starts the
+# agent's container, named by `-e` alone, and the exec that runs claude
+# inherits it from the container. One in the runner's own environment is
+# nobody's and is held back like the admin token.
+AGENT_TOKEN = "COORD_AGENT_TOKEN"
+HELD_BACK = (ADMIN_TOKEN, AGENT_TOKEN)
 
 # The adapter's own exports beside the model and the config directory
 # (_build_claude_command), kept so the agent runs as the authors' did.
@@ -103,13 +110,16 @@ NO_RESULT = "the stream ended without a result event"
 UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
 
 
-def docker(*args, input=None, timeout=None, output=None):
+def docker(*args, input=None, timeout=None, output=None, extra_env=None):
     """Run `docker <args>` and return the CompletedProcess, whatever its exit
     code; the caller decides what a failure means. With `output`, a path,
     stdout and stderr go to that file as they arrive instead of being
-    captured, which is how a long agent run is teed to its log."""
+    captured, which is how a long agent run is teed to its log. With
+    `extra_env`, names to values, the docker client's environment holds
+    those for this one call and no other, which is how a value that
+    `-e NAME` names by itself reaches a container and no command line."""
     command = ["docker", *(str(arg) for arg in args)]
-    environment = docker_environment()
+    environment = {**docker_environment(), **(extra_env or {})}
     if output is not None:
         with open(output, "w", encoding="utf-8") as stream:
             return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream,

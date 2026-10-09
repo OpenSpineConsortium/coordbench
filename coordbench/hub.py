@@ -33,6 +33,22 @@ causes while answering is -32603 for the request it failed on, with the
 traceback in the hub's log; a client that drops its connection leaves no
 trace there, since that is the client's doing.
 
+A client may give up on a tool that blocks, and the hub then makes sure
+nothing is taken for nobody. A notifications/cancelled, which Streamable
+HTTP carries as a second POST on the same Mcp-Session-Id, reaches the
+tools/call it names among the calls in flight on that session (kept per
+session, by request id, on the hosted run): mcp.handle sets the call's
+cancelled event and wakes the run, the blocking tool returns without
+taking what it waited for, and the cancelled call still produces its
+result (for a wait, the no-message marker), which the hub tries to
+write; a client that still listens discards a response to a cancelled
+request, as the specification tells it to, and one that has gone makes
+the write fail. When writing the answer to a request that ran tool calls
+(on /mcp or /rpc) fails because the connection dropped, the hub runs the
+undo each of its calls registered (Call.on_lost), newest first, under
+the run's lock, and wakes the run: a message or a response taken for a
+reply that reached nobody goes back where the next call finds it.
+
 Command line:
 
     python3 hub.py --host 0.0.0.0 --port 8765 [--log-dir DIR] [--public-url URL]
@@ -47,6 +63,19 @@ elsewhere (an agent could write one into a shared volume). When the
 environment holds COORD_ADMIN_TOKEN, the management API (/api/runs and
 below) also wants it as a bearer token, so only the runner, which set it,
 can create or close runs; agents never see it.
+
+A run can want a credential from each agent as well, since the hub binds
+to every address of its host when containers must reach it, and an agent
+told apart by its URL alone could speak as another. With "agent_tokens":
+true in POST /api/runs the hub makes a token per agent
+(secrets.token_urlsafe) and answers it as "token" in that agent's entry
+of the create answer, the one with the prompts, which goes to the runner
+alone; GET /api/runs/{run} and everything an agent can reach never carry
+one. From then on that agent's /mcp (POST) and /rpc (GET and POST) want
+"Authorization: Bearer <its token>" and answer 401 with {"error": ...} to
+anything else, after the Origin check and before any body is read as
+MCP, the comparison in constant time. A run created without agent_tokens
+stays open, for harnesses that tell their agents apart some other way.
 """
 
 import argparse
@@ -95,11 +124,17 @@ class HubError(Exception):
 @dataclass
 class Hosted:
     """A run as the hub keeps it: the run itself, the prompt each agent was
-    given, and the MCP session ids issued to each agent."""
+    given, the bearer token each agent's /mcp and /rpc want (empty for a
+    run created without agent_tokens, which wants none), the MCP session
+    ids issued to each agent, and the tools/calls under way by session id
+    (None for a client that opened none) and then by request id, which is
+    where a notifications/cancelled on a session finds the call it names."""
 
     run: Run
     prompts: dict
+    tokens: dict = field(default_factory=dict)
     sessions: dict = field(default_factory=dict)
+    calls: dict = field(default_factory=dict)
 
 
 class Hub:
@@ -130,12 +165,18 @@ class Hub:
     def url(self, kind, run_id, agent):
         return f"{self.base_url}/{kind}/{quote(run_id, safe='')}/{quote(agent, safe='')}"
 
-    def create_run(self, arm, features, specs, options=None, run_id=None):
-        """Load the arm, lay out its agents and answer as POST /api/runs does."""
+    def create_run(self, arm, features, specs, options=None, run_id=None, agent_tokens=False):
+        """Load the arm, lay out its agents and answer as POST /api/runs
+        does. With agent_tokens each agent gets a bearer token of its own,
+        which its /mcp and /rpc want from then on and which only this
+        answer carries, in the agent's entry as "token"; without, the run
+        is open to anyone who knows its URLs."""
         features = parse_features(features)
         specs = parse_specs(specs, features)
         if options is not None and not isinstance(options, dict):
             raise HubError(400, "options must be an object")
+        if not isinstance(agent_tokens, bool):
+            raise HubError(400, "agent_tokens must be true or false")
         arm = self.resolve_arm(arm)
         missing = unmet_needs(arm, options)
         if missing:
@@ -148,6 +189,8 @@ class Hub:
             with self.lock:
                 del self.runs[run_id]
             raise
+        if agent_tokens:
+            hosted.tokens = {agent: secrets.token_urlsafe(32) for agent in hosted.run.agents}
         with self.lock:
             self.runs[run_id] = hosted
         return self.describe(hosted, with_prompts=True)
@@ -236,8 +279,13 @@ class Hub:
             return sum(1 for hosted in self.runs.values() if hosted is not None)
 
     def describe(self, hosted, with_prompts):
+        """The run as the API answers it. With the prompts it is the create
+        answer, which the runner alone receives, so each agent's token
+        goes with its prompt; without them it is GET /api/runs/{run},
+        which carries neither."""
         run = hosted.run
-        agents = [self.describe_agent(run, agent, hosted.prompts[agent] if with_prompts else None)
+        agents = [self.describe_agent(run, agent, hosted.prompts[agent] if with_prompts else None,
+                                      hosted.tokens.get(agent) if with_prompts else None)
                   for agent in run.agents]
         answer = {"run_id": run.id, "arm": arm_name(run.arm), "agents": agents}
         if not with_prompts:
@@ -246,13 +294,26 @@ class Hub:
                 answer["metrics"] = run.arm.metrics(run)
         return answer
 
-    def describe_agent(self, run, agent, prompt=None):
+    def describe_agent(self, run, agent, prompt=None, token=None):
         spec = run.agents[agent]
         entry = {"id": agent, "role": spec.role, "features": list(spec.features),
                  "mcp_url": self.url("mcp", run.id, agent), "rpc_url": self.url("rpc", run.id, agent)}
         if prompt is not None:
             entry["prompt"] = prompt
+        if token is not None:
+            entry["token"] = token
         return entry
+
+    def check_agent(self, hosted, agent, authorization):
+        """For a run made with agent_tokens, the request must carry this
+        agent's own token, in constant time so the comparison tells a
+        guesser nothing; a run made without wants none."""
+        token = hosted.tokens.get(agent)
+        if token is None:
+            return
+        given = (authorization or "").encode("utf-8")
+        if not secrets.compare_digest(given, f"Bearer {token}".encode("utf-8")):
+            raise HubError(401, f"run {hosted.run.id} wants {agent}'s bearer token in Authorization")
 
     def open_session(self, hosted, agent):
         session = uuid.uuid4().hex
@@ -264,15 +325,26 @@ class Hub:
         with self.lock:
             return session in hosted.sessions.get(agent, ())
 
+    def in_flight(self, hosted, session):
+        """The tools/calls under way on one session, by request id: the
+        dict mcp.handle enters a call into before its handler runs and
+        removes it from after. The threads of one session share it
+        without a lock, since each step on a dict is one the interpreter
+        keeps whole; only its making is under the registry's lock."""
+        with self.lock:
+            return hosted.calls.setdefault(session, {})
+
     def describe_tools(self, run, agent):
         return [{**tool.describe(), "alias": tool.alias, "argv": list(tool.argv), "flags": dict(tool.flags)}
                 for tool in run.arm.tools_for(run, agent).values()]
 
-    def call(self, run, agent, name, arguments):
+    def call(self, run, agent, name, arguments, sink=None):
         """One tool call outside MCP, for /rpc: the same checks and events
-        as tools/call, answered as {"text", "isError"}."""
+        as tools/call, answered as {"text", "isError"}. The Call goes onto
+        `sink`, a list, before its handler runs, as mcp.handle's does."""
         tools = run.arm.tools_for(run, agent)
-        result, problem = mcp.call_tool(run, agent, tools, {"name": name, "arguments": arguments})
+        started = None if sink is None else sink.append
+        result, problem = mcp.call_tool(run, agent, tools, {"name": name, "arguments": arguments}, started)
         if problem is not None:
             raise HubError(400, problem[1])
         answer = {"text": result["content"][0]["text"], "isError": result["isError"]}
@@ -434,6 +506,14 @@ def complain(what):
     traceback.print_exc(file=sys.stderr)
 
 
+def undo_lost(calls):
+    """What the tool calls of a reply that was never written took goes
+    back, newest call first, so that two waits of one batch that took two
+    messages leave the inbox in its old order."""
+    for call in reversed(calls):
+        call.lost()
+
+
 def parse_path(raw):
     """The route a request path names, and the parts of it that vary."""
     parts = [unquote(part) for part in urlsplit(raw).path.strip("/").split("/")]
@@ -558,6 +638,18 @@ class HubHandler(BaseHTTPRequestHandler):
         self.replied = True
         self.wfile.write(body)
 
+    def reply_or_undo(self, status, payload, headers, calls):
+        """reply(), for an answer that holds tool calls' results: when the
+        connection drops before it is written (a BrokenPipeError or a
+        ConnectionResetError, both ConnectionErrors), what the calls took
+        on the client's behalf goes back where it was, and the drop goes
+        on up to dispatch, which ends the connection quietly."""
+        try:
+            self.reply(status, payload, headers)
+        except ConnectionError:
+            undo_lost(calls)
+            raise
+
     def refuse(self, refusal):
         if not self.replied:
             self.reply(refusal.status, {"error": refusal.message})
@@ -568,8 +660,11 @@ class HubHandler(BaseHTTPRequestHandler):
 
     def post_mcp(self, run_id, agent):
         """MCP's Streamable HTTP transport (2025-06-18), JSON answers only:
-        the hub never streams, so it has no use for an SSE response."""
+        the hub never streams, so it has no use for an SSE response. The
+        agent's token, when the run wants one, is checked before the body
+        is read as anything."""
         hosted = self.hub.hosted(run_id, agent)
+        self.hub.check_agent(hosted, agent, self.headers.get("Authorization"))
         if not accepts_json(self.headers.get("Accept")):
             raise HubError(406, "the hub answers in application/json only")
         version = self.headers.get("MCP-Protocol-Version")
@@ -585,32 +680,40 @@ class HubHandler(BaseHTTPRequestHandler):
         session = self.headers.get("Mcp-Session-Id")
         if session is not None and not self.hub.knows_session(hosted, agent, session):
             raise HubError(404, "unknown Mcp-Session-Id; send initialize again without one")
-        answer = self.answer_mcp(hosted.run, agent)
+        calls = []
+        answer = self.answer_mcp(hosted, agent, session, calls)
         headers = {}
         if opened_session(self.body, answer):
             headers["Mcp-Session-Id"] = self.hub.open_session(hosted, agent)
         if answer is None:
             self.reply(202, None, headers)
         else:
-            self.reply(400 if unreadable(answer) else 200, answer, headers)
+            self.reply_or_undo(400 if unreadable(answer) else 200, answer, headers, calls)
 
-    def answer_mcp(self, run, agent):
+    def answer_mcp(self, hosted, agent, session, calls):
+        run = hosted.run
         try:
-            return mcp.handle_body(self.body, run, agent, run.arm.instructions(run, agent))
+            return mcp.handle_body(self.body, run, agent, run.arm.instructions(run, agent),
+                                   sink=calls, in_flight=self.hub.in_flight(hosted, session))
         except Exception:
             complain(f"MCP request from {agent} in run {run.id} failed")
             return internal_errors(self.body)
 
     def get_rpc(self, run_id, agent):
         hosted = self.hub.hosted(run_id, agent)
+        self.hub.check_agent(hosted, agent, self.headers.get("Authorization"))
         run = hosted.run
         self.reply(200, {"agent": agent, "role": run.role_of(agent),
                          "tools": self.hub.describe_tools(run, agent), "prompt": hosted.prompts[agent]})
 
     def post_rpc(self, run_id, agent):
-        run = self.hub.hosted(run_id, agent).run
+        hosted = self.hub.hosted(run_id, agent)
+        self.hub.check_agent(hosted, agent, self.headers.get("Authorization"))
+        run = hosted.run
         payload = self.json_body()
-        self.reply(200, self.hub.call(run, agent, payload.get("tool"), payload.get("arguments") or {}))
+        calls = []
+        answer = self.hub.call(run, agent, payload.get("tool"), payload.get("arguments") or {}, calls)
+        self.reply_or_undo(200, answer, None, calls)
 
     def get_health(self):
         self.reply(200, {"ok": True, "runs": self.hub.run_count()})
@@ -619,7 +722,8 @@ class HubHandler(BaseHTTPRequestHandler):
         self.hub.check_admin(self.headers.get("Authorization"))
         payload = self.json_body()
         answer = self.hub.create_run(payload.get("arm"), payload.get("features"), payload.get("specs"),
-                                     payload.get("options"), payload.get("run_id"))
+                                     payload.get("options"), payload.get("run_id"),
+                                     payload.get("agent_tokens", False))
         self.reply(201, answer)
 
     def get_run(self, run_id):

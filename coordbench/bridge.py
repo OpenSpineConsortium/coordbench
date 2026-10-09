@@ -12,7 +12,10 @@ an HTTP client would. An agent's MCP configuration for it:
      "env": {"COORD_MCP_URL": "http://host.docker.internal:8765/mcp/<run>/<agent>"}}
 
 The file imports nothing from coordbench, so it can be copied alone into
-an agent's container and run by whatever Python 3 is there.
+an agent's container and run by whatever Python 3 is there. A run the
+hub made with agent tokens wants this agent's bearer token on every
+request, so every POST carries "Authorization: Bearer <COORD_AGENT_TOKEN>"
+when that variable is set and not empty.
 
 Requests run on threads of their own, because a coordination tool may
 block (wait_for_message waits up to 30 seconds) and a client that calls
@@ -149,13 +152,15 @@ def http_error_text(problem):
 
 
 class Bridge:
-    """One stdio session's link to the hub: where to post, what the hub
-    has said about the session so far, and where answers go."""
+    """One stdio session's link to the hub: where to post, the bearer
+    token to post with when the run wants one, what the hub has said
+    about the session so far, and where answers go."""
 
-    def __init__(self, url, out=None, timeout=TIMEOUT_SECONDS):
+    def __init__(self, url, out=None, timeout=TIMEOUT_SECONDS, token=None):
         self.url = url
         self.out = out or sys.stdout
         self.timeout = timeout
+        self.token = token or None
         self.session_id = None
         self.protocol_version = None
         self.initialize_params = None
@@ -276,6 +281,8 @@ class Bridge:
     def headers(self):
         headers = {"Content-Type": "application/json",
                    "Accept": "application/json, text/event-stream"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
         if self.protocol_version:
@@ -323,7 +330,8 @@ def main():
         print("bridge.py: COORD_MCP_URL is not set; it names this agent's /mcp endpoint on the hub",
               file=sys.stderr)
         return 2
-    Bridge(url).serve(iter(sys.stdin.buffer.readline, b""))
+    token = os.environ.get("COORD_AGENT_TOKEN", "").strip()
+    Bridge(url, token=token).serve(iter(sys.stdin.buffer.readline, b""))
     return 0
 
 

@@ -55,8 +55,10 @@ Where this differs from CooperBench, and why:
   asked to. The cap keeps a blocked call inside the limits of its callers,
   which sit above it on purpose: Claude Code gives up on an MCP call after
   the timeout the arm's .mcp.json sets (330 seconds) and cli.py after 600,
-  so an unbounded wait would be cut off by the client anyway, and the
-  response it then took would reach nobody.
+  so an unbounded wait would be cut off by the client anyway. A wait the
+  client cancels takes no response, and one whose answer the client was
+  not there to read puts the response back (hub.py says how), so the cap
+  is about answering the caller, not about what a cut-off wait would lose.
 - wait_for_message returns a message. At 63b9d44 CooperBench's never did:
   its server BLPOPs <agent>:inbox, with no prefix, while coop_msg.py
   pushes to run:<id>:<agent>:inbox, so every call there ran out with the
@@ -104,7 +106,8 @@ BENCH_RUNNER = "bench-runner"
 # coop_task.py waits as long as asked; the hub caps it under the limits of
 # its callers, so each hears back before it gives up: cli.py waits 600
 # seconds, and Claude Code the 330 the arm's .mcp.json sets (without that
-# key it would give up at 60, and the response would reach nobody).
+# key it would give up at 60, cancel the call, and get exit 5 for every
+# wait longer than that).
 LONGEST_WAIT_SECONDS = 300
 
 # The run event each audit-log entry is recorded as, so events.jsonl
@@ -221,15 +224,26 @@ class Board:
             self.record("request", request_id=request_id, by=sender, to=recipient, request_kind=kind)
         return request_id
 
-    def await_response(self, request_id, seconds):
+    def await_response(self, request_id, seconds, cancelled=None):
         """protocol.py's await_response, a BLPOP on the request's responses:
-        the oldest response once one is queued, or None when the time is up
-        or the run has closed."""
+        the oldest response once one is queued, or None when the time is
+        up, the run has closed, or `cancelled` (the calling Call's event)
+        is set, which takes nothing: the caller has given up and its
+        answer would reach nobody. The wait and the pop are one hold of
+        the lock, so no second wait can empty the queue between them."""
         run = self.run
-        run.wait_until(lambda: bool(self.responses.get(request_id)) or run.closed, seconds)
+        gone = cancelled.is_set if cancelled is not None else (lambda: False)
         with run.lock:
+            run.lock.wait_for(lambda: run.closed or gone() or bool(self.responses.get(request_id)),
+                              timeout=seconds)
             queue = self.responses.get(request_id)
-            return queue.pop(0) if queue else None
+            return queue.pop(0) if queue and not gone() else None
+
+    def put_back(self, request_id, response):
+        """The undo of a wait whose reply was never written: the response
+        goes back at the head of its request's queue, for the next wait."""
+        with self.run.lock:
+            self.responses.setdefault(request_id, []).insert(0, response)
 
     def respond(self, responder, request_id, body):
         """protocol.py's respond: only the addressee answers, and only once,
@@ -345,9 +359,12 @@ def send_request(call):
     request_id = board.request(call.agent, recipient, kind, optional_text(call, "body") or "")
     if seconds is None:
         return request_id
-    response = board.await_response(request_id, seconds)
+    response = board.await_response(request_id, seconds, call.cancelled)
     if response is None:
+        # Also the cancelled case: the caller gave up, and hears what
+        # coop-request says of a wait that ran out.
         raise ToolError(f"timed out waiting for response to {request_id}", TIMED_OUT)
+    call.on_lost(lambda: board.put_back(request_id, response))
     return json.dumps(response)
 
 

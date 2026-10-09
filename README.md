@@ -91,7 +91,12 @@ Keep ANTHROPIC_API_KEY unset: the adapter prefers it, and it bills the API.
    arm's pass rate with a 95% interval next to the authors' number, every
    two arms compared on the pairs both scored (exact McNemar), and one row
    per pair. A pair an agent left in Error is counted apart, not as a
-   failure. The raw results are under `~/cooperbench/logs/<run name>/`,
+   failure, in CooperBench's own runs and coordbench's alike (CooperBench's
+   eval scores the errored agent's empty patch as a failure; the report
+   sets it apart in both). A pair whose token counts are null, from a
+   coordbench driver that could not measure usage, is left out of "Tokens
+   per pair", which reads '-' when no pair of the arm was measured. The
+   raw results are under `~/cooperbench/logs/<run name>/`,
    and `cooperbench eval -n <run name> --backend docker -c 1` scores a run
    again.
 

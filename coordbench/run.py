@@ -29,7 +29,11 @@ made for it alone (secrets.token_hex), which it gets in its environment
 as COORD_ADMIN_TOKEN and the runner sends with every management request.
 A hub named by --hub gets the runner's own COORD_ADMIN_TOKEN, when that
 is set. Agents get neither: the token is what keeps them from creating or
-closing runs.
+closing runs. The runner asks the hub for a token per agent as well
+("agent_tokens" in POST /api/runs), which that agent's /mcp and /rpc want
+from then on as a bearer token, so no agent can speak as another and
+nothing else on the network can speak at all; a hub that predates the
+option gives none, and the run stays open as it was.
 
 The logs take CooperBench's layout, so experiment/report.py and
 `cooperbench eval` read them as they read the authors' runs:
@@ -65,7 +69,14 @@ the hub's own user can read).
 Every docker command goes through drivers.docker, so tests swap in a fake.
 The subscription token reaches agents by name only (drivers.PASSED_BY_NAME)
 and the hub's token reaches no agent; neither is ever on a command line,
-in a log or in a file this module writes.
+in a log or in a file this module writes. An agent's own hub token
+(COORD_AGENT_TOKEN) reaches its container by name too, in the docker
+client's environment for the one `docker run` that starts the container
+(drivers.docker's extra_env), from which every exec inherits it; for the
+session driver, whose agent runs on this host, it is a file named token
+beside the agent's wrappers, which read it when they run. The plan and
+that file are the two places it is written, and both are the owner's
+alone (mode 0o600).
 """
 
 import argparse
@@ -122,6 +133,8 @@ GIT_READ_MARK = "coordbench-promise:"
 # sleep infinity is GNU; busybox's sleep may refuse it, so fall back to a loop.
 KEEP_ALIVE = "sleep infinity 2>/dev/null || while :; do sleep 86400; done"
 SCORING_TIMEOUT_SECONDS = 3 * 3600
+# The session driver's agent token, in its bin directory on this host.
+TOKEN_FILE = "token"
 
 # The hub is local, so a proxy set for outbound traffic must not carry it.
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -189,6 +202,15 @@ def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
 
 
+def write_private_text(path, text):
+    """A file that holds a credential, for its owner alone: the mode is
+    set before the text goes in, so no other reader ever sees it."""
+    path = Path(path)
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
+    path.write_text(text, encoding="utf-8")
+
+
 def pair_finished(run_dir):
     """CooperBench reruns a pair any of whose agents ended in Error."""
     result = read_json(Path(run_dir) / "result.json")
@@ -253,8 +275,12 @@ class HubClient:
         return True
 
     def create_run(self, arm, run_id, features, specs, options):
+        """POST /api/runs, always asking for a token per agent: each
+        agent's entry then carries the bearer token its /mcp and /rpc
+        want, which this answer alone holds. A hub that predates the
+        option answers without tokens, and the run stays open."""
         return self.request("POST", "/api/runs", {"arm": arm, "run_id": run_id, "features": features,
-                                                  "specs": specs, "options": options})
+                                                  "specs": specs, "options": options, "agent_tokens": True})
 
     def close_run(self, run_id):
         return self.request("POST", f"/api/runs/{run_id}/close").get("metrics") or {}
@@ -469,7 +495,13 @@ def new_plan(settings, driver, repo, task_id, features):
 
 
 def save_plan(plan):
-    write_json(Path(plan["run_dir"]) / "plan.json", plan)
+    """plan.json, the owner's alone (mode 0o600), because the plan holds
+    each agent's hub token with the rest of what finish needs. Keeping
+    them there is acceptable: a token is a per-run credential that lets
+    its holder act as one benchmark agent on this host's hub, nothing
+    beyond, and the run is over once the plan has served its purpose.
+    What prepare prints (plan_summary) leaves them out."""
+    write_private_text(Path(plan["run_dir"]) / "plan.json", json.dumps(plan, indent=2, default=str) + "\n")
 
 
 def load_plan(run_dir):
@@ -666,7 +698,7 @@ def adopt_agents(plan, answer):
         prompt_file.write_text(agent.get("prompt") or "", encoding="utf-8")
         plan["agents"].append({"id": agent["id"], "role": agent["role"], "features": list(agent["features"]),
                                "mcp_url": agent["mcp_url"], "rpc_url": agent["rpc_url"],
-                               "prompt_file": str(prompt_file),
+                               "token": agent.get("token"), "prompt_file": str(prompt_file),
                                "log_path": str(run_dir / f"{safe_name(agent['id'])}_stream.jsonl")})
 
 
@@ -703,6 +735,10 @@ def container_arguments(plan, agent):
     arguments = ["run", "-d", "--name", agent["container"], "--label", f"coordbench.run={plan['run_id']}",
                  "--network", NETWORK, "--add-host", "host.docker.internal:host-gateway",
                  "-e", f"COORD_MCP_URL={agent['mcp_url']}", "-e", f"COORD_RPC_URL={agent['rpc_url']}"]
+    if agent.get("token"):
+        # By name alone: the docker client copies the value from its own
+        # environment, which holds it for this one call (token_environment).
+        arguments += ["-e", drivers.AGENT_TOKEN]
     if plan["resources"]["volume"]:
         arguments += ["-v", f"{plan['resources']['volume']}:{SHARED_DIR}"]
     if agent.get("workspace"):
@@ -833,13 +869,35 @@ def trust_workspace(container):
             "letting git in the container use the host workspace")
 
 
+def token_environment(agent):
+    """What the docker client's environment holds while it starts this
+    agent's container: the agent's token under the name container_arguments
+    passes by itself, so it reaches the container and no command line."""
+    return {drivers.AGENT_TOKEN: agent["token"]} if agent.get("token") else {}
+
+
+def write_token_file(bin_dir, token):
+    """The agent's token in a file of its own beside its wrappers, the
+    owner's alone, which each wrapper reads when it runs: the token is
+    then in no wrapper's text and on no process's command line."""
+    bin_dir = Path(bin_dir)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    path = bin_dir / TOKEN_FILE
+    write_private_text(path, token + "\n")
+    return path
+
+
 def install_host_wrappers(plan, agent, hub):
     """The session driver's agent runs on this host, so its commands are
-    wrappers here, each carrying the agent's /rpc URL as this host reaches it."""
+    wrappers here, each carrying the agent's /rpc URL as this host reaches
+    it and reading the agent's token from its file when the run wants one."""
     url = hub.base_url + urlsplit(agent["rpc_url"]).path
     bin_dir = drivers.session_bin_dir(plan["run_dir"], agent["id"])
+    arguments = ["install", str(bin_dir), "--url", url, "--python", sys.executable]
+    if agent.get("token"):
+        arguments += ["--token-file", str(write_token_file(bin_dir, agent["token"]))]
     with contextlib.redirect_stdout(sys.stderr):
-        code = cli.main(["install", str(bin_dir), "--url", url, "--python", sys.executable])
+        code = cli.main(arguments)
     if code != 0:
         raise HubError(f"installing {agent['id']}'s commands on this host failed")
 
@@ -849,7 +907,8 @@ def provision_agent(plan, agent, hub, options):
     if plan["host_workspace"]:
         agent["workspace"] = copy_repository_out(plan, agent)
     plan["resources"]["containers"].append(agent["container"])
-    checked(drivers.docker(*container_arguments(plan, agent)), f"starting {agent['id']}'s container")
+    checked(drivers.docker(*container_arguments(plan, agent), extra_env=token_environment(agent)),
+            f"starting {agent['id']}'s container")
     install_coordbench(plan, agent["container"])
     install_aliases(plan, agent["container"])
     if plan["host_workspace"]:
@@ -1217,6 +1276,9 @@ def hub_dir(settings):
 
 
 def plan_summary(plan, handles):
+    """What run and prepare print for the orchestrating session: where
+    the pair is and each agent's prompt file, never the agents' tokens,
+    which the session has no use for and a transcript would keep."""
     agents = []
     for agent in plan["agents"]:
         handle = handles.get(agent["id"])
