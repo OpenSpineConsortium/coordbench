@@ -31,17 +31,29 @@ itself only drives shell scripts, so it spends almost none of the usage.
   overlay_task_image.sh adds the session's own claude binary, the redis
   client and the egress proxy's CA to each task image under its own name,
   and cooperbench-claude-code-setup.patch makes the adapter's installer
-  skip the install when claude is already there. Neither touches a
-  prompt, a tool or the scoring.
+  skip the install when claude is already there. On the Alpine images
+  (go_chi), where the session's glibc binary cannot run, the overlay
+  copies Node from the official Alpine image and installs the same Claude
+  Code version from npm. Neither touches a prompt, a tool or the scoring.
+- The same policy blocks openaipublic.blob.core.windows.net, where
+  tiktoken's tests download their encodings, so openai_tiktoken/0 (3 of
+  the 50 pairs) cannot be graded here: its gold patches fail for want of
+  the file. Adding that host to the environment's allowed domains is the
+  owner's call; the containers also resolve only the hosts the
+  environment reaches directly, so the overlay would then need the
+  encodings baked in (TIKTOKEN_CACHE_DIR) rather than fetched by the
+  tests.
 - The scorer passes the gold patches here: every feature's tests fail on
   the base commit and pass with its gold patch, 12 of 12 on
-  pallets_click/2068 and 10 of 10 on pallets_jinja/1621
-  (prepare_task.sh runs this check for every task it prepares).
+  pallets_click/2068, 10 of 10 on each of pallets_jinja/1621 and
+  pallets_jinja/1465, and 4 of 4 on go_chi/26 (prepare_task.sh runs this
+  check for every task it prepares).
 - A team run with a shared remote on pallets_click/2068, given a
   placeholder token, brought every piece up (the agents' containers on the
   team network, the git server, the task list seeded in Redis, the team's
   MCP server connected inside the container) and stopped only at the
-  API's 401 for the placeholder.
+  API's 401 for the placeholder; a coop run with a shared remote on
+  go_chi/26 did the same on the Alpine overlay.
 
 ## What it needs from the owner
 
@@ -101,10 +113,11 @@ which is why the steps take one task at a time.
 - No turn limit and a two-hour cap per agent, as in their runs; one seed,
   as theirs. A second seed on the pairs where the arms disagree is the
   cheapest way to see how much of a gap is noise.
-- pallets_jinja/1465 is missing from the mirror, so build_task_image.sh
-  builds it from its Dockerfile, on the full Python image because apt is
-  blocked. The mirror may also answer 429 for the pillow and
-  dirty_equals images; try again later.
+- When the mirror lacks a task image, prepare_task.sh builds it from the
+  task's Dockerfile with build_task_image.sh, on the full Python image
+  because apt is blocked (tried on outlines/1371, which built). The mirror
+  answers 429 now and then for images it has not cached, the pillow and
+  dirty_equals ones among them; trying again later is the cure.
 
 ## Files
 
