@@ -139,6 +139,8 @@ which is why the steps take one task at a time.
   patch, Redis and the git server.
 - prepare_task.sh: pulls or builds one task's image, adds the overlay, and
   checks that its features are gradeable.
+- survey.sh: prepares every flash task in turn and checks its gold
+  patches grade here; it is what made the table above.
 - run_arms.sh: runs the four arms on one task.
 - report.py: the arms side by side, from CooperBench's logs; tested in
   tests/test_experiment_report.py.
