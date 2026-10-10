@@ -37,20 +37,40 @@ fetches before anything else and without which it loads no run.
 
 ## What it shows
 
-The runs table; relative speed (wall time, active span, steps, steps per
-minute, time per step, tokens, cost, time to the first message, edit and
-test run and to submit, the longest idle gap, the communication share of
-tool calls, and for coordbench runs the time blocked on peers and the
-hub's own time), each as a value or a ratio to a chosen baseline, which stays the run
-chosen when another run is removed; the
-failure-mode presence matrix, each cell marked by its source (judge.json's
-model labels, App G's rule where judge.json says it decided a symptom
-level with no model or over the judge's, human cause labels, a heuristic
-computed in the page, or the outcome); a token total that leaves out a
-count nobody measured is marked as a lower bound (">=");
-aligned timelines with a lane per agent, message arrows and hub events;
-two or three step lists side by side with the stock viewer's filters; the
-messages; and, when the runs share a pair, its feature titles and the
-coordbench runs' patches and merged diffs. Runs whose step times are
-interpolated (the SDK files) or come only from the hub's record are
-hatched and left out of speed ranks unless included.
+The runs table, whose outcome keeps each scoring rule under its own name:
+63b9d44's verdict with the merge strategy that decided it, the paper-era
+cascade's verdict with its route, or, for a published run, the website
+index's own verdict; relative speed (wall time, active span, steps, steps
+per minute, time per step, tokens, cost, time to the first message, edit
+and test run and to submit, the longest idle gap, the communication share
+of tool calls, and for coordbench runs the time blocked on peers and the
+hub's own time), each as a value or a ratio to a chosen baseline, which
+stays the run chosen when another run is removed, its bars as long as
+the values they print; the failure-mode presence matrix, each cell marked
+by its source (judge.json's model labels, App G's rule where judge.json
+says it decided a symptom level with no model or over the judge's, human
+cause labels, a heuristic computed in the page, or the outcome), failures
+in red and green and the coordination behaviours (role division,
+resource division, negotiation), which are not failures, in their own
+colour; aligned timelines with a lane per agent, message arrows and hub
+events, which keep their text size on a phone and scroll in their own
+box; two or three step lists side by side with the stock viewer's
+filters; the messages; and, when the runs share a pair, its feature
+titles and the coordbench runs' patches and merged diffs.
+
+"Steps" is the stock viewer's count: every entry of the file its five
+prompt filters keep, an OpenHands event list's observations included.
+The one other count, the page's own step cards without the message
+receipts, is labelled "steps without observations and receipts" wherever it
+shows. Each run's clock starts at its first agent's own start when one
+is known, else, for a coordbench run with no run_started event (the
+session-driver pilots), at result.json's started_at, else at the file's
+first event, and the runs table and the timelines say which. A token
+total is marked as a lower bound (">=", its reason in the title) when it
+leaves out a count nobody measured, or when an agent's output counts
+were summed from a transcript whose messages lack the line holding the
+final count. Runs whose step times are interpolated (the SDK files) or
+come only from the hub's record are hatched and left out of speed ranks
+unless included; a run whose agent logs do not overlap, or one with an
+agent whose own log covers under a tenth of the run, is flagged beside
+its times, the second as possibly truncated.

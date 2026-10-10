@@ -5,7 +5,9 @@ exporter's SCHEMA, so the two cannot drift; its palette must cover every
 tool type in both themes; it must load nothing from outside. When node is
 on PATH, the page's own normaliser runs over one sample of each shape
 (as the page loads none of its DOM code until start(), the model can run
-alone); elsewhere that part is skipped, as on a machine without node."""
+alone); elsewhere that part is skipped, as on a machine without node.
+When node can load Playwright, the report is also laid out at a phone's
+width in headless Chromium."""
 
 import gzip
 import json
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -180,7 +183,8 @@ const sandbox = { console, URLSearchParams, TextDecoder, Date, JSON, Math, Set, 
   window: { COORDBENCH_COMPARE_NO_START: true, location: { search: "" } },
   document: { getElementById: (id) => ({ textContent: id === "coordbench-schema" ? schema : "null" }) } };
 vm.createContext(sandbox);
-vm.runInContext(main + "\n;globalThis.__api = { detectShape, normalise, matrixCell, MATRIX_COLUMNS, judgeCaption };", sandbox);
+vm.runInContext(main + "\n;globalThis.__api = { detectShape, normalise, matrixCell, MATRIX_COLUMNS, judgeCaption, outcomeParts, " +
+  "cellClass, stepsText, listCountText };", sandbox);
 const api = sandbox.__api;
 const cases = JSON.parse(fs.readFileSync(0, "utf8"));
 const out = cases.map((c) => {
@@ -188,10 +192,15 @@ const out = cases.map((c) => {
     const run = api.normalise(c.data, { label: c.label, extras: c.extras || {} });
     const cells = {};
     api.MATRIX_COLUMNS.forEach(([key]) => { const cell = api.matrixCell(run, key); cells[key] = [cell.state, cell.source]; });
+    const classes = {};
+    api.MATRIX_COLUMNS.forEach(([key]) => { classes[key] = api.cellClass(key, api.matrixCell(run, key).state); });
     return { label: c.label, shape: run.shape, steps: run.steps.length, hidden: run.steps.filter((s) => s.hidden).length,
       lanes: run.lanes, messages: run.messages.map((m) => [m.from, m.to, m.read_ms != null]), kind: run.timestamps_kind,
-      speed: run.speed, outcome: run.outcome, cells, flags: run.flags, warnings: run.warnings.length,
-      judge: run.labels.judge_meta ? api.judgeCaption(run.labels.judge_meta) : null };
+      speed: run.speed, outcome: run.outcome, cells, classes, flags: run.flags, warnings: run.warnings.length,
+      judge: run.labels.judge_meta ? api.judgeCaption(run.labels.judge_meta) : null,
+      badges: api.outcomeParts(run).map((b) => [b.text, b.title]), clock: run.clock.anchor, start_ms: run.start_ms,
+      end_ms: run.end_ms, agent_steps: run.agents.map((a) => [a.steps, a.steps_less]), steps_text: api.stepsText(run),
+      list_text: api.listCountText(run, 1), agent_tokens: run.agents.map((a) => a.tokens_reason || null) };
   } catch (error) { return { label: c.label, error: error.message }; }
 });
 process.stdout.write(JSON.stringify(out));
@@ -242,6 +251,15 @@ def stepless_sample():
                                       "conversation": None, "judge": json.loads((FIXTURE / "judge.json").read_text())}}
 
 
+def stepless_pilot_sample():
+    """The fixture's pair files as a session-driver pilot left them: no
+    run_started event and no timings."""
+    files = stepless_sample()["coordbench_pair_files"]
+    files["events"] = [e for e in files["events"] if e["kind"] != "run_started"]
+    del files["result"]["timings"]
+    return {"coordbench_pair_files": files}
+
+
 def silent_sample():
     """The fixture's export with judge.json as judge.py writes it for a
     failed pair with no messages: App G's rule decided the symptoms and
@@ -258,6 +276,61 @@ def partial_sample():
     data = export.build_trajectory(FIXTURE, NO_DATASET)
     data["metadata"]["coordbench"]["agents"][1]["tokens"]["output"] = None
     return data
+
+
+def unfinished_sample():
+    """The fixture's export with agent2's last API message lacking its
+    stop_reason, as most messages of Claude Code 2.1.295's transcripts do:
+    its output count is not final, so neither is the total."""
+    with tempfile.TemporaryDirectory() as root:
+        pair = Path(root) / "pair"
+        shutil.copytree(FIXTURE, pair)
+        lines = [json.loads(line) for line in (pair / "agent2_session.jsonl").read_text().splitlines()]
+        last = max(i for i, line in enumerate(lines) if line.get("type") == "assistant")
+        lines[last]["message"]["stop_reason"] = None
+        (pair / "agent2_session.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+        return export.build_trajectory(pair, NO_DATASET)
+
+
+def pilot_sample():
+    """The fixture as a session-driver pilot recorded it, before per-agent
+    timings and run_started: no transcript, no timings, the hub's events
+    counted from a clock the run never wrote down."""
+    with tempfile.TemporaryDirectory() as root:
+        pair = Path(root) / "pair"
+        shutil.copytree(FIXTURE, pair)
+        for name in ("agent1_session.jsonl", "agent2_session.jsonl", "agent1_stream.jsonl"):
+            (pair / name).unlink()
+        events = [json.loads(line) for line in (FIXTURE / "events.jsonl").read_text().splitlines()]
+        (pair / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events if e["kind"] != "run_started"))
+        result = json.loads((pair / "result.json").read_text())
+        result["driver"] = "session"
+        del result["timings"]
+        (pair / "result.json").write_text(json.dumps(result))
+        return export.build_trajectory(pair, NO_DATASET)
+
+
+def legacy_event(agent, n, seconds, **fields):
+    moment = datetime(2025, 10, 20, 14, 0, 0) + timedelta(seconds=seconds)
+    return {"id": n, "timestamp": moment.isoformat(timespec="microseconds"), "agentId": agent, "source": "agent", **fields}
+
+
+def short_log_sample():
+    """CooperBench's gpt5 pallets_click 2068 feature1_feature6 file in
+    small: agent_1's log is a few events over seconds of agent_2's
+    twenty minutes."""
+    run = {"action": "run", "tool_call_metadata": {"function_name": "execute_bash"}, "args": {"command": "ls"}}
+    events = [legacy_event("agent_2", i, i * 60, **run) for i in range(21)]
+    events += [legacy_event("agent_1", 0, 1000, **run), legacy_event("agent_1", 1, 1007, **run)]
+    return events
+
+
+def apart_sample(short):
+    """Two agents whose logs do not overlap, an hour apart: each is ten
+    minutes long, or agent_1's is two seconds when short."""
+    run = {"action": "run", "tool_call_metadata": {"function_name": "execute_bash"}, "args": {"command": "ls"}}
+    first = [legacy_event("agent_1", i, i * (0.2 if short else 60), **run) for i in range(11)]
+    return first + [legacy_event("agent_2", i, 3600 + i * 60, **run) for i in range(11)]
 
 
 def judged_sample():
@@ -284,7 +357,10 @@ class Normaliser(unittest.TestCase):
                  {"label": "unknown", "data": {"hello": 1}},
                  {"label": "unpublished", "data": legacy_sample(), "extras": {"index_missing": True}},
                  {"label": "judged", "data": judged_sample()}, {"label": "silent", "data": silent_sample()},
-                 {"label": "partial", "data": partial_sample()}]
+                 {"label": "partial", "data": partial_sample()}, {"label": "unfinished", "data": unfinished_sample()},
+                 {"label": "pilot", "data": pilot_sample()}, {"label": "short", "data": short_log_sample()},
+                 {"label": "stepless-pilot", "data": stepless_pilot_sample()},
+                 {"label": "apart", "data": apart_sample(False)}, {"label": "apart-short", "data": apart_sample(True)}]
         done = subprocess.run([NODE, "-e", HARNESS, str(PAGE)], input=json.dumps(cases), capture_output=True,
                               text=True, timeout=60)
         if done.returncode != 0:
@@ -296,7 +372,9 @@ class Normaliser(unittest.TestCase):
         self.assertEqual(shapes, {"coordbench": "coordbench", "legacy": "legacy-openhands", "sdk": "openhands-sdk",
                                   "miniswe": "mini-swe", "seven": "seven-key", "stepless": "coordbench-stepless",
                                   "unknown": None, "unpublished": "legacy-openhands", "judged": "coordbench",
-                                  "silent": "coordbench", "partial": "coordbench"})
+                                  "silent": "coordbench", "partial": "coordbench", "unfinished": "coordbench",
+                                  "pilot": "coordbench", "short": "legacy-openhands", "apart": "legacy-openhands",
+                                  "apart-short": "legacy-openhands", "stepless-pilot": "coordbench-stepless"})
         self.assertIn("not a trajectory", self.runs["unknown"]["error"])
 
     def test_the_coordbench_export_reads_whole(self):
@@ -349,7 +427,84 @@ class Normaliser(unittest.TestCase):
 
     def test_a_token_total_that_leaves_a_count_out_is_a_lower_bound(self):
         self.assertTrue(self.runs["partial"]["speed"]["tokens_partial"])
+        self.assertEqual(self.runs["partial"]["agent_tokens"], [None, "a count was not measured"])
         self.assertFalse(self.runs["coordbench"]["speed"]["tokens_partial"])
+        self.assertIsNone(self.runs["coordbench"]["speed"]["tokens_reason"])
+
+    def test_a_token_total_from_output_counts_that_may_not_be_final_is_a_lower_bound(self):
+        run = self.runs["unfinished"]
+        self.assertTrue(run["speed"]["tokens_partial"])
+        self.assertEqual(run["agent_tokens"], [None, "the transcript's output counts may not be final"])
+        self.assertIn("may not be final", run["speed"]["tokens_reason"])
+
+    def test_each_scoring_rule_shows_under_its_own_name(self):
+        """The fixture's 63b9d44 verdict came from the lead's patch alone and
+        its paper-era verdict from the union merge: each is named as what
+        it is, and neither stands in the other's place."""
+        badges = dict(self.runs["coordbench"]["badges"])
+        self.assertEqual(list(badges), ["63b9d44 fail", "63b9d44 strategy: lead's patch alone", "naive conflict",
+                                        "paper-era pass", "paper-era route: union"])
+        self.assertIn("eval.json both_passed", badges["63b9d44 fail"])
+        self.assertIn("merge.strategy", badges["63b9d44 strategy: lead's patch alone"])
+        self.assertIn("cascade.route", badges["paper-era route: union"])
+        self.assertEqual(self.runs["coordbench"]["outcome"]["route"], "union")
+        self.assertEqual([text for text, _ in self.runs["legacy"]["badges"]], ["index fail"])
+        self.assertIn("index.json", dict(self.runs["legacy"]["badges"])["index fail"])
+        pilot = [text for text, _ in self.runs["pilot"]["badges"]]
+        self.assertEqual(pilot[-1], "paper-era route: union")
+
+    def test_behaviours_are_coloured_apart_from_failures(self):
+        classes = self.runs["legacy"]["classes"]
+        self.assertEqual(self.runs["legacy"]["cells"]["role_division"], ["present", "heuristic"])
+        self.assertEqual(classes["role_division"], "cell state-present kind-behaviour")
+        self.assertEqual(classes["semantic_failure"], "cell state-present kind-failure")
+        self.assertEqual(classes["negotiation"].split()[-1], "kind-behaviour")
+        self.assertEqual(classes["unresponsiveness"].split()[-1], "kind-failure")
+
+    def test_steps_are_the_stock_viewers_count_and_the_other_count_says_what_it_leaves_out(self):
+        """The legacy sample's eight events less the three prompts the
+        stock viewer's filters drop are five steps; the page's own cards
+        fold the observation into its action and leave the receipt out."""
+        run = self.runs["legacy"]
+        self.assertEqual((run["speed"]["steps"], run["speed"]["steps_less"]), (5, 3))
+        self.assertEqual(run["agent_steps"], [[3, 2], [2, 1]])
+        self.assertEqual(run["steps_text"], "5 steps, 3 without observations and receipts")
+        self.assertIn("1 of 4 step cards shown (5 steps", run["list_text"])
+        self.assertAlmostEqual(run["speed"]["time_per_step_ms"], run["speed"]["wall_ms"] / 5)
+        coordbench = self.runs["coordbench"]
+        self.assertEqual(coordbench["speed"]["steps"], 23)
+        self.assertEqual(coordbench["list_text"], "1 of 23 steps shown")
+        self.assertEqual(sum(steps for steps, _ in coordbench["agent_steps"]), 23)
+
+    def test_a_run_without_its_own_start_counts_from_the_pairs_start(self):
+        """A pilot's first step is its first hub call; its clock starts at
+        result.json's started_at, so the wall time is the pair's and the
+        first message comes 4 s after the start, as events.jsonl's t says
+        it does."""
+        pilot, fixture = self.runs["pilot"], self.runs["coordbench"]
+        self.assertEqual(pilot["clock"], "pair start")
+        self.assertEqual(pilot["end_ms"] - pilot["start_ms"], 42000)
+        self.assertEqual(pilot["speed"]["wall_ms"], 42000)
+        self.assertAlmostEqual(pilot["speed"]["first_message_ms"], 4000, delta=1)
+        self.assertEqual(fixture["clock"], "agents' start")
+        self.assertEqual(self.runs["stepless"]["clock"], "agents' start")
+        files = self.runs["stepless-pilot"]
+        self.assertEqual(files["clock"], "pair start")
+        self.assertEqual(files["speed"]["wall_ms"], 42000)
+        self.assertAlmostEqual(files["speed"]["first_message_ms"], 4000, delta=1)
+        self.assertEqual(self.runs["legacy"]["clock"], "first event")
+
+    def test_an_agent_log_covering_a_sliver_of_the_run_is_flagged(self):
+        truncated = self.runs["short"]["flags"]["truncated"]
+        self.assertEqual([(x["lane"], x["span_ms"], x["of"]) for x in truncated], [("agent_1", 7000, "the wall time")])
+        self.assertEqual(truncated[0]["of_ms"], 1200000)
+        self.assertEqual(self.runs["legacy"]["flags"]["truncated"], [])
+        self.assertTrue(self.runs["apart"]["flags"]["non_overlapping"])
+        self.assertEqual(self.runs["apart"]["flags"]["truncated"], [])
+        apart = self.runs["apart-short"]["flags"]["truncated"]
+        self.assertEqual([(x["lane"], x["of"]) for x in apart], [("agent_1", "the longest agent log")])
+        self.assertEqual(self.runs["sdk"]["flags"]["truncated"], [])
+        self.assertEqual(self.runs["pilot"]["flags"]["truncated"], [])
 
     def test_a_missing_index_row_is_not_published_never_a_fail(self):
         run = self.runs["unpublished"]
@@ -405,6 +560,15 @@ PAGE_CHECKS = r"""() => {
   const job = (repo, model) => ({ repo, task: "task6554", features: "feature1_feature2", model });
   out.index = [indexResult(index, job("typst_task", "gemini_flash_sdk")), indexResult(index, job("typst", "gemini_flash_sdk")),
                indexResult(index, job("typst_task", "gpt5")), indexResult(index, job("typst", "claude"))];
+  const time = metric("first_message_ms"), count = metric("steps"), share = metric("comm_share");
+  out.bars = [barWidths(time, [40], plain), barWidths(time, [40, 5000], plain), barWidths(time, [1000, 4000, null], plain),
+              barWidths(time, [0.004], relative), barWidths(share, [0.0004, 0.5], plain), barWidths(count, [3], plain),
+              barWidths(time, [60, 140], plain)];
+  out.timeline_widths = [timelineWidth(343), timelineWidth(1248), timelineWidth(0)];
+  const agent = (started_ms) => ({ started_ms });
+  out.clocks = [coordbenchClock([agent(5), agent(3)], "run_started", 1), coordbenchClock([agent(null)], "pair start (approximate)", 1),
+                coordbenchClock([agent(null)], "run_create phase (approximate)", 1), coordbenchClock([agent(null)], "run_started", 1),
+                coordbenchClock([agent(null)], null, null)];
   out.naive_times = [resultTimeMs("2026-10-09T23:06:38", { utc_offset_seconds: 7200 }),
                      resultTimeMs("2026-10-09T23:06:38.500000", { utc_offset_seconds: 7200 }),
                      resultTimeMs("2026-10-09T21:06:38Z", { utc_offset_seconds: 7200 })];
@@ -452,9 +616,97 @@ class PageFunctions(unittest.TestCase):
     def test_a_typst_pair_s_result_is_found_in_either_row(self):
         self.assertEqual(self.out["index"], [{"passed": False}, {"passed": False}, {"passed": True}, None])
 
+    def test_a_bar_is_as_long_as_the_value_it_prints(self):
+        """A lone 0.04 s prints as 0.0 s and draws no bar, where scaling by
+        the largest raw value drew a full one; bars scale by what is
+        shown, so two values that print alike (0.06 s and 0.14 s, both
+        0.1 s) draw alike."""
+        lone, beside, plain, ratio, share, steps, tenths = self.out["bars"]
+        self.assertEqual(lone, [0])
+        self.assertEqual(beside, [0, 100])
+        self.assertEqual(plain, [25, 100, 0])
+        self.assertEqual(ratio, [0])
+        self.assertEqual(share, [0, 100])
+        self.assertEqual(steps, [100])
+        self.assertEqual(tenths, [100, 100])
+
+    def test_a_timeline_keeps_its_text_size_and_scrolls_when_narrow(self):
+        self.assertEqual(self.out["timeline_widths"], [560, 1234, 1000])
+
+    def test_a_run_s_clock_starts_at_its_agents_its_pair_or_its_first_event(self):
+        self.assertEqual(self.out["clocks"], [{"anchor": "agents' start", "ms": 3}, {"anchor": "pair start", "ms": 1},
+                                              {"anchor": "pair start", "ms": 1}, {"anchor": "first event", "ms": None},
+                                              {"anchor": "first event", "ms": None}])
+
     def test_result_json_s_naive_times_are_read_in_the_run_host_s_zone(self):
         expected = 1791580000000 - 2000
         self.assertEqual(self.out["naive_times"], [expected, expected + 500, expected])
+
+
+def playwright_found():
+    """Whether node can load Playwright, the one way here to lay the page
+    out in a real browser; machines without it skip the layout check."""
+    if not NODE:
+        return False
+    done = subprocess.run([NODE, "-e", "require('playwright')"], capture_output=True, timeout=60)
+    return done.returncode == 0
+
+
+LAYOUT = r"""
+const { chromium } = require("playwright");
+(async () => {
+  let browser;
+  try { browser = await chromium.launch(); } catch (error) { process.stdout.write(JSON.stringify({ skip: error.message })); return; }
+  const page = await browser.newPage({ viewport: { width: 375, height: 800 } });
+  const problems = [];
+  page.on("pageerror", (e) => problems.push(e.message));
+  await page.goto(process.argv[1]);
+  await page.waitForSelector(".timeline svg");
+  const facts = await page.evaluate(() => {
+    const heights = (selector) => Array.from(document.querySelectorAll(selector)).map((e) => e.getBoundingClientRect().height);
+    const track = document.querySelector(".timeline .track");
+    return { lane: Math.min(...heights(".timeline .lane-label")), axis: Math.min(...heights(".timeline .axis")),
+      page_width: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth,
+      svg: document.querySelector(".timeline svg").getBoundingClientRect().width, track: track.clientWidth,
+      track_scrolls: track.scrollWidth > track.clientWidth };
+  });
+  await browser.close();
+  process.stdout.write(JSON.stringify(Object.assign(facts, { problems })));
+})();
+"""
+
+
+@unittest.skipUnless(playwright_found(), "node cannot load playwright")
+class PhoneLayout(unittest.TestCase):
+    """At a phone's width the timelines keep their lane letters and axis
+    labels at their CSS sizes, scroll inside their own box, and the page
+    itself does not scroll sideways."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(tempfile.mkdtemp())
+        report = cls.root / "report.html"
+        report.write_text(compare.report([FIXTURE], cooperbench_dir=NO_DATASET), encoding="utf-8")
+        done = subprocess.run([NODE, "-e", LAYOUT, report.as_uri()], capture_output=True, text=True, timeout=120)
+        if done.returncode != 0:
+            raise AssertionError(done.stderr)
+        cls.facts = json.loads(done.stdout)
+        if "skip" in cls.facts:
+            raise unittest.SkipTest("no browser for playwright: " + cls.facts["skip"])
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.root)
+
+    def test_the_timeline_text_stays_readable(self):
+        self.assertEqual(self.facts["problems"], [])
+        self.assertGreaterEqual(self.facts["lane"], 12)
+        self.assertGreaterEqual(self.facts["axis"], 11)
+
+    def test_the_timeline_scrolls_in_its_box_and_the_page_does_not(self):
+        self.assertTrue(self.facts["track_scrolls"])
+        self.assertEqual(self.facts["svg"], 560)
+        self.assertLessEqual(self.facts["page_width"], self.facts["viewport"])
 
 
 if __name__ == "__main__":

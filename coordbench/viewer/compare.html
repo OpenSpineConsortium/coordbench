@@ -25,7 +25,7 @@
   color-scheme: light dark;
   --bg: #f7f7f8; --panel: #ffffff; --text: #1f2328; --muted: #656d76; --border: #d0d7de;
   --accent: #0969da; --accent-text: #ffffff; --hi: #fff3bf; --hi-border: #d4a72c;
-  --pass: #1a7f37; --fail: #cf222e; --warn: #9a6700; --badge: #eaeef2;
+  --pass: #1a7f37; --fail: #cf222e; --warn: #9a6700; --badge: #eaeef2; --behaviour: #8250df;
   --tt-bash: #facc15; --tt-find_grep: #7dd3fc; --tt-view: #2563eb; --tt-edit: #22c55e; --tt-create: #15803d;
   --tt-communication: #fb923c; --tt-task_tracking: #c084fc; --tt-submit: #ef4444; --tt-think: #9ca3af;
   --tt-recall: #818cf8; --tt-condensation: #f472b6; --tt-message: #2dd4bf; --tt-other: #d1d5db;
@@ -35,7 +35,7 @@
   :root {
     --bg: #0d1117; --panel: #161b22; --text: #e6edf3; --muted: #9198a1; --border: #30363d;
     --accent: #4493f8; --accent-text: #0d1117; --hi: #3d3214; --hi-border: #d29922;
-    --pass: #3fb950; --fail: #f85149; --warn: #d29922; --badge: #21262d;
+    --pass: #3fb950; --fail: #f85149; --warn: #d29922; --badge: #21262d; --behaviour: #a371f7;
     --tt-bash: #fde047; --tt-find_grep: #38bdf8; --tt-view: #3b82f6; --tt-edit: #4ade80; --tt-create: #16a34a;
     --tt-communication: #fdba74; --tt-task_tracking: #d8b4fe; --tt-submit: #f87171; --tt-think: #6b7280;
     --tt-recall: #a5b4fc; --tt-condensation: #f9a8d4; --tt-message: #5eead4; --tt-other: #4b5563;
@@ -89,10 +89,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .state-present { color: var(--fail); font-weight: 600; }
 .state-absent { color: var(--pass); }
 .state-unlabelled, .state-unpublished, .state-na { color: var(--muted); }
+/* A coordination behaviour (role division, resource division, negotiation)
+   is no failure: present is its own colour, and absent is no success. */
+.kind-behaviour.state-present { color: var(--behaviour); }
+.kind-behaviour.state-absent { color: var(--muted); }
+th.kind-behaviour { color: var(--behaviour); }
 .timeline { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; margin: 8px 0; padding: 6px; }
-.timeline svg { width: 100%; display: block; }
-.timeline .lane-label { font-size: 11px; fill: var(--muted); }
-.timeline .axis { font-size: 10px; fill: var(--muted); }
+.timeline .track { overflow-x: auto; max-width: 100%; }
+.timeline svg { display: block; max-width: none; }
+.timeline .lane-label { font-size: 12px; fill: var(--muted); }
+.timeline .axis { font-size: 11px; fill: var(--muted); }
 .timeline rect.block { cursor: pointer; }
 .timeline rect.block:focus { outline: none; stroke: var(--text); stroke-width: 1.5; }
 .timeline .arrow { stroke: var(--text); stroke-width: 1; fill: none; opacity: .65; }
@@ -183,7 +189,9 @@ mark { background: var(--hi); color: inherit; outline: 1px solid var(--hi-border
     <div class="muted">Each cell: present, absent, not labelled or not published, with its source: judge
       (judge.json, a model's label), rule (judge.json, a symptom level App G's rule decided with no model, or set
       over the judge's), human (cause labels), heuristic (computed here) or data (the outcome). CooperBench released no
-      communication-error or symptom labels, so its runs show heuristics and the 23 cause labels only.</div>
+      communication-error or symptom labels, so its runs show heuristics and the 23 cause labels only. A failure present is
+      red and absent green; role division, resource division and negotiation are coordination behaviours (Sec 6.4), not
+      failures, so present is purple and absent plain.</div>
     <div class="scroll"><table id="matrix-table"></table></div>
   </section>
   <section aria-labelledby="timeline-title">
@@ -283,6 +291,28 @@ function stockToolType(step) {
   return "other";
 }
 
+/* The stock viewer's step count: every entry of the file but those its
+   isSystemPrompt drops (viewer.astro:513-522, on the first non-empty of
+   content, text and message), per lane. It is the page's "steps"; any
+   other count says what it leaves out. */
+function stockDrops(entry) {
+  const text = entry && (entry.content || entry.text || entry.message || "");
+  return typeof text === "string" && SCHEMA.stock_viewer_filters.some((f) => text.includes(f));
+}
+
+function stockCounts(entries, laneOf) {
+  const counts = { total: 0, by_lane: {} };
+  entries.forEach((entry) => {
+    if (stockDrops(entry)) return;
+    const lane = laneOf(entry);
+    counts.total += 1;
+    counts.by_lane[lane] = (counts.by_lane[lane] || 0) + 1;
+  });
+  return counts;
+}
+
+const LESS_TEXT = "without observations and receipts";
+
 function isReceipt(name) {
   return String(name || "").includes("comm_get") || String(name || "").includes("receive");
 }
@@ -326,8 +356,9 @@ function nameToLane(name, map) {
 function emptyRun(meta, shape) {
   return {
     label: meta.label || "run", shape, source: meta.source || "", repo: null, task: null, features: null, model: null,
-    arm: null, driver: null, setting: null, timestamps_kind: "real",
-    outcome: { passed: null, has_conflict: null, strategy: null, paper_passed: null, route: null, missing: false },
+    arm: null, driver: null, setting: null, timestamps_kind: "real", stock_steps: null, clock: { anchor: "first event", ms: null },
+    outcome: { passed: null, rule: null, has_conflict: null, strategy: null, paper_passed: null, route: null, paper_scored: false,
+      missing: false },
     agents: [], lanes: [], steps: [], messages: [], hub: [],
     labels: { comm_error: null, symptoms: null, cause: null, emergent: null, heuristics: null, judge_meta: null },
     patches: (meta.extras && meta.extras.patches) || {}, features_info: null, warnings: [], flags: {},
@@ -357,29 +388,31 @@ function fromLegacy(events, meta) {
   const perAgent = {};
   events.forEach((e) => {
     const lane = lanes[e.agentId];
-    const info = perAgent[lane] || (perAgent[lane] = { model: null, metrics: null, first: null, last: null, steps: 0 });
+    const info = perAgent[lane] || (perAgent[lane] = { model: null, metrics: null, first: null, last: null });
     const t = timeMs(e.timestamp);
     if (t != null) { info.first = info.first == null ? t : Math.min(info.first, t); info.last = Math.max(info.last || t, t); }
     if (e.llm_metrics) info.metrics = e.llm_metrics;
     const model = e.tool_call_metadata && e.tool_call_metadata.model_response && e.tool_call_metadata.model_response.model;
     if (model && !info.model) info.model = model;
     if (!("action" in e)) return;
-    legacyStep(run, e, lane, observations[e.agentId + ":" + e.id], info);
+    legacyStep(run, e, lane, observations[e.agentId + ":" + e.id]);
   });
+  run.stock_steps = stockCounts(events, (e) => lanes[e.agentId]);
   run.agents = run.lanes.map((lane) => {
     const info = perAgent[lane] || {};
     const usage = (info.metrics && info.metrics.accumulated_token_usage) || {};
     const model = info.model || (info.metrics && info.metrics.model !== "default" ? info.metrics.model : null);
-    return { lane, name: lane, model, steps: info.steps || 0,
+    return { lane, name: lane, model,
       tokens: info.metrics ? (usage.prompt_tokens || 0) + (usage.completion_tokens || 0) : null,
-      cost: info.metrics ? numberOrNull(info.metrics.accumulated_cost) : null, first_ms: info.first, last_ms: info.last };
+      cost: info.metrics ? numberOrNull(info.metrics.accumulated_cost) : null, first_ms: info.first, last_ms: info.last,
+      log_first_ms: info.first, log_last_ms: info.last };
   });
   matchLegacyReceipts(run);
   run.flags.non_overlapping = !agentsOverlap(run.agents);
   return run;
 }
 
-function legacyStep(run, e, lane, obs, info) {
+function legacyStep(run, e, lane, obs) {
   const action = e.action;
   if (action === "system" || action === "recall" && e.source === "user") return;
   const name = (e.tool_call_metadata && e.tool_call_metadata.function_name) || action;
@@ -392,7 +425,6 @@ function legacyStep(run, e, lane, obs, info) {
       from: m[1], args: { content: m[3], from: m[1], sent: m[2] } });
     return;
   }
-  info.steps += 1;
   let type;
   if (action === "read") type = "view";
   else if (action === "call_tool_mcp") type = "communication";
@@ -456,11 +488,12 @@ function fromWebsiteSteps(data, meta, shape) {
       to: args.to || args.recipient || null, from: args.from || null });
   });
   run.timestamps_kind = shape === "openhands-sdk" ? "interpolated" : "real";
+  run.stock_steps = stockCounts(data.steps, (s) => lanes[s.agentId]);
   const trusted = m.features === "feature1_feature2";
   run.agents = run.lanes.map((lane, i) => {
     const block = m["agent_" + (i + 1)] || {};
     const steps = run.steps.filter((s) => s.lane === lane && !s.hidden);
-    return { lane, name: lane, model: block.model || null, steps: steps.length, tokens: null,
+    return { lane, name: lane, model: block.model || null, tokens: null,
       cost: trusted ? numberOrNull(block.cost) : null, first_ms: firstTime(steps), last_ms: lastTime(steps) };
   });
   if (!trusted) run.warnings.push("per-agent cost and steps in this file's metadata come from the website's " +
@@ -529,14 +562,17 @@ function fromCoordbench(data, meta) {
       from: byId[args.from] || args.from || null, hub: s.coordbench && s.coordbench.hub,
       recorded: !(s.coordbench && s.coordbench.text_recorded === false) });
   });
+  run.stock_steps = stockCounts(data.steps, (s) => s.agentId);
   run.agents = agents.map((a) => {
     const steps = run.steps.filter((s) => s.lane === a.lane && !s.hidden);
     const tokens = a.tokens ? TOKEN_KEYS.reduce((sum, k) => sum + (a.tokens[k] || 0), 0) : null;
-    const partial = !!a.tokens && TOKEN_KEYS.some((k) => a.tokens[k] == null);
-    return { lane: a.lane, name: a.id, model: a.model, steps: steps.length, tokens, tokens_partial: partial, cost: numberOrNull(a.cost),
+    const reason = a.tokens ? tokenShortfall(a) : null;
+    return { lane: a.lane, name: a.id, model: a.model, tokens, tokens_partial: !!reason, tokens_reason: reason,
+      cost: numberOrNull(a.cost), started_ms: timeMs(a.started_at),
       first_ms: earliest([timeMs(a.started_at), firstTime(steps)]), last_ms: latest([timeMs(a.ended_at), lastTime(steps)]),
       status: a.status, role: a.role };
   });
+  run.clock = coordbenchClock(run.agents, c.anchor, timeMs(m.started_at));
   run.messages = (c.messages || []).map((msg) => ({ id: msg.id, from: byId[msg.from] || msg.from,
     to: msg.to === "broadcast" ? "broadcast" : byId[msg.to] || msg.to, t_ms: timeMs(msg.sent_at),
     content: msg.content, read_ms: (msg.read_at || []).map(timeMs).filter((t) => t != null)[0] || null }));
@@ -551,11 +587,43 @@ function fromCoordbench(data, meta) {
   return run;
 }
 
+// Why an agent's token total is only a lower bound, or null when it is
+// not: a count nobody measured, or output counts summed from a transcript
+// or a stream whose messages lack the stop_reason line that carries the
+// final count (export.py transcript_usage).
+function tokenShortfall(agent) {
+  const reasons = [];
+  if (TOKEN_KEYS.some((k) => agent.tokens[k] == null)) reasons.push("a count was not measured");
+  if (agent.tokens_output_final === false) reasons.push("the " + (agent.tokens_source || "transcript") +
+    "'s output counts may not be final");
+  return reasons.length ? reasons.join("; ") : null;
+}
+
+/* Where a run's clock starts. An agent's own start (its phase in the
+   timings, or its transcript's first line) when one is known; for a run
+   from before per-agent timings, which also has no run_started event, the
+   pair's start in result.json, since its first step is only its first hub
+   call; else the file's first event. */
+const CLOCK_TEXT = {
+  "agents' start": "times count from the first agent's own start: its phase in result.json's timings, or its transcript's first line",
+  "pair start": "times count from result.json's started_at: the run has no run_started event and no agent's own start, " +
+    "so the wall time holds the pair's setup and its first step is only its first hub call",
+  "first event": "times count from the earliest step or event in the file",
+};
+
+function coordbenchClock(agents, hubAnchor, pairStart) {
+  const starts = agents.map((a) => a.started_ms).filter((t) => t != null);
+  if (starts.length) return { anchor: "agents' start", ms: Math.min(...starts) };
+  if (hubAnchor !== "run_started" && pairStart != null) return { anchor: "pair start", ms: pairStart };
+  return { anchor: "first event", ms: null };
+}
+
 function coordbenchOutcome(run, o) {
-  run.outcome = { passed: o.both_passed == null ? null : !!o.both_passed,
+  run.outcome = { passed: o.both_passed == null ? null : !!o.both_passed, rule: "63b9d44",
     has_conflict: o.has_naive_merge_conflict == null ? null : !!o.has_naive_merge_conflict,
     strategy: o.merge_strategy || null, paper_passed: o.paper_both_passed == null ? null : !!o.paper_both_passed,
-    route: o.cascade_route || (o.merge_strategy === "solo-agent1" ? "lead-alone" : null), missing: o.both_passed == null };
+    route: o.cascade_route || null, paper_scored: o.cascade_route != null || o.paper_both_passed != null,
+    missing: o.both_passed == null };
 }
 
 function coordbenchLabels(run, judge, cause) {
@@ -593,10 +661,10 @@ function fromSevenKey(steps, meta) {
     makeStep(run, { lane: lanes[s.agentId], t_ms: timeMs(s.timestampMs), type, name: s.toolName || "",
       text: s.details || "", args: s.args || {}, hidden: isReceipt(s.toolName) });
   });
+  run.stock_steps = stockCounts(steps, (s) => lanes[s.agentId]);
   run.agents = run.lanes.map((lane) => {
     const own = run.steps.filter((s) => s.lane === lane && !s.hidden);
-    return { lane, name: lane, model: null, steps: own.length, tokens: null, cost: null, first_ms: firstTime(own),
-      last_ms: lastTime(own) };
+    return { lane, name: lane, model: null, tokens: null, cost: null, first_ms: firstTime(own), last_ms: lastTime(own) };
   });
   messagesFromSteps(run, lanes);
   return run;
@@ -633,9 +701,12 @@ function fromPairFiles(data, meta) {
   run.hub = events.map((e) => Object.assign({}, e, { t_ms: anchor + (e.t || 0) * 1000, lane: byId[e.agent] || null }));
   run.agents = ids.map((id) => {
     const own = run.steps.filter((s) => s.lane === byId[id]);
-    return { lane: byId[id], name: id, model: records[id].model || result.model, steps: own.length, tokens: null,
-      cost: numberOrNull(records[id].cost), first_ms: firstTime(own), last_ms: lastTime(own), status: records[id].status };
+    const phase = agentPhase(result, id, started);
+    return { lane: byId[id], name: id, model: records[id].model || result.model, tokens: null,
+      cost: numberOrNull(records[id].cost), started_ms: phase.started_ms, first_ms: earliest([phase.started_ms, firstTime(own)]),
+      last_ms: latest([phase.ended_ms, lastTime(own)]), status: records[id].status };
   });
+  run.clock = coordbenchClock(run.agents, started ? "run_started" : null, resultTimeMs(result.started_at, result));
   const evaluation = files.evaluation || {};
   const merge = evaluation.merge || {};
   const cascade = evaluation.cascade || {};
@@ -649,10 +720,26 @@ function fromPairFiles(data, meta) {
   return run;
 }
 
+// An agent's phase in result.json's timings, on the wall clock. A run from
+// before the timings and run_started (a session-driver pilot) records no
+// end of its own for an agent, so the pair's end stands in, as export.py's
+// agent_end has it.
+function agentPhase(result, id, started) {
+  const record = (result.timings || []).find((t) => t && t.phase === "agent" && t.agent === id);
+  if (record) return { started_ms: resultTimeMs(record.started, result), ended_ms: resultTimeMs(record.ended, result) };
+  return { started_ms: null, ended_ms: started ? null : resultTimeMs(result.ended_at, result) };
+}
+
 const RECEIVE_HUB_TOOLS = ["receive_messages", "wait_for_message", "pending"];
+// The hub's calls that send, which export.py names openhands_comm_send.
+const SEND_HUB_TOOLS = ["send_message", "broadcast", "request", "respond"];
+
+function isSend(step) {
+  return step.name === "openhands_comm_send" || SEND_HUB_TOOLS.includes(step.name);
+}
 
 function hubToolType(tool) {
-  if (["send_message", "broadcast", "request", "respond"].includes(tool) || RECEIVE_HUB_TOOLS.includes(tool)) return "communication";
+  if (SEND_HUB_TOOLS.includes(tool) || RECEIVE_HUB_TOOLS.includes(tool)) return "communication";
   if (["task_create", "task_claim", "task_update", "task_list"].includes(tool)) return "task_tracking";
   return "other";
 }
@@ -663,6 +750,7 @@ function applyExtras(run, extras) {
   const row = extras.index_result;
   if (row) {
     run.outcome.passed = row.missing ? null : !!row.passed;
+    run.outcome.rule = "index";
     run.outcome.has_conflict = row.hasConflict == null ? null : !!row.hasConflict;
     run.outcome.missing = !!row.missing;
   }
@@ -696,13 +784,54 @@ function finishRun(run) {
   run.steps.sort((a, b) => (a.t_ms == null) - (b.t_ms == null) || (a.t_ms || 0) - (b.t_ms || 0));
   const times = run.steps.map((s) => s.t_ms).filter((t) => t != null);
   const ends = run.steps.map((s) => s.end_ms != null ? s.end_ms : s.t_ms).filter((t) => t != null);
-  /* A run starts when its first agent does: an agent's own start (its
-     phase, its prompt, its system event) comes before its first step. */
-  run.start_ms = earliest(times.concat(run.agents.map((a) => a.first_ms)));
+  /* A run starts when its clock does (run.clock): an agent's own start
+     (its phase, its prompt, its system event) comes before its first step,
+     and the pair's start before both. */
+  run.start_ms = earliest(times.concat(run.agents.map((a) => a.first_ms), [run.clock.ms]));
   run.end_ms = latest(ends.concat(run.agents.map((a) => a.last_ms)));
+  countSteps(run);
   run.repoCanonical = canonicalRepo(run.repo);
   run.labels.heuristics = heuristics(run.messages);
+  run.flags.truncated = possiblyTruncated(run);
   run.speed = speedMetrics(run);
+}
+
+// Each agent's two step counts: the stock viewer's (steps) and the page's
+// own cards without the receipts (steps_less). A run with no file of the
+// stock viewer's shape (a pair directory's hub calls) counts every step.
+function countSteps(run) {
+  if (!run.stock_steps) {
+    run.stock_steps = { total: run.steps.length, by_lane: {} };
+    run.steps.forEach((s) => { run.stock_steps.by_lane[s.lane] = (run.stock_steps.by_lane[s.lane] || 0) + 1; });
+  }
+  run.agents.forEach((a) => {
+    a.steps = run.stock_steps.by_lane[a.lane] || 0;
+    a.steps_less = run.steps.filter((s) => s.lane === a.lane && !s.hidden).length;
+  });
+}
+
+/* An agent whose own log covers a small share of the run, as the 6
+   events over 7 s of a 20-minute run in CooperBench's gpt5 pallets_click
+   2068 feature1_feature6 file, was probably cut short. The share is of the
+   run's wall time, or, when the agents' logs do not overlap (so the wall
+   time spans the gap between them), of the longest agent's log. Only real
+   times are checked: interpolated times fill each agent's phase, and the
+   hub's record holds only the coordination calls. */
+const TRUNCATED_SHARE = 0.1;
+
+function possiblyTruncated(run) {
+  if (run.timestamps_kind !== "real" || run.agents.length < 2) return [];
+  const spans = run.agents.map((a) => {
+    const own = run.steps.filter((s) => s.lane === a.lane);
+    const first = a.log_first_ms != null ? a.log_first_ms : firstTime(own);
+    const last = a.log_last_ms != null ? a.log_last_ms : lastTime(own);
+    return { lane: a.lane, span_ms: first != null && last != null ? last - first : null };
+  });
+  const wall = run.start_ms != null && run.end_ms != null ? run.end_ms - run.start_ms : null;
+  const reference = run.flags.non_overlapping ? Math.max(...spans.map((x) => x.span_ms || 0)) : wall;
+  if (!reference) return [];
+  return spans.filter((x) => x.span_ms != null && x.span_ms < TRUNCATED_SHARE * reference)
+    .map((x) => Object.assign(x, { of_ms: reference, of: run.flags.non_overlapping ? "the longest agent log" : "the wall time" }));
 }
 
 /* Heuristics, computed here from the messages: free, and never a label. */
@@ -753,16 +882,17 @@ function speedMetrics(run) {
   const start = run.start_ms;
   const since = (step) => step && start != null ? step.t_ms - start : null;
   const calls = visible.filter((s) => !NON_CALL_TYPES.includes(s.type));
-  const sends = calls.filter((s) => s.name === "openhands_comm_send");
+  const sends = calls.filter(isSend);
   const wall = run.start_ms != null && run.end_ms != null ? run.end_ms - run.start_ms : null;
-  const steps = visible.filter((s) => s.type !== "message").length;
+  const steps = run.stock_steps.total;
   const tokens = run.agents.some((a) => a.tokens != null) ? run.agents.reduce((sum, a) => sum + (a.tokens || 0), 0) : null;
-  const tokensPartial = tokens != null && run.agents.some((a) => a.tokens == null || a.tokens_partial);
+  const tokensReason = tokens == null ? null : runTokenShortfall(run.agents);
   const cost = run.agents.some((a) => a.cost != null) ? run.agents.reduce((sum, a) => sum + (a.cost || 0), 0) : null;
   const submits = visible.filter((s) => s.type === "submit");
   const metrics = {
-    wall_ms: wall, active_ms: activeSpan(run.agents), steps, steps_per_min: wall ? steps / (wall / 60000) : null,
-    time_per_step_ms: wall != null && steps ? wall / steps : null, tokens, tokens_partial: tokensPartial, cost,
+    wall_ms: wall, active_ms: activeSpan(run.agents), steps, steps_less: run.steps.filter((s) => !s.hidden).length,
+    steps_per_min: wall ? steps / (wall / 60000) : null, time_per_step_ms: wall != null && steps ? wall / steps : null,
+    tokens, tokens_partial: !!tokensReason, tokens_reason: tokensReason, cost,
     first_message_ms: since(sends[0]), first_edit_ms: since(visible.find((s) => s.type === "edit" || s.type === "create")),
     first_test_ms: since(visible.find((s) => (s.type === "bash" || s.type === "find_grep") && TEST_COMMAND.test(s.args.command || ""))),
     submit_ms: submits.length ? since(submits[submits.length - 1]) : null,
@@ -775,6 +905,15 @@ function speedMetrics(run) {
     metrics.hub_ms = dones.reduce((sum, e) => sum + Math.max((e.duration_ms || 0) - (e.blocked_ms || 0), 0), 0);
   }
   return metrics;
+}
+
+// Why a run's token total is a lower bound: an agent with no count at
+// all, or an agent's own shortfall (tokenShortfall).
+function runTokenShortfall(agents) {
+  const reasons = [];
+  if (agents.some((a) => a.tokens == null)) reasons.push("an agent's tokens were not measured");
+  agents.forEach((a) => { if (a.tokens_reason && !reasons.includes(a.tokens_reason)) reasons.push(a.tokens_reason); });
+  return reasons.length ? reasons.join("; ") : null;
 }
 
 function activeSpan(agents) {
@@ -801,20 +940,36 @@ function longestIdle(run) {
 function agentMetrics(run, agent) {
   const own = run.steps.filter((s) => s.lane === agent.lane && !s.hidden && s.t_ms != null);
   const start = run.start_ms;
-  const sends = own.filter((s) => s.name === "openhands_comm_send");
+  const sends = own.filter(isSend);
   const calls = own.filter((s) => !NON_CALL_TYPES.includes(s.type));
   return { wall_ms: agent.first_ms != null && agent.last_ms != null ? agent.last_ms - agent.first_ms : null,
-    steps: own.length, first_message_ms: sends.length && start != null ? sends[0].t_ms - start : null,
+    steps: agent.steps, steps_less: agent.steps_less, first_message_ms: sends.length && start != null ? sends[0].t_ms - start : null,
     comm_share: calls.length ? sends.length / calls.length : null, tokens: agent.tokens, cost: agent.cost };
 }
 
-/* The failure-mode presence matrix: one cell per column per run. */
+/* The failure-mode presence matrix: one cell per column per run. Each
+   column is a failure (present is bad) or a coordination behaviour (Sec 6.4's
+   emergent role division, resource division and negotiation: present is
+   no failure), and each kind has its own colours. */
 const MATRIX_COLUMNS = [
-  ["repetition", "Repetition"], ["unresponsiveness", "Unresponsiveness"], ["hallucination", "Hallucination"],
-  ["primary", "Primary symptom (Table 1)"], ["secondary", "Secondary symptoms"], ["cause", "Cause"],
-  ["role_division", "Role division"], ["resource_division", "Resource division"], ["negotiation", "Negotiation"],
-  ["naive_conflict", "Naive conflict"], ["semantic_failure", "Semantic failure (clean merge, failed)"],
+  ["repetition", "Repetition", "failure"], ["unresponsiveness", "Unresponsiveness", "failure"],
+  ["hallucination", "Hallucination", "failure"], ["primary", "Primary symptom (Table 1)", "failure"],
+  ["secondary", "Secondary symptoms", "failure"], ["cause", "Cause", "failure"],
+  ["role_division", "Role division", "behaviour"], ["resource_division", "Resource division", "behaviour"],
+  ["negotiation", "Negotiation", "behaviour"], ["naive_conflict", "Naive conflict", "failure"],
+  ["semantic_failure", "Semantic failure (clean merge, failed)", "failure"],
 ];
+const MATRIX_GROUPS = [["Communication errors (App F)", 3, "failure"], ["Symptoms and cause", 3, "failure"],
+  ["Coordination behaviours, not failures", 3, "behaviour"], ["Merge outcome", 2, "failure"]];
+
+function columnKind(key) {
+  const column = MATRIX_COLUMNS.find((c) => c[0] === key);
+  return column ? column[2] : "failure";
+}
+
+function cellClass(key, state) {
+  return "cell state-" + state + " kind-" + columnKind(key);
+}
 
 function cell(state, source, text, evidence) {
   return { state, source, text: text || "", evidence: evidence || [] };
@@ -901,12 +1056,12 @@ function matrixCell(run, column) {
       return emergentCell(run, "negotiation", (r) => cell(h.answered_questions ? "present" : "absent", "heuristic",
         h.answered_questions ? h.answered_questions + " answered question(s)" : ""));
     case "naive_conflict":
-      if (o.has_conflict == null) return cell(o.missing ? "unpublished" : "unlabelled", null);
+      if (o.has_conflict == null) return cell(o.missing && o.rule !== "63b9d44" ? "unpublished" : "unlabelled", null);
       return cell(o.has_conflict ? "present" : "absent", "data");
     case "semantic_failure":
-      if (o.has_conflict == null || o.passed == null) return cell(o.missing ? "unpublished" : "unlabelled", null);
+      if (o.has_conflict == null || o.passed == null) return cell(o.missing && o.rule !== "63b9d44" ? "unpublished" : "unlabelled", null);
       if (o.has_conflict) return cell("na", "data", "conflict");
-      return cell(o.passed ? "absent" : "present", "data");
+      return cell(o.passed ? "absent" : "present", "data", VERDICT_NAMES[o.rule] || "");
     default: return cell("unlabelled", null);
   }
 }
@@ -938,7 +1093,10 @@ function formatValue(metric, value) {
 const SPEED_METRICS = [
   { key: "wall_ms", label: "Wall time (first agent's start to last agent's end)", kind: "time" },
   { key: "active_ms", label: "Active span (union of agents' spans)", kind: "time" },
-  { key: "steps", label: "Steps", kind: "count" },
+  { key: "steps", label: "Steps (every step, as the stock viewer counts them)", kind: "count" },
+  { key: "steps_less", csv: "steps_without_observations_and_receipts", label: "Steps " + LESS_TEXT +
+    " (the page's step cards: an OpenHands observation sits in its action's card, and the message receipts are left out)",
+    kind: "count" },
   { key: "steps_per_min", label: "Steps per minute", kind: "count", digits: 2, higherIsFaster: true },
   { key: "time_per_step_ms", label: "Time per step", kind: "time" },
   { key: "tokens", label: "Tokens (prompt and completion)", kind: "count" },
@@ -965,9 +1123,11 @@ function csvLine(values) {
 }
 
 function speedCsv(runs) {
-  const head = ["label", "shape", "timestamps"].concat(SPEED_METRICS.map((m) => m.key), ["tokens_lower_bound"]);
-  return [csvLine(head)].concat(runs.map((r) => csvLine([r.label, r.shape, r.timestamps_kind]
-    .concat(SPEED_METRICS.map((m) => r.speed[m.key]), [!!r.speed.tokens_partial])))).join("\n") + "\n";
+  const head = ["label", "shape", "timestamps", "clock"].concat(SPEED_METRICS.map((m) => m.csv || m.key),
+    ["tokens_lower_bound", "possibly_truncated"]);
+  return [csvLine(head)].concat(runs.map((r) => csvLine([r.label, r.shape, r.timestamps_kind, r.clock.anchor]
+    .concat(SPEED_METRICS.map((m) => r.speed[m.key]), [!!r.speed.tokens_partial,
+      r.flags.truncated.map((x) => laneLetter(r, x.lane)).join(" ")])))).join("\n") + "\n";
 }
 
 function matrixCsv(runs) {
@@ -1018,10 +1178,15 @@ function addRun(data, meta) {
     const run = normalise(data, Object.assign({}, meta, { label }));
     run.index = page.runs.length;
     page.runs.push(run);
-    status("loaded " + label + " (" + SHAPES[run.shape] + ", " + run.steps.length + " steps)");
+    status("loaded " + label + " (" + SHAPES[run.shape] + ", " + stepsText(run) + ")");
   } catch (error) {
     status("could not load " + (meta.label || meta.source || "a file") + ": " + error.message, "error");
   }
+}
+
+function stepsText(run) {
+  const less = run.speed.steps_less;
+  return run.speed.steps + " steps" + (less !== run.speed.steps ? ", " + less + " " + LESS_TEXT : "");
 }
 
 function uniqueLabel(label) {
@@ -1189,21 +1354,66 @@ function laneLetter(run, lane) {
   return i >= 0 ? LANE_LETTERS[i] || String(i + 1) : "?";
 }
 
-function outcomeBadges(run) {
+/* The outcome cell keeps each scoring rule under its own name (PARITY.md
+   decision 1): 63b9d44's verdict with the merge strategy that decided it
+   (eval.json both_passed and merge.strategy), the paper-era cascade's
+   verdict with its route (eval.json's cascade block), and for a published
+   run the website index's own verdict, which is neither of coordbench's. */
+const VERDICT_NAMES = { "63b9d44": "63b9d44 verdict", index: "website index verdict" };
+const VERDICT_TITLES = {
+  "63b9d44": "CooperBench 63b9d44's verdict (eval.json both_passed): both feature suites pass on the naive merge, or, " +
+    "when it does not merge cleanly, on the lead's patch alone",
+  index: "the website's index.json passed: the paper-era cascade for the paper's five models, the newer runner's " +
+    "both_passed for the Gemini runs (PARITY.md row 110)",
+};
+const STRATEGY_NAMES = { naive: "naive merge", "skip-merge-identical": "identical patches", "solo-agent1": "lead's patch alone" };
+const ROUTE_NAMES = { naive: "naive", union: "union", llm: "learned resolver", none: "none passed" };
+
+function badge(text, cls, title) {
+  return { text, cls: cls || "", title: title || "" };
+}
+
+function outcomeParts(run) {
   const o = run.outcome;
   const parts = [];
-  if (o.missing) parts.push('<span class="badge">not published</span>');
-  else if (o.passed != null) parts.push('<span class="badge ' + (o.passed ? "pass" : "fail") + '">' + (o.passed ? "pass" : "fail") + "</span>");
-  if (o.has_conflict) parts.push('<span class="badge warn">conflict</span>');
-  const route = { naive: "N", union: "U", llm: "L", "lead-alone": "lead-alone", none: "none" }[o.route];
-  if (route) parts.push('<span class="badge" title="cascade route">' + escapeHtml(route) + "</span>");
-  if (o.paper_passed != null) parts.push('<span class="badge" title="paper-era cascade verdict">paper ' + (o.paper_passed ? "pass" : "fail") + "</span>");
-  return parts.join(" ") || '<span class="muted">-</span>';
+  if (o.missing && o.rule === "63b9d44") parts.push(badge("not scored", "", "eval.json holds no verdict for this pair"));
+  else if (o.missing) parts.push(badge("not published", "", "the website's index has no merge report for this run"));
+  else if (o.passed != null) parts.push(badge((o.rule || "verdict") + " " + (o.passed ? "pass" : "fail"), o.passed ? "pass" : "fail",
+    VERDICT_TITLES[o.rule]));
+  if (o.strategy) parts.push(badge("63b9d44 strategy: " + (STRATEGY_NAMES[o.strategy] || o.strategy), "",
+    "CooperBench 63b9d44's merge strategy (eval.json merge.strategy): " + o.strategy));
+  if (o.has_conflict) parts.push(badge("naive conflict", "warn", "the naive merge of the two patches conflicted, under either rule"));
+  if (o.paper_passed != null) parts.push(badge("paper-era " + (o.paper_passed ? "pass" : "fail"), o.paper_passed ? "pass" : "fail",
+    "the paper-era cascade's verdict (eval.json cascade.verdict_paper_era): naive, then union, then the learned resolver"));
+  if (o.route) parts.push(badge("paper-era route: " + (ROUTE_NAMES[o.route] || o.route), "",
+    "the paper-era cascade's route (eval.json cascade.route): the merge that passed both suites"));
+  if (o.rule === "63b9d44" && !o.paper_scored && !o.missing) parts.push(badge("paper-era not scored", "",
+    "eval.json has no cascade block; run.py rescore adds one from the patches"));
+  return parts;
+}
+
+function outcomeBadges(run) {
+  const parts = outcomeParts(run);
+  if (!parts.length) return '<span class="muted">-</span>';
+  return parts.map((p) => '<span class="badge' + (p.cls ? " " + p.cls : "") + '"' +
+    (p.title ? ' title="' + escapeHtml(p.title) + '"' : "") + ">" + escapeHtml(p.text) + "</span>").join(" ");
 }
 
 function kindBadge(run) {
   const text = run.timestamps_kind === "real" ? "real" : run.timestamps_kind;
   return '<span class="badge ' + (unreliable(run) ? "warn" : "") + '">' + escapeHtml(text) + "</span>";
+}
+
+function clockBadge(run) {
+  return '<span class="badge' + (run.clock.anchor === "pair start" ? " warn" : "") + '" title="' +
+    escapeHtml(CLOCK_TEXT[run.clock.anchor]) + '">clock: ' + escapeHtml(run.clock.anchor) + "</span>";
+}
+
+function truncatedBadges(run) {
+  return run.flags.truncated.map((x) => ' <span class="badge warn" title="' + escapeHtml("this agent's own log spans " +
+    formatMs(x.span_ms) + ", under a tenth of " + x.of + " (" + formatMs(x.of_ms) + "): the file may have lost the rest of it") + '">' +
+    escapeHtml(laneLetter(run, x.lane) + "'s log covers " + formatMs(x.span_ms) + " of " + formatMs(x.of_ms) + ": possibly truncated") +
+    "</span>").join("");
 }
 
 const RUN_COLUMNS = [
@@ -1232,8 +1442,8 @@ function renderRunsTable() {
     escapeHtml(SHAPES[r.shape]) + "</span></td><td>" + escapeHtml(r.model || "-") + "</td><td>" + escapeHtml(r.arm || "-") +
     "</td><td>" + escapeHtml(r.driver || "-") + "</td><td>" + outcomeBadges(r) + '</td><td class="num">' + r.lanes.length +
     "</td><td>" + r.agents.map((a) => escapeHtml(laneLetter(r, a.lane)) + ": " + a.steps).join(", ") + '</td><td class="num">' +
-    r.messages.length + '</td><td class="num">' + formatMs(r.speed.wall_ms) + "</td><td>" + kindBadge(r) +
-    (r.flags.non_overlapping ? ' <span class="badge warn">agent logs do not overlap</span>' : "") +
+    r.messages.length + '</td><td class="num">' + formatMs(r.speed.wall_ms) + "</td><td>" + kindBadge(r) + " " + clockBadge(r) +
+    (r.flags.non_overlapping ? ' <span class="badge warn">agent logs do not overlap</span>' : "") + truncatedBadges(r) +
     '</td><td><button type="button" data-remove="' + r.index + '" aria-label="Remove ' + escapeHtml(r.label) + '">Remove</button></td></tr>').join("");
   table.innerHTML = head + "<tbody>" + body + "</tbody>";
 }
@@ -1273,6 +1483,27 @@ function rankedRuns(metric, runs, values, include) {
     .sort((a, b) => metric.higherIsFaster ? b.v - a.v : a.v - b.v);
 }
 
+// A value as the page prints it, rounded the same way, so a bar is as
+// long as its label says: formatMs keeps a tenth of a second under 10 s
+// and whole seconds above.
+function shownNumber(metric, value, options) {
+  if (value == null) return null;
+  if (options.relative) return Number(value.toFixed(2));
+  if (options.ownScale && metric.kind === "time" || metric.kind === "share") return Number((value * 100).toFixed(1));
+  if (metric.kind === "time") return Math.abs(value) < 10000 ? Math.round(value / 100) * 100 : Math.round(value / 1000) * 1000;
+  if (metric.kind === "cost") return Number(value.toFixed(4));
+  return Number(value.toFixed(metric.digits || 0));
+}
+
+// The bars' widths in percent: each shown value over the largest. When
+// every shown value is 0 (a lone 0.04 s prints as 0.0 s) no bar is drawn,
+// where scaling by the largest raw value would draw a full one.
+function barWidths(metric, values, options) {
+  const shown = values.map((v) => shownNumber(metric, v, options));
+  const max = Math.max(0, ...shown.filter((v) => v != null));
+  return shown.map((v) => v == null || max <= 0 ? 0 : Math.max(v > 0 ? 0.5 : 0, (v / max) * 100));
+}
+
 function renderSpeed() {
   const container = el("speed");
   if (!page.runs.length) { container.innerHTML = '<div class="empty">Load runs to compare their speed.</div>'; return; }
@@ -1281,17 +1512,18 @@ function renderSpeed() {
   container.innerHTML = SPEED_METRICS.map((metric) => {
     const values = page.runs.map((r) => metricValue(r, metric, options, base));
     if (values.every((v) => v == null)) return "";
-    const max = Math.max(...values.filter((v) => v != null), 0) || 1;
+    const widths = barWidths(metric, values, options);
     const ranked = rankedRuns(metric, page.runs, values, options.include);
     const rows = page.runs.map((r, i) => {
       const v = values[i];
       const rank = ranked.findIndex((x) => x.r === r);
-      const shown = (lowerBound(r, metric, options, base) ? ">= " : "") + (v == null ? "-" : options.relative ? "x" + v.toFixed(2) :
+      const bound = lowerBound(r, metric, options, base);
+      const shown = (bound ? ">= " : "") + (v == null ? "-" : options.relative ? "x" + v.toFixed(2) :
         options.ownScale && metric.kind === "time" ? (v * 100).toFixed(1) + "% of wall" : formatValue(metric, v));
       return '<div class="bar-row"><div class="name" title="' + escapeHtml(r.label) + '">' + (rank >= 0 ? "#" + (rank + 1) + " " : "") +
         escapeHtml(r.label) + '</div><div class="bar-track"><div class="bar' + (unreliable(r) ? " unreliable" : "") +
-        '" style="width:' + (v == null ? 0 : Math.max(0.5, (v / max) * 100)).toFixed(2) + '%"></div></div><div class="value">' +
-        escapeHtml(shown) + "</div></div>";
+        '" style="width:' + widths[i].toFixed(2) + '%"></div></div><div class="value"' +
+        (bound ? ' title="' + escapeHtml("a lower bound: " + r.speed.tokens_reason) + '"' : "") + ">" + escapeHtml(shown) + "</div></div>";
     }).join("");
     return '<div class="metric"><h3><span>' + escapeHtml(metric.label) + "</span>" + (options.relative ? '<span class="muted">' +
       "baseline " + escapeHtml(base.label) + "</span>" : "") + "</h3>" + rows + "</div>";
@@ -1305,13 +1537,14 @@ function renderAgentsTable() {
     const m = agentMetrics(r, a);
     rows.push("<tr><td>" + escapeHtml(r.label) + "</td><td>" + escapeHtml(laneLetter(r, a.lane) + " " + (a.name || "")) + "</td><td>" +
       escapeHtml(a.model || "-") + '</td><td class="num">' + formatMs(m.wall_ms) + '</td><td class="num">' + m.steps +
-      '</td><td class="num">' + formatMs(m.first_message_ms) + '</td><td class="num">' +
-      (m.comm_share == null ? "-" : (m.comm_share * 100).toFixed(1) + "%") + '</td><td class="num">' +
-      (a.tokens_partial ? ">= " : "") + formatNumber(m.tokens) +
+      '</td><td class="num">' + m.steps_less + '</td><td class="num">' + formatMs(m.first_message_ms) + '</td><td class="num">' +
+      (m.comm_share == null ? "-" : (m.comm_share * 100).toFixed(1) + "%") + '</td><td class="num"' +
+      (a.tokens_partial ? ' title="' + escapeHtml("a lower bound: " + a.tokens_reason) + '">&gt;= ' : ">") + formatNumber(m.tokens) +
       '</td><td class="num">' + (m.cost == null ? "-" : "$" + m.cost.toFixed(4)) + "</td></tr>");
   }));
   el("agents-table").innerHTML = "<thead><tr><th>Run</th><th>Agent</th><th>Model</th><th class=\"num\">Span</th>" +
-    "<th class=\"num\">Steps</th><th class=\"num\">First message</th><th class=\"num\">Comm share</th><th class=\"num\">Tokens</th>" +
+    "<th class=\"num\">Steps</th><th class=\"num\">Steps " + escapeHtml(LESS_TEXT) + "</th><th class=\"num\">First message</th>" +
+    "<th class=\"num\">Comm share</th><th class=\"num\">Tokens</th>" +
     "<th class=\"num\">Cost</th></tr></thead><tbody>" + rows.join("") + "</tbody>";
 }
 
@@ -1333,7 +1566,9 @@ function judgeCaption(meta) {
 function renderMatrix() {
   const table = el("matrix-table");
   if (!page.runs.length) { table.innerHTML = '<tr><td class="empty">No runs loaded yet.</td></tr>'; return; }
-  const head = "<thead><tr><th>Run</th>" + MATRIX_COLUMNS.map(([, label]) => "<th scope=\"col\">" + escapeHtml(label) + "</th>").join("") +
+  const head = "<thead><tr><th></th>" + MATRIX_GROUPS.map(([label, span, kind]) => '<th scope="colgroup" colspan="' + span +
+    '" class="kind-' + kind + '">' + escapeHtml(label) + "</th>").join("") + "</tr><tr><th>Run</th>" +
+    MATRIX_COLUMNS.map(([, label, kind]) => '<th scope="col" class="kind-' + kind + '">' + escapeHtml(label) + "</th>").join("") +
     "</tr></thead>";
   const body = page.runs.map((r) => {
     const caption = r.labels.judge_meta ? judgeCaption(r.labels.judge_meta) : "";
@@ -1349,7 +1584,7 @@ function matrixTd(r, key, caption) {
     "decided by App G's rule, not by a model" : c.source || "";
   const label = escapeHtml(STATE_TEXT[c.state] + (c.text ? ": " + c.text : ""));
   const inner = c.evidence.length ? '<button type="button" data-evidence="' + r.index + '" data-column="' + key + '">' + label + "</button>" : label;
-  return '<td class="cell state-' + c.state + '">' + inner + (c.source ? ' <span class="badge" title="' + escapeHtml(title) + '">' +
+  return '<td class="' + cellClass(key, c.state) + '">' + inner + (c.source ? ' <span class="badge" title="' + escapeHtml(title) + '">' +
     escapeHtml(c.source) + "</span>" : "") + "</td>";
 }
 
@@ -1360,23 +1595,49 @@ function renderLegend() {
 
 const HUB_MARK_KINDS = ["task_claim", "claim", "pr_opened", "ready", "merge", "merge_refused", "merge_attempt", "request", "response"];
 
+/* A timeline is drawn one viewBox unit to a pixel, as wide as its box
+   but never under TIMELINE_MIN_PX, so its lane letters and axis labels keep
+   their CSS sizes at any width; on a phone it scrolls inside its own box
+   rather than shrinking its text to a few pixels. */
+const TIMELINE_MIN_PX = 560;
+const TIMELINE_FALLBACK_PX = 1000;
+const TIMELINE_CHROME_PX = 14;
+
+function timelineWidth(available) {
+  const inner = available > 0 ? Math.floor(available - TIMELINE_CHROME_PX) : TIMELINE_FALLBACK_PX;
+  return Math.max(inner, TIMELINE_MIN_PX);
+}
+
 function renderTimelines() {
   const container = el("timelines");
   if (!page.runs.length) { container.innerHTML = '<div class="empty">Load runs to see their timelines.</div>'; return; }
   const percent = el("axis").value === "percent";
   const longest = Math.max(...page.runs.map((r) => r.end_ms != null && r.start_ms != null ? r.end_ms - r.start_ms : 0), 1);
+  const width = timelineWidth(container.clientWidth);
+  page.timelineWidth = width;
   container.innerHTML = "";
-  page.runs.forEach((run) => container.appendChild(timelineFor(run, percent, longest)));
+  page.runs.forEach((run) => container.appendChild(timelineFor(run, percent, longest, width)));
 }
 
-function timelineFor(run, percent, longest) {
+// The timelines are drawn to their box's width, so they are drawn again
+// when it changes: a resized window, or the page's scroll bar appearing
+// once the runs are in.
+function watchTimelineWidth() {
+  const container = el("timelines");
+  const check = () => { if (page.runs.length && timelineWidth(container.clientWidth) !== page.timelineWidth) renderTimelines(); };
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => window.requestAnimationFrame(check)).observe(container);
+  else window.addEventListener("resize", () => window.requestAnimationFrame(check));
+}
+
+function timelineFor(run, percent, longest, width) {
   const box = document.createElement("div");
   box.className = "timeline";
-  const W = 1000, LEFT = 40, laneH = 22, top = 6, H = top + run.lanes.length * laneH + 24;
+  const W = width, LEFT = 40, laneH = 22, top = 6, H = top + run.lanes.length * laneH + 24;
   const span = percent ? Math.max((run.end_ms || 0) - (run.start_ms || 0), 1) : longest;
   const x = (t) => LEFT + ((t - run.start_ms) / span) * (W - LEFT - 6);
   const laneY = (lane) => top + Math.max(run.lanes.indexOf(lane), 0) * laneH;
-  const parts = ['<svg viewBox="0 0 ' + W + " " + H + '" role="group" aria-label="timeline of ' + escapeHtml(run.label) + '">'];
+  const parts = ['<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + " " + H + '" role="group" aria-label="timeline of ' +
+    escapeHtml(run.label) + '">'];
   run.lanes.forEach((lane) => parts.push('<text class="lane-label" x="2" y="' + (laneY(lane) + 14) + '">' + escapeHtml(laneLetter(run, lane)) + "</text>"));
   if (run.start_ms == null) parts.push('<text class="axis" x="' + LEFT + '" y="20">no step times</text>');
   else {
@@ -1421,7 +1682,8 @@ function timelineFor(run, percent, longest) {
   }
   parts.push('<defs><marker id="arrowhead" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto">' +
     '<path d="M0 0 L6 3 L0 6 z" fill="currentColor"/></marker></defs></svg>');
-  box.innerHTML = '<div class="muted">' + escapeHtml(run.label) + " " + kindBadge(run) + "</div>" + parts.join("");
+  box.innerHTML = '<div class="muted">' + escapeHtml(run.label) + " " + kindBadge(run) + " " + clockBadge(run) + "</div>" +
+    '<div class="track">' + parts.join("") + "</div>";
   return box;
 }
 
@@ -1525,7 +1787,8 @@ function renderColumns() {
     const column = document.createElement("div");
     column.className = "column";
     const steps = run.steps.filter((s) => stepPasses(s, f));
-    column.innerHTML = "<h3>" + escapeHtml(run.label) + ' <span class="muted">' + steps.length + " of " + run.steps.length + " steps</span></h3>";
+    column.innerHTML = "<h3>" + escapeHtml(run.label) + ' <span class="muted">' + escapeHtml(listCountText(run, steps.length)) +
+      "</span></h3>";
     const list = document.createElement("div");
     list.className = "step-list";
     list.dataset.column = String(i);
@@ -1535,6 +1798,15 @@ function renderColumns() {
     fillList(list, run, steps);
     list.addEventListener("scroll", () => syncScroll(list), { passive: true });
   });
+}
+
+// A step list's total is the page's step cards; where they are not the
+// stock viewer's steps (an OpenHands event list, whose observations sit in
+// their actions' cards) the count says so.
+function listCountText(run, shown) {
+  if (run.steps.length === run.stock_steps.total) return shown + " of " + run.steps.length + " steps shown";
+  return shown + " of " + run.steps.length + " step cards shown (" + run.stock_steps.total + " steps; a card holds an " +
+    "action with its observation)";
 }
 
 /* Above VIRTUAL_LIMIT steps the list renders in chunks as it scrolls. */
@@ -1759,6 +2031,7 @@ function wire() {
   el("timelines").addEventListener("click", pick);
   el("timelines").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(e); } });
   el("speed-csv").addEventListener("click", () => download("coordbench-speed.csv", speedCsv(page.runs)));
+  watchTimelineWidth();
   el("matrix-csv").addEventListener("click", () => download("coordbench-failure-modes.csv", matrixCsv(page.runs)));
 }
 

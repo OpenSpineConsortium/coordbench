@@ -71,6 +71,13 @@ aliases, and a Bash broadcast is one tool use but several deliveries, so
 a join by ordinal alone would drift. Whatever is left unmatched on
 either side is listed in join_warnings.
 
+An agent's tokens are summed from its transcript (or, without one, taken
+from result.json, else summed from its stream) and say where they came
+from (tokens_source) and whether the output count is final
+(tokens_output_final): a transcript holds a message's final output count
+only on its stop_reason line, so a sum over messages without one is a
+lower bound, which the comparison viewer marks as one.
+
 The stock viewer drops a step whose text contains any of
 STOCK_VIEWER_FILTERS (viewer.astro:513-522, on the first non-empty of
 content, text and message); prompts are never steps here, and any other
@@ -803,20 +810,34 @@ USAGE_FIELDS = (("input", "input_tokens"), ("output", "output_tokens"), ("cache_
 
 
 def transcript_usage(lines):
-    per_message, models = {}, []
+    """The four token counts of a transcript or a stream, each API message
+    counted once with the largest value its lines carry, the models its
+    assistant lines name, and whether the output count is final. One
+    message spans several lines, one per content block, each repeating
+    the message's usage. The input and cache counts are known when the
+    message starts; the output count is written as the stream stood when
+    the block ended, and only a line carrying the message's stop_reason
+    holds the final one (drivers.py's transcript_usage reads the session
+    driver's transcripts the same way). When any message has no such
+    line, the output sum is only a lower bound, and so is the total."""
+    per_message, finals, models = {}, set(), []
     for index, line in enumerate(lines):
         message = line.get("message")
         if line.get("type") != "assistant" or not isinstance(message, dict):
             continue
         if message.get("model") and message["model"] != SYNTHETIC_MODEL and message["model"] not in models:
             models.append(message["model"])
-        counts = per_message.setdefault(message.get("id") or f"line-{index}", dict.fromkeys(dict(USAGE_FIELDS), 0))
+        key = message.get("id") or f"line-{index}"
+        if message.get("stop_reason"):
+            finals.add(key)
+        counts = per_message.setdefault(key, dict.fromkeys(dict(USAGE_FIELDS), 0))
         usage = message.get("usage") or {}
         for name, source in USAGE_FIELDS:
             counts[name] = max(counts[name], int(number(usage.get(source)) or 0))
     if not per_message:
-        return None, models
-    return {name: sum(counts[name] for counts in per_message.values()) for name, _ in USAGE_FIELDS}, models
+        return None, models, None
+    totals = {name: sum(counts[name] for counts in per_message.values()) for name, _ in USAGE_FIELDS}
+    return totals, models, finals >= set(per_message)
 
 
 def record_usage(record):
@@ -882,7 +903,8 @@ def collect_session(pair, agent, session, found):
             found["last_moment"] = max((parse_time(line.get("timestamp")) for _, line in thread
                                         if parse_time(line.get("timestamp"))), default=None)
     found["kind"] = "session-jsonl"
-    found["usage"], found["models"] = transcript_usage(session)
+    found["usage"], found["models"], found["usage_final"] = transcript_usage(session)
+    found["usage_source"] = "transcript" if found["usage"] else None
 
 
 def collect_stream(pair, agent, stream, found):
@@ -890,8 +912,10 @@ def collect_stream(pair, agent, stream, found):
     start, end = agent_window(pair["result"], agent)
     spread_evenly(calls, start, end)
     found.update({"calls": calls, "last_text": last_text, "kind": "interpolated"})
-    usage, found["models"] = transcript_usage(stream)
-    found["usage"] = record_usage(agent["record"]) or usage
+    usage, found["models"], final = transcript_usage(stream)
+    recorded = record_usage(agent["record"])
+    found["usage"], found["usage_final"] = (recorded, True) if recorded else (usage, final)
+    found["usage_source"] = "result.json" if recorded else "stream" if usage else None
 
 
 def spread_evenly(calls, start, end):
@@ -1465,15 +1489,30 @@ def features_text(result):
 
 def agent_meta(agent, found, result):
     record = agent["record"]
-    usage = found.get("usage") or record_usage(record)
+    usage, source, final = usage_of(found, record)
     model = record.get("model") if agent_model_known(record) else None
     model = model or (found["models"][0] if found.get("models") else None) or result.get("model")
     result_event = found.get("result_event") or {}
     return {"lane": agent["lane"], "id": agent["id"], "feature_id": agent["feature_id"], "role": agent["role"],
             "model": model, "status": record.get("status"), "steps": number(record.get("steps")),
-            "tokens": usage, "cost": number(record.get("cost")), "duration_ms": number(record.get("duration_ms")),
+            "tokens": usage, "tokens_source": source, "tokens_output_final": final,
+            "cost": number(record.get("cost")), "duration_ms": number(record.get("duration_ms")),
             "api_duration_ms": number(record.get("api_duration_ms")), "started_at": utc_iso(agent_start(result, agent, found)),
             "ended_at": utc_iso(found.get("end")), "model_usage": result_event.get("modelUsage")}
+
+
+def usage_of(found, record):
+    """An agent's token counts, where they came from and whether the output
+    count is final: the transcript's or the stream's sums, whose output
+    count is final only when every message's stop_reason line is there
+    (transcript_usage), else result.json's, final wherever it is not
+    null: claude-cli takes them from Claude Code's result event, and the
+    session driver leaves the output count null when its transcript's is
+    not final."""
+    if found.get("usage"):
+        return found["usage"], found.get("usage_source"), found.get("usage_final")
+    recorded = record_usage(record)
+    return recorded, "result.json" if recorded else None, True if recorded else None
 
 
 def agent_start(result, agent, found):

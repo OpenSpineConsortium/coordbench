@@ -205,6 +205,25 @@ class StepMapping(unittest.TestCase):
         self.assertEqual(tokens["input"], 18 * 4)
         self.assertEqual(tokens["cache_write"], 18 * 1000)
 
+    def test_usage_says_where_it_came_from_and_whether_its_output_count_is_final(self):
+        agents = self.trajectory["metadata"]["coordbench"]["agents"]
+        self.assertEqual([(a["tokens_source"], a["tokens_output_final"]) for a in agents],
+                         [("transcript", True), ("transcript", True)])
+
+    def test_an_output_count_without_its_stop_reason_line_is_not_final(self):
+        """Claude Code writes a message's final output count only on the
+        line carrying its stop_reason; without it the sum is a lower bound
+        and the agent says so."""
+        with PairCopy() as pair:
+            lines = [json.loads(line) for line in (pair / "agent2_session.jsonl").read_text().splitlines()]
+            for line in lines:
+                if line.get("type") == "assistant":
+                    line["message"]["stop_reason"] = None
+            (pair / "agent2_session.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+            agents = build(pair)["metadata"]["coordbench"]["agents"]
+        self.assertEqual([a["tokens_output_final"] for a in agents], [True, False])
+        self.assertEqual(agents[1]["tokens"], self.trajectory["metadata"]["coordbench"]["agents"][1]["tokens"])
+
     def test_the_stock_viewers_port_agrees_with_the_precomputed_type(self):
         """getToolType is right everywhere coordbench's types are, but for
         subagent steps (typed other on purpose) and a Write that updated a
@@ -423,6 +442,8 @@ class Fallbacks(unittest.TestCase):
         self.assertTrue(block["time_zone"]["source"].startswith("the reader's local zone"))
         phase_end = next(t["ended"] for t in result["timings"] if t.get("agent") == "agent2")
         self.assertEqual(steps_named(trajectory, "finish")[1]["timestamp"], export.utc_iso(export.parse_time(phase_end)))
+        self.assertEqual([(a["tokens_source"], a["tokens_output_final"]) for a in block["agents"]],
+                         [("result.json", True), ("result.json", True)])
 
     def test_a_cooperbench_run_takes_its_messages_from_conversation_json(self):
         with PairCopy() as pair:
