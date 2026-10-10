@@ -33,17 +33,35 @@ container's /workspace/repo/patch.txt, where every arm's prompt asks for it:
   prompt the orchestrating session gives its subagent, and wait() watches
   for the marker the prompt asks the subagent to leave last. Because its
   handle is plain JSON, the wait can happen in another process (run.py's
-  prepare and finish). It sees no stream, so it measures no usage and
-  knows no duration; result.json holds null for both.
+  prepare and finish). It sees no stream and no result event, so the
+  agent's steps and durations stay unknown (null). Its tokens come from
+  the subagent's own transcript instead: the prompt asks the subagent to
+  open its first reply with a run token naming the run and the agent,
+  wait() finds the transcript that carries it under Claude Code's
+  projects directory, copies it beside the run's logs as
+  <agent>_session.jsonl, sums each API message's usage once (one message
+  spans several transcript lines) and estimates the cost from the price
+  table below, marked as an estimate. A transcript holds the final output
+  count only on a message's stop_reason line, which most messages lack;
+  then output_tokens and the cost stay unknown and their lower bounds are
+  recorded instead (transcript_usage). How the agent ended goes in
+  <agent>_session_outcome.json, never in a file named like a stream,
+  which CooperBench's own parser would read as an Error.
 
 A driver of one's own is any class with start() and wait(); run.py loads
 it from path/to/file.py:ClassName. Class attributes tell the runner what
 the driver wants: `host_workspace` (the repository as a host directory),
 `resumable` (start and wait may run in different processes), `framework`
-(the agent_framework recorded in result.json) and `measures_usage`
+(the agent_framework recorded in result.json), `measures_usage`
 (whether the outcome's token counts, steps and cost were measured; a
 driver without the attribute is taken not to measure them, and
-result.json then holds null in their place rather than zeros).
+result.json then holds null in their place rather than zeros; an
+outcome's own `measured` names the fields it measured when that differs
+by agent), `isolation` ("container" when the agent can reach nothing but
+its container, "advisory" when the isolation holds by instruction only;
+a host_workspace driver without the attribute is taken as advisory) and
+`differences_from_cooperbench` (what config.json lists as this driver's
+departures from CooperBench's claude_code adapter).
 
 Every docker command goes through docker() below, so tests swap in a fake.
 In debug (trace.py; run.py's --debug) each one leaves a "docker" event
@@ -272,12 +290,26 @@ class AgentJob:
     max_turns: int | None = None
     log_path: str = ""
     workspace: str = ""
+    # Claude Code tools the agent may not use (--disallowedTools), as
+    # WebFetch and WebSearch for the paper's "local operations" only.
+    disallowed_tools: list = field(default_factory=list)
+
+
+# The usage fields of an agent's record, in the order result.json lists them.
+USAGE_FIELDS = ("cost", "steps", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+TOKEN_FIELDS = USAGE_FIELDS[2:]
 
 
 @dataclass
 class AgentOutcome:
     """How an agent ended, in CooperBench's terms: status is Submitted,
     LimitsExceeded or Error; cost is the result event's total_cost_usd.
+    `error` is what CooperBench's adapter would write there, the message
+    of an exception that stopped the agent's run (a timeout, a container
+    that went away), and None otherwise, even for an Error read from the
+    result event; `end_reason` is coordbench's own account of how a run
+    that did not submit ended (the result event's text, a stream with no
+    result event, the timeout), None for one that submitted.
     `patch` is the agent's patch.txt. duration_ms is the agent's wall
     time as Claude Code measured it and api_duration_ms the part of it
     spent waiting on the API (the result event's duration_ms and
@@ -288,7 +320,16 @@ class AgentOutcome:
     returned: the session driver reads its marker's mtime, the CLI driver
     the moment docker exec returned; None means "when wait returned", so
     an agent's wall time in the timings is never stretched by a late
-    finish."""
+    finish.
+
+    `measured` names the USAGE_FIELDS this outcome measured, when the
+    driver knows it per agent (the session driver measures tokens from a
+    transcript it may not find); None leaves it to the driver's
+    measures_usage. cost_source says where a measured cost came from:
+    "claude code" (its own total_cost_usd) or "estimated from tokens".
+    model, claude_code_version, tools and mcp_servers are what the agent
+    actually ran with, from the stream's init event or the transcript,
+    None when the driver could not see them."""
 
     status: str = "Error"
     input_tokens: int = 0
@@ -301,7 +342,18 @@ class AgentOutcome:
     duration_ms: int | None = None
     api_duration_ms: int | None = None
     error: str | None = None
+    end_reason: str | None = None
     patch: str = ""
+    measured: tuple | None = None
+    cost_source: str | None = None
+    model: str | None = None
+    claude_code_version: str | None = None
+    tools: list | None = None
+    mcp_servers: list | None = None
+    # When the session driver's transcript holds the output count only as
+    # a lower bound (fill_from_transcript): that bound and the cost it gives.
+    output_tokens_lower_bound: int | None = None
+    cost_lower_bound: float | None = None
 
 
 def json_lines(text):
@@ -331,11 +383,28 @@ def milliseconds_or_none(value):
     return None if value is None else int(value)
 
 
+def stream_init(text):
+    """What the agent ran with, from the stream's system init event: the
+    model, Claude Code's version, its tools and its MCP servers (each as
+    the event gives it, a name with a status). Empty when the stream has
+    no init event; CooperBench's parsers keep none of it."""
+    for event in json_lines(text):
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            return {"model": event.get("model"), "claude_code_version": event.get("claude_code_version"),
+                    "tools": event.get("tools"), "mcp_servers": event.get("mcp_servers")}
+    return {}
+
+
 def summarize_stream(text):
     """Usage, cost, turns, status and the two durations from Claude Code's
     stream-json, read from the first result event as parse_stream_json
-    reads it. A stream without one (the CLI crashed or was killed) is an
-    Error with nothing counted and no duration known."""
+    reads it, with what the init event says the agent ran with. A stream
+    without a result event (the CLI crashed or was killed) is an Error
+    with nothing measured: CooperBench writes zeros there, coordbench
+    null, since a zero would read as a measurement. Neither case sets
+    `error`, which CooperBench keeps for an exception in its adapter; how
+    the agent ended goes in end_reason."""
+    init = stream_init(text)
     for event in json_lines(text):
         if event.get("type") != "result":
             continue
@@ -351,9 +420,175 @@ def summarize_stream(text):
             cost=float(event.get("total_cost_usd") or 0),
             duration_ms=milliseconds_or_none(event.get("duration_ms")),
             api_duration_ms=milliseconds_or_none(event.get("duration_api_ms")),
-            error=None if status == "Submitted" else str(event.get("result") or event.get("subtype"))[:500],
+            end_reason=None if status == "Submitted" else str(event.get("result") or event.get("subtype"))[:500],
+            measured=USAGE_FIELDS, cost_source="claude code", **init,
         )
-    return AgentOutcome(status="Error", error=NO_RESULT)
+    return AgentOutcome(status="Error", end_reason=NO_RESULT, measured=(), **init)
+
+
+# CooperBench's session parser (src/cooperbench/agents/claude_code/
+# parsers.py at 63b9d44, MIT licence), kept verbatim but for the names, so
+# agent<feature>_traj.json holds the messages CooperBench's own runner
+# would have written from the same <agent>_session.jsonl.
+
+def content_blocks_to_text(content):
+    """_content_blocks_to_text: a message's content blocks as one string."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        try:
+            return json.dumps(content, ensure_ascii=False)
+        except TypeError:
+            return str(content)
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            parts.append(str(block))
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            text = block.get("text", "")
+            if text:
+                parts.append(text)
+        elif btype == "thinking":
+            thought = block.get("thinking") or block.get("text") or ""
+            if thought:
+                parts.append(f"[thinking] {thought}")
+        elif btype == "tool_use":
+            name = block.get("name", "")
+            args = block.get("input")
+            try:
+                args_str = json.dumps(args, ensure_ascii=False)
+            except TypeError:
+                args_str = str(args)
+            parts.append(f"[tool_use {name}] {args_str}")
+        elif btype == "tool_result":
+            inner = block.get("content")
+            if isinstance(inner, list):
+                inner_text = "\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in inner)
+            elif inner is None:
+                inner_text = ""
+            else:
+                inner_text = str(inner)
+            parts.append(f"[tool_result] {inner_text}")
+        else:
+            try:
+                parts.append(json.dumps(block, ensure_ascii=False))
+            except TypeError:
+                parts.append(str(block))
+    return "\n".join(p for p in parts if p)
+
+
+def parse_session_jsonl(text):
+    """parse_session_jsonl: the session JSONL as chat messages, sorted by
+    timestamp, each {"role", "content"} with the content a string."""
+    events = list(json_lines(text))
+    events.sort(key=lambda e: e.get("timestamp") or "")
+    messages = []
+    for event in events:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role") or event.get("type")
+        if role not in {"user", "assistant", "system"}:
+            continue
+        messages.append({"role": role, "content": content_blocks_to_text(message.get("content"))})
+    return messages
+
+
+# Usage from a session transcript, for a driver that sees no result event.
+
+# Claude Code writes these for messages it made up itself (an interrupted
+# turn, a refusal it reports), which no model produced and nobody paid for.
+SYNTHETIC_MODEL = "<synthetic>"
+
+
+def transcript_usage(text):
+    """The transcript's token counts, summed once per API message: one
+    message spans several lines, one per content block, each repeating
+    the message's usage, so each message counts with the largest value of
+    each field its lines carry. The input and cache counts are known when
+    the message starts and are exact. The output count is not: Claude
+    Code writes a line's usage as the stream stood when the block ended,
+    and only a line carrying the message's stop_reason holds the final
+    count (in 2.1.295's transcripts most messages have none, and their
+    lines say 2 to 5 output tokens for thousands of characters), so
+    output_final says whether every message had one; when not, the output
+    sum is only a lower bound. Also the models the assistant lines name
+    and Claude Code's version."""
+    per_message, finals, models, version = {}, set(), [], None
+    for event in json_lines(text):
+        version = version or event.get("version")
+        message = event.get("message")
+        if event.get("type") != "assistant" or not isinstance(message, dict):
+            continue
+        model = message.get("model")
+        if model and model != SYNTHETIC_MODEL and model not in models:
+            models.append(model)
+        key = message.get("id") or id(message)
+        if message.get("stop_reason"):
+            finals.add(key)
+        usage = message.get("usage") or {}
+        counts = per_message.setdefault(key, dict.fromkeys(TOKEN_FIELDS, 0))
+        for name, source in zip(TOKEN_FIELDS, ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                                               "cache_creation_input_tokens")):
+            counts[name] = max(counts[name], int(usage.get(source) or 0))
+    totals = {name: sum(counts[name] for counts in per_message.values()) for name in TOKEN_FIELDS}
+    return {"tokens": totals, "messages": len(per_message), "output_final": finals >= set(per_message),
+            "models": models, "claude_code_version": version}
+
+
+# The cost estimate. CooperBench's agents/pricing.py prices a model that
+# reports no cost through litellm's table first and its own (MiniMax only)
+# second; these are the Claude rows of that litellm table as CooperBench
+# 63b9d44's environment ships it (litellm 1.81.12,
+# model_prices_and_context_window_backup.json, provider anthropic), in
+# dollars per million tokens: input, output, cache read, cache write.
+# A model missing here gets no estimate: a guess from a neighbouring model
+# would read as a price. The long-context rates above 200k tokens are left
+# out, since a request over 200k needs the 1M-context beta, which no
+# coordbench driver turns on.
+CLAUDE_PRICES = {
+    "claude-3-5-haiku-20241022": (0.8, 4.0, 0.08, 1.0),
+    "claude-3-5-haiku-latest": (1.0, 5.0, 0.1, 1.25),
+    "claude-3-5-sonnet-20240620": (3.0, 15.0, 0.3, 3.75),
+    "claude-3-5-sonnet-20241022": (3.0, 15.0, 0.3, 3.75),
+    "claude-3-5-sonnet-latest": (3.0, 15.0, 0.3, 3.75),
+    "claude-3-7-sonnet-20250219": (3.0, 15.0, 0.3, 3.75),
+    "claude-3-7-sonnet-latest": (3.0, 15.0, 0.3, 3.75),
+    "claude-3-haiku-20240307": (0.25, 1.25, 0.03, 0.3),
+    "claude-3-opus-20240229": (15.0, 75.0, 1.5, 18.75),
+    "claude-3-opus-latest": (15.0, 75.0, 1.5, 18.75),
+    "claude-4-opus-20250514": (15.0, 75.0, 1.5, 18.75),
+    "claude-4-sonnet-20250514": (3.0, 15.0, 0.3, 3.75),
+    "claude-haiku-4-5": (1.0, 5.0, 0.1, 1.25),
+    "claude-haiku-4-5-20251001": (1.0, 5.0, 0.1, 1.25),
+    "claude-opus-4-1": (15.0, 75.0, 1.5, 18.75),
+    "claude-opus-4-1-20250805": (15.0, 75.0, 1.5, 18.75),
+    "claude-opus-4-20250514": (15.0, 75.0, 1.5, 18.75),
+    "claude-opus-4-5": (5.0, 25.0, 0.5, 6.25),
+    "claude-opus-4-5-20251101": (5.0, 25.0, 0.5, 6.25),
+    "claude-opus-4-6": (5.0, 25.0, 0.5, 6.25),
+    "claude-opus-4-6-20260205": (5.0, 25.0, 0.5, 6.25),
+    "claude-sonnet-4-20250514": (3.0, 15.0, 0.3, 3.75),
+    "claude-sonnet-4-5": (3.0, 15.0, 0.3, 3.75),
+    "claude-sonnet-4-5-20250929": (3.0, 15.0, 0.3, 3.75),
+}
+
+
+def estimated_cost(models, tokens):
+    """Dollars for the token counts at the price of the one model the
+    transcript names, or None: for a model without a price, and for a
+    transcript that names several, whose tokens cannot be split among
+    them from the totals. The four fields are priced apart, as Claude
+    Code's own total_cost_usd prices them, so an estimate sits beside a
+    claude-cli agent's cost on the same terms."""
+    if len(models) != 1 or bare_model(models[0]) not in CLAUDE_PRICES:
+        return None
+    prices = CLAUDE_PRICES[bare_model(models[0])]
+    return sum(tokens[name] * price for name, price in zip(TOKEN_FIELDS, prices)) / 1_000_000
 
 
 def normalize_patch(text):
@@ -410,6 +645,9 @@ def claude_flags(job):
         flags += ["--mcp-config", CONTAINER_MCP_CONFIG]
     if job.max_turns:
         flags += ["--max-turns", str(int(job.max_turns))]
+    if job.disallowed_tools:
+        # One comma-joined word, as the adapter passes its qwen profile's.
+        flags += ["--disallowedTools", ",".join(job.disallowed_tools)]
     return flags
 
 
@@ -497,24 +735,59 @@ class CliRun:
         log = Path(self.job.log_path)
         text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
         outcome = summarize_stream(text)
-        if outcome.error == NO_RESULT and text.strip():
+        if outcome.end_reason == NO_RESULT and text.strip():
             # Whatever ended the stream early (a refused sign-in, a container
             # that went away) said so last; keep it where a reader looks.
-            outcome.error += f"; its last line: {text.strip().splitlines()[-1][:300]}"
+            outcome.end_reason += f"; its last line: {text.strip().splitlines()[-1][:300]}"
         if self.problem:
-            outcome.status, outcome.error = "Error", self.problem
+            # The adapter's exception, which CooperBench writes as the error.
+            outcome.status, outcome.error, outcome.end_reason = "Error", self.problem, self.problem
         outcome.ended_at = self.ended_at
         outcome.patch = normalize_patch(read_container_file(self.job.container, f"{CONTAINER_REPO}/patch.txt"))
         return outcome
 
 
+def log_sibling(log_path, suffix):
+    """Another of an agent's files beside its stream log, named the way
+    the stream log is (<agent>_stream.jsonl gives <agent><suffix>)."""
+    path = Path(log_path)
+    stem = path.name[:-len("_stream.jsonl")] if path.name.endswith("_stream.jsonl") else path.stem
+    return path.with_name(f"{stem}{suffix}")
+
+
 def save_session_transcript(job):
-    """The session JSONL, which the adapter also keeps beside the stream."""
+    """The session JSONL, which the adapter keeps beside the stream, every
+    *.jsonl under the config's projects concatenated as the adapter
+    concatenates them, subagents' transcripts included; written even when
+    empty, as the adapter writes it, so a reader can tell "no transcript"
+    from "not collected"."""
     found = docker("exec", job.container, "sh", "-c",
                    f"find {CONTAINER_CLAUDE_CONFIG_DIR}/projects -name '*.jsonl' -type f 2>/dev/null "
                    "| xargs -r cat")
-    if found.returncode == 0 and found.stdout:
-        write_text(Path(job.log_path).with_name(f"{safe_name(job.agent)}_session.jsonl"), found.stdout)
+    write_text(log_sibling(job.log_path, "_session.jsonl"), found.stdout if found.returncode == 0 else "")
+
+
+# What config.json lists as each driver's departures from CooperBench's
+# claude_code adapter at 63b9d44, so a comparison knows them without
+# reading the code.
+CLI_DIFFERENCES = (
+    "the arm loads as a plugin (--plugin-dir), its extra plugins too, and arm.json's MCP servers through "
+    "--mcp-config; the adapter loads none",
+    "MCP_TOOL_TIMEOUT=330000 in the agent's environment, so a long-polling coordination call is not cut at "
+    "Claude Code's 60 s default",
+    "claude runs under coreutils timeout inside the container, so the time limit holds without the docker client",
+    "no install step: the task image carries the claude binary the overlay (overlay_task_image.sh) pinned to the "
+    "host's version, where setup.sh installs @latest at run time",
+    "no ANTHROPIC_BASE_URL or ANTHROPIC_AUTH_TOKEN forwarding, no _MODEL_PROFILES budgets and no settings.json; "
+    "--disallowedTools only when --disallowed-tools asks for it",
+)
+SESSION_DIFFERENCES = (
+    "the agent is a subagent of an orchestrating Claude Code session on the host, which picks its model",
+    "isolation is advisory: the subagent's file tools reach the host, and only its instructions keep it to its "
+    "workspace",
+    "no stream and no result event: steps and durations are unknown; tokens are summed from the subagent's "
+    "transcript and the cost is estimated from them",
+)
 
 
 class ClaudeCliDriver:
@@ -523,6 +796,8 @@ class ClaudeCliDriver:
     host_workspace = False
     resumable = False
     measures_usage = True
+    isolation = "container"
+    differences_from_cooperbench = CLI_DIFFERENCES
 
     def start(self, job):
         put_container_file(job.container, CONTAINER_PROMPT, job.prompt)
@@ -556,6 +831,9 @@ the same time as the other agents of the run on one CooperBench task pair.
 You run on the host, but your work lives in a container, so the
 benchmark's rules hold for you exactly as for an agent inside one.
 
+- Begin your very first reply with this line, exactly as written:
+  `{token}`. The benchmark finds your transcript by it, to count the
+  tokens you used.
 - Your workspace is `{workspace}` on this host. It is bind-mounted at
   `/workspace/repo` in your container `{container}`, so the two are the
   same files: read and edit them at `{workspace}` with your file tools.
@@ -588,7 +866,7 @@ def session_preface(job):
     return SESSION_PREFACE.format(
         agent=job.agent, run_id=job.run_id, arm=Path(job.arm_dir).name, workspace=workspace,
         container=job.container, bin_dir=session_bin_dir(Path(job.log_path).parent, job.agent),
-        workspaces=workspace.parent, marker=workspace / DONE_MARKER)
+        workspaces=workspace.parent, marker=workspace / DONE_MARKER, token=run_token(job.run_id, job.agent))
 
 
 class SessionDriver:
@@ -596,14 +874,23 @@ class SessionDriver:
     framework = "claude_code_subagent"
     host_workspace = True
     resumable = True
-    # A subagent leaves no stream on the host, so its tokens, steps, cost
-    # and durations are unknown, and result.json says so rather than
-    # count zero; the agent's wall time the runner measures itself, in
+    # A subagent leaves no stream on the host, so its steps and durations
+    # are unknown, and result.json says so rather than count zero; its
+    # tokens, and from them an estimated cost, come from its transcript
+    # when wait() finds it (the outcome's own `measured` says so per
+    # agent); the agent's wall time the runner measures itself, in
     # result.json's timings.
     measures_usage = False
+    isolation = "advisory"
+    differences_from_cooperbench = SESSION_DIFFERENCES
 
-    def __init__(self, poll_seconds=10.0):
+    def __init__(self, poll_seconds=10.0, settle_seconds=5.0, transcript_roots=None):
         self.poll_seconds = poll_seconds
+        # The subagent may still be writing its last reply when its marker
+        # appears; the copy waits until the transcript has been still for
+        # this long (at most SETTLE_LIMIT_SECONDS).
+        self.settle_seconds = settle_seconds
+        self.transcript_roots = transcript_roots
 
     def start(self, job):
         if not job.workspace:
@@ -611,30 +898,157 @@ class SessionDriver:
         prompt_file = session_prompt_path(job)
         write_text(prompt_file, session_preface(job) + SECTION_RULE + job.prompt)
         (Path(job.workspace) / DONE_MARKER).unlink(missing_ok=True)
+        started = time.time()
         return {"agent": job.agent, "workspace": str(job.workspace), "log_path": str(job.log_path),
-                "prompt_file": str(prompt_file), "timeout_s": job.timeout_s,
-                "deadline": time.time() + job.timeout_s}
+                "prompt_file": str(prompt_file), "timeout_s": job.timeout_s, "started": started,
+                "deadline": started + job.timeout_s, "run_token": run_token(job.run_id, job.agent),
+                "model": job.model}
 
     def wait(self, handle):
         """Look for the marker every poll_seconds until it is there or the
         deadline passes; the last look comes after the last sleep, so a
-        marker that appeared as the deadline passed is still found."""
+        marker that appeared as the deadline passed is still found. Then
+        the subagent's transcript is found by its run token, copied and
+        counted (take_transcript)."""
         marker = Path(handle["workspace"]) / DONE_MARKER
         found = poll_marker(handle["agent"], marker)
         while not found and time.time() < handle["deadline"]:
             time.sleep(max(0.0, min(self.poll_seconds, handle["deadline"] - time.time())))
             found = poll_marker(handle["agent"], marker)
-        outcome = AgentOutcome(status="Submitted")
+        outcome = AgentOutcome(status="Submitted", measured=())
         if not found:
             minutes = handle.get("timeout_s", 0) / 60
-            outcome = AgentOutcome(status="Error", error=f"no {DONE_MARKER} within {minutes:.0f} minutes")
+            reason = f"no {DONE_MARKER} within {minutes:.0f} minutes"
+            # The adapter's own timeout is an exception, which it writes as the error.
+            outcome = AgentOutcome(status="Error", error=reason, end_reason=reason, measured=())
         else:
             outcome.ended_at = marker.stat().st_mtime
         patch = Path(handle["workspace"]) / "patch.txt"
         if patch.exists():
             outcome.patch = normalize_patch(patch.read_text(encoding="utf-8", errors="replace"))
-        record_session_outcome(handle, outcome)
+        transcript = self.take_transcript(handle, outcome)
+        record_session_outcome(handle, outcome, transcript)
         return outcome
+
+    def take_transcript(self, handle, outcome):
+        """Copy the subagent's transcript to <agent>_session.jsonl and fill
+        the outcome's tokens, model and estimated cost from it; what was
+        found, as session_outcome.json records it. A handle from before
+        the run token (an older plan) has nothing to look for."""
+        token = handle.get("run_token")
+        if not token:
+            return {"source": None, "matches": 0, "note": "the plan predates the run token"}
+        roots = self.transcript_roots if self.transcript_roots is not None else transcript_roots()
+        matches = find_transcripts(token, roots, handle.get("started", 0) - TRANSCRIPT_CLOCK_SLACK_SECONDS)
+        if not matches:
+            return {"source": None, "matches": 0, "note": "no subagent transcript carried the run token"}
+        source = matches[0]
+        settle(source, self.settle_seconds)
+        text = source.read_text(encoding="utf-8", errors="replace")
+        write_text(log_sibling(handle["log_path"], "_session.jsonl"), text)
+        fill_from_transcript(outcome, transcript_usage(text))
+        return {"source": str(source), "matches": len(matches)}
+
+
+def run_token(run_id, agent):
+    """The line a session subagent opens its first reply with: distinctive
+    enough to be found in no other transcript, and naming run and agent."""
+    return f"coordbench-run-token {run_id} {agent}"
+
+
+def fill_from_transcript(outcome, usage):
+    """The input and cache counts are measured once the transcript is in
+    hand; the output count only when every message's final count is in it
+    (transcript_usage). The cost is an estimate from all four, and stays
+    unknown when the model has no price or the output count is not final;
+    then the output sum and the cost it gives are kept as lower bounds."""
+    for name in TOKEN_FIELDS:
+        setattr(outcome, name, usage["tokens"][name])
+    outcome.model = usage["models"][0] if usage["models"] else None
+    outcome.claude_code_version = usage["claude_code_version"]
+    cost = estimated_cost(usage["models"], usage["tokens"])
+    measured = [name for name in TOKEN_FIELDS if name != "output_tokens" or usage["output_final"]]
+    if not usage["output_final"]:
+        outcome.output_tokens_lower_bound, outcome.cost_lower_bound = usage["tokens"]["output_tokens"], cost
+    elif cost is not None:
+        outcome.cost, outcome.cost_source = cost, "estimated from tokens"
+        measured.insert(0, "cost")
+    outcome.measured = tuple(measured)
+
+
+# Where Claude Code keeps transcripts, and how far a subagent's may have
+# been touched before the run's own start as the host clock reads it.
+TRANSCRIPT_CLOCK_SLACK_SECONDS = 60
+# How many lines of a transcript to read looking for the run token: the
+# first reply comes within the first few lines, after the prompt.
+TOKEN_SEARCH_LINES = 200
+SETTLE_LIMIT_SECONDS = 30
+
+
+def transcript_roots():
+    """The projects directories of the Claude Code that runs the
+    orchestrating session: CLAUDE_CONFIG_DIR's when set, and the user's."""
+    roots = []
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        roots.append(Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects")
+    roots.append(Path.home() / ".claude" / "projects")
+    return [root for i, root in enumerate(roots) if root.is_dir() and root not in roots[:i]]
+
+
+def find_transcripts(token, roots, since):
+    """The subagent transcripts touched since `since` whose first prompt
+    or opening replies carry the token, newest first. Claude Code keeps a
+    subagent's transcript under <project>/<session>/subagents/."""
+    candidates = []
+    for root in roots:
+        for path in Path(root).rglob("*.jsonl"):
+            try:
+                modified = path.stat().st_mtime
+            except OSError:
+                continue
+            if "subagents" in path.parts and modified >= since:
+                candidates.append((modified, path))
+    return [path for _, path in sorted(candidates, reverse=True) if carries_token(path, token)]
+
+
+def carries_token(path, token):
+    """Whether the transcript's first user message or one of its first
+    replies holds the token: the prompt does when the orchestrator pasted
+    it, the reply does when the subagent did as the preface asks."""
+    seen_user = False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as stream:
+            for number, line in enumerate(stream):
+                if number >= TOKEN_SEARCH_LINES:
+                    return False
+                event = next(json_lines(line), None)
+                message = event.get("message") if isinstance(event, dict) else None
+                if not isinstance(message, dict):
+                    continue
+                kind = event.get("type")
+                if kind == "user" and seen_user:
+                    continue
+                seen_user = seen_user or kind == "user"
+                if kind in ("user", "assistant") and token in content_blocks_to_text(message.get("content")):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def settle(path, quiet_seconds, poll=0.5):
+    """Wait until the file has not changed for quiet_seconds, at most
+    SETTLE_LIMIT_SECONDS: a copy taken while the subagent still writes
+    its last reply would miss that reply's tokens."""
+    deadline = time.time() + min(quiet_seconds * 6, SETTLE_LIMIT_SECONDS)
+    while quiet_seconds > 0 and time.time() < deadline:
+        try:
+            still = time.time() - Path(path).stat().st_mtime
+        except OSError:
+            return
+        if still >= quiet_seconds:
+            return
+        time.sleep(min(poll, quiet_seconds - still))
 
 
 def poll_marker(agent, marker):
@@ -646,11 +1060,21 @@ def poll_marker(agent, marker):
     return found
 
 
-def record_session_outcome(handle, outcome):
-    """A subagent leaves no stream on the host; its log says how it ended."""
+def record_session_outcome(handle, outcome, transcript):
+    """How the subagent ended, in <agent>_session_outcome.json beside its
+    other logs: a subagent leaves no stream, and a line in a file named
+    <agent>_stream.jsonl would be read by CooperBench's stream parser as a
+    stream without a result event, an Error."""
     entry = {"type": "coordbench_session", "agent": handle["agent"], "status": outcome.status,
-             "error": outcome.error, "patch_lines": len(outcome.patch.splitlines()), "at": time.time()}
-    write_text(handle["log_path"], json.dumps(entry) + "\n", append=True)
+             "error": outcome.error, "end_reason": outcome.end_reason, "patch_lines": len(outcome.patch.splitlines()),
+             "at": time.time(), "run_token": handle.get("run_token"), "transcript": transcript,
+             "model_requested": handle.get("model") or None, "model": outcome.model,
+             "claude_code_version": outcome.claude_code_version,
+             "tokens": {name: getattr(outcome, name) for name in TOKEN_FIELDS if name in (outcome.measured or ())},
+             "cost": outcome.cost if outcome.cost_source else None, "cost_source": outcome.cost_source,
+             "output_tokens_lower_bound": outcome.output_tokens_lower_bound,
+             "cost_lower_bound": outcome.cost_lower_bound}
+    write_text(log_sibling(handle["log_path"], "_session_outcome.json"), json.dumps(entry, indent=2) + "\n")
 
 
 DRIVERS = {"claude-cli": ClaudeCliDriver, "session": SessionDriver}
