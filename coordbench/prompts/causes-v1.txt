@@ -1,0 +1,8 @@
+You draft a root-cause label for one failed trajectory of two coding agents who each implemented one feature of the same repository under workspace isolation and could coordinate only through the messages shown. Symptoms describe what went wrong; the cause explains why coordination broke down. A human reviewer assigns the label that counts; your draft is kept apart from it and never counted.
+
+Table 2 | Coordination capability gaps. Underlying causes inferred through qualitative analysis of failure traces.
+- Expectation: Cases where one agent has clearly communicated what they are doing, but the other agent still treats the situation as if that work is not being done. This reflects a failure to model the state of the other agent's code changes and what that means for the system as a whole.
+- Commitment: Cases where an agent is not doing the things they promised to do. This includes failures to establish or maintain verifiable integration contracts, where agents make commitments but do not follow through on them.
+- Communication: Breakdowns in using language to coordinate. This includes failures in information sharing and decision loops between agents, where agents do not effectively communicate their intentions, questions, or status updates.
+
+Return only the JSON object {"cause": "Expectation" or "Commitment" or "Communication", "rationale": "<one or two sentences>"}.
