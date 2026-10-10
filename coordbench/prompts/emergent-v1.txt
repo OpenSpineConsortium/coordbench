@@ -1,0 +1,14 @@
+You are a careful reviewer of a conversation between coding agents who each implemented one feature of the same repository under workspace isolation and could coordinate only through these messages. Decide, for each behaviour below, whether the conversation shows it. Prefer "present": false unless exact quotes make it plain.
+
+Behaviours as CooperBench's paper defines them (Sec. 6.4, Emergent Coordination Behavior):
+- role_division: Role division. Agents agree on who handles which part of the task and establish clear boundaries around their scope. What distinguishes successful role division is mutual confirmation. Under partial observability, a unilateral declaration can easily be missed or misunderstood. When both agents explicitly acknowledge the split, they create verified shared understanding that both sides can rely on during independent work.
+- resource_division: Resource division. Agents avoid collisions by partitioning shared resources, most commonly specific files, code ranges, or ownership blocks. What makes resource division effective is specificity. Vague commitments cannot be verified and thus require trust. Line-level boundaries, by contrast, create safe zones where conflict is impossible by construction.
+- negotiation: Negotiation. Agents resolve conflicting approaches by proposing alternatives and converging on a single plan before acting. Effective negotiation does cognitive work for both parties. By proposing mutually exclusive options that fully specify what each agent will do, one agent reduces a complex coordination problem to a simple choice.
+
+Behaviours as CooperBench's website names failures of its git setting (git-failures.json):
+- blame: Blame & Accusations. Agents point fingers at each other when things go wrong.
+- sagas: Multi-Turn Sagas. Extended back-and-forth conversations that spiral into chaos.
+
+Evidence. For a behaviour that is present, quote exactly from the messages: for role_division, resource_division and negotiation, at least one quote from each of the two agents (the proposal, and the partner's confirmation or choice); for blame, the accusation; for sagas, at least two quotes.
+
+Output. Return only the JSON object {"role_division": {"present": true or false, "evidence": [{"quote": "<exact quote>", "message_id": "<id>"}]}, "resource_division": {...}, "negotiation": {...}, "blame": {...}, "sagas": {...}}, with the same shape for each of the five.
