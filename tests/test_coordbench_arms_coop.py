@@ -23,13 +23,16 @@ import hub as hub_module  # noqa: E402
 import mcp  # noqa: E402
 from arm import SUBMISSION_BLOCK, AgentSpec, Call, Run, ToolError, find_arm  # noqa: E402
 
-ARM_NAMES = ("solo", "coop", "coop-git")
-# The arms with tools ship a skill and an MCP config; solo, with none,
-# ships neither, as CooperBench's solo agent had neither.
+ARM_NAMES = ("solo", "coop", "coop-git", "coop-nocomm")
+# The arms with tools ship a skill and an MCP config; solo and coop-nocomm,
+# with none, ship neither, as CooperBench's solo agent and its agents under
+# --no-messaging had neither.
 ARMS_WITH_TOOLS = ("coop", "coop-git")
+ARMS_WITHOUT_TOOLS = ("solo", "coop-nocomm")
 SOLO_FILES = {".claude-plugin/plugin.json", "arm.json", "arm.py"}
-CLASSES = {"solo": "SoloArm", "coop": "CoopArm", "coop-git": "CoopGitArm"}
-NEEDS = {"solo": (), "coop": (), "coop-git": ("git_remote",)}
+CLASSES = {"solo": "SoloArm", "coop": "CoopArm", "coop-git": "CoopGitArm", "coop-nocomm": "CoopNoCommArm"}
+NEEDS = {"solo": (), "coop": (), "coop-git": ("git_remote",), "coop-nocomm": ()}
+BASH = {"tool_surface": "bash"}
 # Claude Code gives up on an HTTP MCP call after 60 s unless the server's
 # config says otherwise; 330 s is past the longest wait any built-in arm
 # allows (300 s). The header carries the agent's own hub token, which a
@@ -141,14 +144,17 @@ class ArmFilesTest(unittest.TestCase):
                 self.assertEqual(config, MCP_JSON)
                 self.assertGreater(config["mcpServers"]["coordbench"]["timeout"], LONGEST_ARM_WAIT_MS)
 
-    def test_solo_ships_only_the_plugins_name_the_arm_and_its_code(self):
+    def test_the_arms_without_tools_ship_only_the_plugins_name_the_arm_and_its_code(self):
         # No skill and no .mcp.json: a Claude Code that loads the plugin
-        # sees what CooperBench's solo agent saw, the prompt and nothing more.
-        files = {str(p.relative_to(ARMS / "solo")) for p in (ARMS / "solo").rglob("*")
-                 if p.is_file() and "__pycache__" not in p.parts}
-        self.assertEqual(files, SOLO_FILES)
-        self.assertFalse((ARMS / "solo" / ".mcp.json").exists())
-        self.assertFalse((ARMS / "solo" / "skills").exists())
+        # sees what CooperBench's solo agent, or its agents under
+        # --no-messaging, saw: the prompt and nothing more.
+        for name in ARMS_WITHOUT_TOOLS:
+            with self.subTest(arm=name):
+                files = {str(p.relative_to(ARMS / name)) for p in (ARMS / name).rglob("*")
+                         if p.is_file() and "__pycache__" not in p.parts}
+                self.assertEqual(files, SOLO_FILES)
+                self.assertFalse((ARMS / name / ".mcp.json").exists())
+                self.assertFalse((ARMS / name / "skills").exists())
 
     def test_arm_json_agrees_with_the_arm(self):
         for name in ARM_NAMES:
@@ -226,6 +232,9 @@ class LayoutTest(unittest.TestCase):
                 self.assertEqual(load(name).layout([2, 1]),
                                  [AgentSpec("agent1", "peer", (1,)), AgentSpec("agent2", "peer", (2,))])
 
+    def test_coop_nocomm_keeps_coops_layout(self):
+        self.assertEqual(load("coop-nocomm").layout([2, 1]), load("coop").layout([2, 1]))
+
     def test_coop_arms_give_each_of_three_features_its_own_agent(self):
         agents = load("coop").layout([3, 1, 2])
         self.assertEqual([(a.id, a.features) for a in agents],
@@ -287,6 +296,22 @@ class PromptTest(unittest.TestCase):
         self.assertEqual(prompt.count("git fetch team && git merge --no-edit"), 2)
         self.assertIn("git log team/agent1 --oneline -10", prompt)
 
+    def test_coop_nocomm_prompt_is_the_spec_and_the_submission_block_alone(self):
+        # Nothing about a partner: no cooperation block and no git block,
+        # as build_instruction writes it given no agents.
+        _, run, prompts = self.prompts("coop-nocomm")
+        for agent, feature in (("agent1", 1), ("agent2", 2)):
+            with self.subTest(agent=agent):
+                self.assertEqual(prompts[agent], RULE.join([SPECS[feature], SUBMISSION_BLOCK]))
+                self.assertNotIn("agent", prompts[agent].replace("patch.txt", ""))
+
+    def test_the_bash_surface_leaves_the_mcp_sentence_out(self):
+        for name in ("coop", "coop-git"):
+            with self.subTest(arm=name):
+                arm, run = new_run(name, options=BASH)
+                self.assertEqual(arm.mcp_note(run, "agent1"), "")
+                self.assertNotIn("MCP", arm.prompt(run, "agent1", SPECS))
+
     def test_a_coop_run_of_one_has_no_cooperation_block(self):
         # CooperBench drops the block when an agent has no partners.
         _, _, prompts = self.prompts("coop-git", (2,))
@@ -314,6 +339,27 @@ class CooperBenchParityTest(unittest.TestCase):
                             SPECS[spec.features[0]], agents=list(run.agents), agent_id=agent, git_enabled=git)
                         self.assertEqual(ours, theirs)
 
+    def test_coop_nocomm_prompts_are_cooperbenchs_under_no_messaging(self):
+        # cooperbench run --no-messaging: is_coop is false, so the adapter
+        # calls build_instruction with agents and agent_id None, and the git
+        # block, which follows the cooperation block, goes with it.
+        for features in ((1, 2), (1, 2, 3)):
+            arm, run = new_run("coop-nocomm", features)
+            for agent, spec in run.agents.items():
+                with self.subTest(agent=agent, features=features):
+                    theirs = COOPERBENCH.build_instruction(SPECS[spec.features[0]], agents=None, agent_id=None)
+                    self.assertEqual(arm.prompt(run, agent, SPECS), theirs)
+
+    def test_bash_surface_prompts_are_cooperbenchs_byte_for_byte(self):
+        for name, git in (("coop", False), ("coop-git", True)):
+            for features in ((1, 2), (1, 2, 3)):
+                arm, run = new_run(name, features, BASH)
+                for agent, spec in run.agents.items():
+                    with self.subTest(arm=name, agent=agent, features=features):
+                        theirs = COOPERBENCH.build_instruction(
+                            SPECS[spec.features[0]], agents=list(run.agents), agent_id=agent, git_enabled=git)
+                        self.assertEqual(arm.prompt(run, agent, SPECS), theirs)
+
     def test_submission_block_is_cooperbenchs(self):
         self.assertEqual(SUBMISSION_BLOCK, COOPERBENCH._SUBMISSION_BLOCK)
 
@@ -322,6 +368,28 @@ class ToolsTest(unittest.TestCase):
     def test_solo_has_no_tools(self):
         arm, run = new_run("solo")
         self.assertEqual(arm.tools_for(run, "agent1"), {})
+
+    def test_coop_nocomm_has_no_tools(self):
+        arm, run = new_run("coop-nocomm")
+        for agent in run.agents:
+            self.assertEqual(arm.tools_for(run, agent), {})
+
+    def test_on_the_bash_surface_mcp_serves_nothing_and_the_shell_everything(self):
+        for name in ("coop", "coop-git"):
+            with self.subTest(arm=name):
+                arm, run = new_run(name, options=BASH)
+                self.assertEqual(arm.mcp_tools_for(run, "agent1"), {})
+                self.assertEqual(set(arm.tools_for(run, "agent1")), set(ALIASES))
+
+    def test_the_bash_surface_loads_no_plugin_and_no_server(self):
+        # CooperBench's claude_code coop agent had no plugin and no MCP
+        # server: the coop-* commands in Bash were all.
+        for name in ("coop", "coop-git"):
+            with self.subTest(arm=name):
+                self.assertEqual(load(name).claude_surface(BASH),
+                                 {"tool_surface": "bash", "plugin": False, "mcp_servers": {}})
+                self.assertEqual(load(name).claude_surface({}),
+                                 {"tool_surface": "mcp", "plugin": True, "mcp_servers": {}})
 
     def test_coop_arms_have_cooperbenchs_messaging_and_no_wait(self):
         for name in ("coop", "coop-git"):
@@ -439,12 +507,18 @@ class MetricsTest(unittest.TestCase):
                                                          "peek_messages": 1, "receive_messages": 1})
                 self.assertEqual(metrics["events"]["tool"], 6)
 
-    def test_solo_metrics_carry_the_same_keys_at_zero(self):
-        arm, run = new_run("solo")
-        metrics = arm.metrics(run)
-        self.assertEqual(metrics["messages_sent"], 0)
-        self.assertEqual(metrics["tool_calls"], {})
-        self.assertEqual(set(metrics), set(load("coop").metrics(new_run("coop")[1])))
+    def test_the_arms_without_tools_carry_the_same_keys_at_zero(self):
+        for name in ARMS_WITHOUT_TOOLS:
+            with self.subTest(arm=name):
+                arm, run = new_run(name)
+                metrics = arm.metrics(run)
+                self.assertEqual(metrics["messages_sent"], 0)
+                self.assertEqual(metrics["tool_calls"], {})
+                self.assertEqual(set(metrics), set(load("coop").metrics(new_run("coop")[1])))
+
+    def test_the_metrics_say_which_tool_surface_ran(self):
+        self.assertEqual(load("coop").metrics(new_run("coop")[1])["tool_surface"], "mcp")
+        self.assertEqual(load("coop").metrics(new_run("coop", options=BASH)[1])["tool_surface"], "bash")
 
 
 class HubTest(unittest.TestCase):
@@ -456,7 +530,8 @@ class HubTest(unittest.TestCase):
         options = {"git_remote": "git://host.docker.internal/team.git", "base_ref": "abc123"}
         expected = {"solo": [("agent1", "solo", [2, 1])],
                     "coop": [("agent1", "peer", [1]), ("agent2", "peer", [2])],
-                    "coop-git": [("agent1", "peer", [1]), ("agent2", "peer", [2])]}
+                    "coop-git": [("agent1", "peer", [1]), ("agent2", "peer", [2])],
+                    "coop-nocomm": [("agent1", "peer", [1]), ("agent2", "peer", [2])]}
         for name in ARM_NAMES:
             with self.subTest(arm=name):
                 answer = hub.create_run(name, [2, 1], specs, options, f"run-{name}")
@@ -469,6 +544,17 @@ class HubTest(unittest.TestCase):
                     self.assertIn(SUBMISSION_BLOCK, agent["prompt"])
                 described = hub.get_run(f"run-{name}")
                 self.assertEqual(described["metrics"]["tool_calls"], {})
+
+    def test_every_arm_here_offers_both_surfaces_and_sdlc_only_mcp(self):
+        hub = hub_module.Hub()
+        specs = {str(n): text for n, text in SPECS.items()}
+        options = {"git_remote": "git://host.docker.internal/team.git", "base_ref": "abc123", **BASH}
+        for name in ARM_NAMES:
+            with self.subTest(arm=name):
+                hub.create_run(name, [1, 2], specs, options, f"bash-{name}")
+        with self.assertRaises(hub_module.HubError) as refused:
+            hub.create_run("sdlc", [1, 2], specs, options, "bash-sdlc")
+        self.assertEqual(refused.exception.status, 400)
 
     def test_the_hub_serves_coop_tools_with_their_aliases(self):
         hub = hub_module.Hub()

@@ -31,12 +31,25 @@ the inbox. The wait is held between SHORTEST_WAIT_MS and LONGEST_WAIT_MS,
 where CooperBench clamps only the lower end; wait_seconds says why the
 cap stands above the maximum the schema advertises. README names this
 among the team arm's deviations.
+
+What the agents never see is the record. Each delivery is a "message"
+event that carries the text, its timestamps, its own seq as message_id
+and the seq of the call that sent it as send_id; each receive and each
+undo of one names the message ids it handed over or put back. That is
+what conversation.py derives CooperBench's conversation.json and
+<agent>_sent.jsonl from, and the paper-era store with its read receipts.
+git_log() is the history of a run's shared remote, which the hub keeps
+when the run closes.
 """
 
 import json
 import math
+import os
+import subprocess
+import tempfile
 import time
 from datetime import datetime
+from pathlib import Path
 
 from arm import Tool, ToolError
 
@@ -82,6 +95,25 @@ def inbox(run, agent):
     return run.state.setdefault("inboxes", {}).setdefault(agent, [])
 
 
+class Entry(dict):
+    """An inbox entry: the dict coop_msg.py pushes, which is all an agent
+    ever reads (json.dumps writes a dict's items, never its attributes),
+    and beside it the id of the "message" event that queued it, so the
+    receive that hands it over, or the undo that puts it back, can name
+    it in the record without the agent's output changing by a byte."""
+
+    __slots__ = ("message_id",)
+
+    def __init__(self, fields, message_id=None):
+        super().__init__(fields)
+        self.message_id = message_id
+
+
+def message_ids(entries):
+    """The message ids of inbox entries, None for one queued without."""
+    return [getattr(entry, "message_id", None) for entry in entries]
+
+
 def string_argument(call, name, default=None):
     """The argument as a string, or default when it is absent or null; any
     other type is refused rather than coerced, before anything is queued."""
@@ -101,23 +133,35 @@ def recipient_of(call):
     return recipient
 
 
-def deliver(run, sender, recipient, content):
+def deliver(run, sender, recipient, content, send_id=None):
     """Queue content for recipient, whoever that is. coop_msg.py pushes to
     <recipient>:inbox without checking the name against the agents, so a
     message to a misspelt peer is queued where nobody reads; this does the
     same, so the commands behave alike in every arm. The count is taken
-    before the append, so nothing is queued that cannot be reported."""
+    before the append, so nothing is queued that cannot be reported.
+
+    The "message" event is the record of the delivery, one per recipient
+    as coop_msg.py logs one line per recipient: to, chars, the text
+    itself (content, which stays off the trace stream), the entry's two
+    timestamps, message_id (the event's own seq, read in the same hold of
+    the lock as the emit, so it is exact) and send_id, the seq of the
+    send's or broadcast's "tool" event, which ties the deliveries of one
+    broadcast together. Writing the text into events.jsonl as it is sent
+    keeps it when the hub crashes or forgets the run."""
     chars = len(content)
-    entry = {"from": sender, "to": recipient, "content": content, "timestamp": time.time(),
-             "timestamp_iso": datetime.now().isoformat()}
+    fields = {"from": sender, "to": recipient, "content": content, "timestamp": time.time(),
+              "timestamp_iso": datetime.now().isoformat()}
     with run.lock:
-        inbox(run, recipient).append(entry)
-    run.emit("message", sender, to=recipient, chars=chars)
+        message_id = run.next_seq()
+        inbox(run, recipient).append(Entry(fields, message_id))
+        run.emit("message", sender, to=recipient, chars=chars, content=content,
+                 timestamp=fields["timestamp"], timestamp_iso=fields["timestamp_iso"],
+                 message_id=message_id, send_id=send_id)
 
 
 def send(call):
     recipient = recipient_of(call)
-    deliver(call.run, call.agent, recipient, string_argument(call, "text", ""))
+    deliver(call.run, call.agent, recipient, string_argument(call, "text", ""), call.tool_seq)
     return f"sent to {recipient}"
 
 
@@ -126,7 +170,7 @@ def broadcast(call):
     # delivered to nobody rather than to the peers before it.
     text = string_argument(call, "text", "")
     for peer in call.run.peers(call.agent):
-        deliver(call.run, call.agent, peer, text)
+        deliver(call.run, call.agent, peer, text, call.tool_seq)
     return ""
 
 
@@ -137,14 +181,16 @@ def receive(call):
     call.on_lost, as a wait's one message does: in a pilot the reply to
     a drain met a broken pipe and the messages were lost with it. A
     drain of an empty inbox has nothing to put back and registers no
-    undo."""
+    undo. The "receive" event names what it handed over by message id
+    and the call by its tool_seq (call_id), so a reader knows which
+    message was read, when and by which call."""
     run, me = call.run, call.agent
     with run.lock:
         box = inbox(run, me)
         messages, box[:] = list(box), []
         if messages:
-            call.on_lost(lambda: put_back(run, me, messages))
-    run.emit("receive", me, count=len(messages))
+            call.on_lost(lambda: put_back(run, me, messages, call.tool_seq))
+    run.emit("receive", me, count=len(messages), message_ids=message_ids(messages), call_id=call.tool_seq)
     return json.dumps(messages, indent=2)
 
 
@@ -207,21 +253,22 @@ def wait_for_message(call):
         if call.cancelled.is_set() or not inbox(run, me):
             return NO_MESSAGE
         message = inbox(run, me).pop(0)
-        call.on_lost(lambda: put_back(run, me, [message]))
-    run.emit("receive", me, count=1)
+        call.on_lost(lambda: put_back(run, me, [message], call.tool_seq))
+    run.emit("receive", me, count=1, message_ids=message_ids([message]), call_id=call.tool_seq)
     return json.dumps(message)
 
 
-def put_back(run, agent, messages):
+def put_back(run, agent, messages, call_id=None):
     """The undo of a take whose reply was never written: the messages go
     back at the head of the inbox, in the order they were taken, and the
     record says so. The "receive" event stays, since the hub did hand
-    them over; the "receive_lost" that follows it, with the same count,
-    is what lets a reader of the events tell that handover from one the
-    agent saw, rather than count a message received twice when the next
-    call takes it again."""
+    them over; the "receive_lost" that follows it, with the same count
+    and the same message ids, is what lets a reader of the events tell
+    that handover from one the agent saw, rather than count a message
+    received twice when the next call takes it again. call_id is the
+    call whose take this undoes."""
     inbox(run, agent)[0:0] = messages
-    run.emit("receive_lost", agent, count=len(messages))
+    run.emit("receive_lost", agent, count=len(messages), message_ids=message_ids(messages), call_id=call_id)
 
 
 def messaging_tools(wait=True):
@@ -248,9 +295,94 @@ def messaging_tools(wait=True):
 
 
 def message_metrics(run):
+    """One count per delivery, as CooperBench's len(sent_msgs) counts the
+    lines coop_msg.py logs: a broadcast to two peers is two. The words
+    are the text split on whitespace, the unit the paper's "10 messages
+    totaling over 3,000 words" counts in."""
     sent = [e for e in run.events if e["kind"] == "message"]
     by_agent = {}
     for event in sent:
         by_agent[event["agent"]] = by_agent.get(event["agent"], 0) + 1
     return {"messages_sent": len(sent), "messages_by_agent": by_agent,
-            "message_chars": sum(e.get("chars", 0) for e in sent)}
+            "message_chars": sum(e.get("chars", 0) for e in sent),
+            "message_words": sum(len((e.get("content") or "").split()) for e in sent)}
+
+
+# The shared git remote's history, for the arms that have one: the hub
+# takes it when the run closes, before anything is torn down, and hands it
+# to the runner as git_log.txt. The runner gives a close 120 seconds
+# (run.py's HubClient), so the fetch and the log are held well inside
+# that, and the fetch is shallow: the remote is seeded with the task
+# image's whole clone, and only the run's own commits are wanted.
+
+GIT_FETCH_DEPTH = 500
+GIT_FETCH_TIMEOUT_SECONDS = 60
+GIT_LOG_TIMEOUT_SECONDS = 30
+GIT_LOG = ("log", "--all", "--reflog", "--stat", "--decorate=short", "--no-color")
+
+
+def run_git(arguments, timeout=GIT_LOG_TIMEOUT_SECONDS):
+    """git with no prompt and no stdin, its output as text; a failure, a
+    timeout or a host without git is raised as RuntimeError, with git's
+    own words when it said any. The operator's own git configuration is
+    left out (a log.date, a format.pretty, a signature check would change
+    the text), so git_log.txt reads the same on every host."""
+    environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_GLOBAL": os.devnull,
+                   "GIT_CONFIG_NOSYSTEM": "1"}
+    try:
+        done = subprocess.run(["git", *arguments], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout, stdin=subprocess.DEVNULL, env=environment)
+    except (OSError, subprocess.TimeoutExpired) as problem:
+        raise RuntimeError(f"git {git_subcommand(arguments)} failed: {problem}") from None
+    if done.returncode != 0:
+        raise RuntimeError(f"git {git_subcommand(arguments)} failed: {done.stderr.strip()[-300:]}")
+    return done.stdout
+
+
+def git_subcommand(arguments):
+    """The subcommand a git command line runs, past -C and its directory."""
+    words = list(arguments)
+    while words[:1] == ["-C"]:
+        words = words[2:]
+    return words[0] if words else "git"
+
+
+def commit_exists(repository, ref):
+    try:
+        run_git(["-C", repository, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+    except RuntimeError:
+        return False
+    return True
+
+
+def log_of(repository, base_ref=None):
+    """git log --all --reflog --stat in a repository on this host. The
+    upstream history below base_ref, the commit every agent started from,
+    is left out, since it would bury the run's few commits under the
+    project's thousands; a base the repository lacks leaves all in."""
+    arguments = ["-C", repository, *GIT_LOG]
+    if base_ref and commit_exists(repository, base_ref):
+        arguments += ["--not", base_ref]
+    return run_git(arguments)
+
+
+def fetched_copy(remote, scratch):
+    """Every ref of the remote, GIT_FETCH_DEPTH commits deep, in a bare
+    repository under scratch: the refs and the commits the run made,
+    though no reflog, since git's protocol sends none."""
+    copy = str(Path(scratch) / "remote.git")
+    run_git(["init", "--quiet", "--bare", copy])
+    run_git(["-C", copy, "fetch", "--quiet", f"--depth={GIT_FETCH_DEPTH}", str(remote), "+refs/*:refs/*"],
+            timeout=GIT_FETCH_TIMEOUT_SECONDS)
+    return copy
+
+
+def git_log(remote, base_ref=None):
+    """The shared remote's history as text. A remote that is a directory
+    on this host is read in place, its reflog included when the
+    repository keeps one; any other (the runner's git:// URL) is fetched
+    into a scratch repository first."""
+    if Path(remote).is_dir():
+        return log_of(str(remote), base_ref)
+    with tempfile.TemporaryDirectory(prefix="coordbench-git-log-") as scratch:
+        return log_of(fetched_copy(remote, scratch), base_ref)

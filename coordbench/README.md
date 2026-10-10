@@ -33,16 +33,30 @@ Three things plug in:
 | --- | --- | --- |
 | solo | one agent implements both features | nothing |
 | coop | one agent per feature, messages only (CooperBench's Coop) | nothing |
+| coop-nocomm | coop's layout with messaging banned, CooperBench's `--no-messaging`: no tools and no word of a partner | nothing |
 | coop-git | coop plus a shared git remote they push to and merge from | git_remote |
 | team | a lead and members, a shared task list, typed requests, a scratchpad; its wait_for_message works, where CooperBench's did not (see below) | shared_volume |
 | sdlc | sdlc-template's claim protocol: issues, exclusive claims, pull requests, a merge gate that answers "main moved" | git_remote |
 
-solo, coop, coop-git and team are CooperBench's own arms (cooperbench/
-CooperBench at 63b9d44, MIT licence) re-made as plug-ins: their prompts
-are CooperBench's word for word, and tests compare them with CooperBench's
-own builders when its source is present (COOPERBENCH_DIR). Their tools
-keep CooperBench's command names (coop-send, coop-task-claim and the rest,
-with the same arguments and exit codes) and are also MCP tools. coop-send
+solo, coop, coop-git, coop-nocomm and team are CooperBench's own arms
+(cooperbench/CooperBench at 63b9d44, MIT licence) re-made as plug-ins:
+their prompts are CooperBench's word for word but for one sentence that
+coop, coop-git and team add naming the MCP tool behind each command, and
+tests compare them with CooperBench's own builders when its source is
+present (COOPERBENCH_DIR). Their tools keep CooperBench's command names
+(coop-send, coop-task-claim and the rest, with the same arguments and exit
+codes) and are also MCP tools, and the arm loads as a Claude Code plugin
+with a skill. That surface, the run option tool_surface "mcp", is the
+default. `--option tool_surface=bash` reproduces the surface CooperBench's
+claude_code agents had instead, for coop, coop-git and team: the prompt
+without the added sentence, byte for byte the authors' text; no plugin, so
+no skill; and the coop-* commands in Bash, with, for team, the one MCP
+server CooperBench registers, cooperbench-team, serving wait_for_message
+alone. Arm.claude_surface(options) says what a driver hands Claude Code
+for it (whether to load the plugin, which MCP servers), the hub's MCP
+endpoint lists only that tool, and the metrics record tool_surface. The
+sdlc arm, whose prompt names its MCP tools, offers "mcp" alone and the hub
+refuses it the other. coop-send
 and coop-broadcast behave as coop_msg.py's do in every arm that has them,
 the sdlc arm included: a message to any name is queued, an inbox being
 made for the name, so a misspelt peer is written to where nobody reads and
@@ -281,19 +295,43 @@ What the base class gives and what an arm may override:
   none (its team server sends no instructions and its other modes have no
   server); the key is left out of initialize when it is empty.
 - `metrics(run)`: numbers from run.events (every tool call, framed by a
-  "tool" event before its handler runs and a "tool_done" event after it
-  returns, the second with duration_ms, the handler's wall time,
-  blocked_ms, the part of it spent waiting for another agent, is_error
-  and cancelled; and every `run.emit(kind, agent, ...)`) and run.state.
-  The default metrics count events by kind, so that count includes
-  tool_done. Both durations are milliseconds as floats rounded to three
-  decimals, so a hub cost below a millisecond still shows.
+  "tool" event before its handler runs, with via, "mcp" or "shell", the
+  transport it came by, and a "tool_done" event after it returns, the
+  second with duration_ms, the handler's wall time, blocked_ms, the part
+  of it spent waiting for another agent, is_error and cancelled; and
+  every `run.emit(kind, agent, ...)`) and run.state. The default metrics
+  count events by kind, so that count includes tool_done, and name the
+  run's tool_surface. Both durations are milliseconds as floats rounded to
+  three decimals, so a hub cost below a millisecond still shows.
+- `artifacts(run)`: files the run leaves, {file name: a JSON value or
+  text}, taken once when the run closes, before teardown, and answered
+  beside the metrics; the team arm's are CooperBench's task_log.json and
+  tasks.json. The hub adds git_log.txt itself for a run with a shared
+  remote (below).
 - `teardown(run)`: free what setup took, once, when the run closes.
 - `needs`: "git_remote" (a bare repository, remote `team` in every agent's
   repository; run.options git_remote, git_remote_host and base_ref say
   where) and "shared_volume" (/workspace/shared in every container;
   run.options shared_dir and shared_dir_host). The hub refuses a run
   whose options do not provide what its arm needs.
+
+The record. The hub's first event in every run, seq 0, is run_started:
+the wall clock its t counts from (epoch, and iso in UTC), the arm, the
+agents with their roles and features, and the tool surface, so epoch + t
+puts any event at its absolute time. kit's messaging records each
+delivery as a "message" event carrying the text (content), coop_msg.py's
+timestamp and timestamp_iso, its own seq as message_id and the seq of
+the send's or broadcast's "tool" event as send_id (the call's
+`call.tool_seq`), so the deliveries of one broadcast share it; each
+"receive" and "receive_lost" names the message_ids it handed over or put
+back and the call (call_id). The team arm's request and response events
+carry their body as content too, which CooperBench's task-log does not
+keep. conversation.py, which imports nothing of coordbench, derives
+CooperBench's conversation.json, each sender's <agent>_sent.jsonl and the
+paper-era message store, conversation_store.json, from these events. The
+text stays in the run's own record and events.jsonl, written as it is
+sent, and is left off trace.py's stream: a field named content never
+reaches a listener, the hub's --debug file included.
 
 run.lock is a re-entrant condition that guards run.state; every change
 under it, and every emit, wakes the tools waiting on it, so a blocking tool
@@ -581,7 +619,15 @@ serves:
   prompt, and with "agent_tokens": true a bearer token of its own, which
   this answer alone carries; features must not repeat and are at most 16
   (a task pair is 2); `GET /api/runs/{run}`, `GET /api/runs/{run}/events`,
-  `POST /api/runs/{run}/close` -> metrics; `DELETE /api/runs/{run}` ->
+  `POST /api/runs/{run}/close` -> {"metrics", "artifacts"}, the second the
+  files the close that closed the run took before the arm's teardown:
+  the arm's own (Arm.artifacts) and, for a run whose options name a
+  shared remote, git_log.txt, `git log --all --reflog --stat` of it less
+  the history below base_ref: read in place, reflog included, from
+  git_remote_dir, the bare repository's directory on the hub's host, when
+  the options give one, and otherwise fetched from git_remote_host, 500
+  commits deep and with no reflog, which git's protocol does not send;
+  `DELETE /api/runs/{run}` ->
   {"run_id", "released": true}, which closes the run if it is still open
   and then forgets it, so a hub that serves many runs keeps none of the
   finished ones (the runner sends it once it holds the metrics and the

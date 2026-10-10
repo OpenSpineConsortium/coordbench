@@ -15,7 +15,9 @@ not write."""
 import ast
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -439,6 +441,150 @@ class WaitTest(KitTest):
                 self.call("agent2", "send_message", to="agent1", text="ready")
                 self.assertEqual(json.loads(self.call("agent1", "wait_for_message", **arguments))["content"],
                                  "ready")
+
+
+
+class RecordTest(KitTest):
+    """What the agents never see: each delivery's "message" event carries
+    the text, the entry's two timestamps, its own seq as message_id and
+    the sending call's tool event as send_id; each receive and each undo
+    names the message ids it handed over or put back. conversation.py
+    builds CooperBench's files from exactly this."""
+
+    def over_the_hub(self, agent, name, **arguments):
+        """A call framed as the hub frames it, so it has a tool event."""
+        import mcp
+        tool_list = {tool.name: tool for tool in kit.messaging_tools()}
+        result, problem = mcp.call_tool(self.run, agent, tool_list, {"name": name, "arguments": arguments})
+        self.assertIsNone(problem)
+        return result["content"][0]["text"]
+
+    def test_a_message_event_carries_the_text_its_timestamps_and_its_own_seq(self):
+        self.over_the_hub("agent1", "send_message", to="agent2", text="I take cli.py")
+        tool, message = [e for e in self.run.events if e["kind"] in ("tool", "message")]
+        entry = kit.inbox(self.run, "agent2")[0]
+        self.assertEqual(message["content"], "I take cli.py")
+        self.assertEqual((message["timestamp"], message["timestamp_iso"]),
+                         (entry["timestamp"], entry["timestamp_iso"]))
+        self.assertEqual(message["message_id"], message["seq"])
+        self.assertEqual(message["send_id"], tool["seq"])
+        self.assertEqual(entry.message_id, message["seq"])
+
+    def test_the_agent_reads_coop_msgs_five_keys_and_nothing_of_the_record(self):
+        self.over_the_hub("agent1", "send_message", to="agent2", text="hello")
+        received = json.loads(self.over_the_hub("agent2", "receive_messages"))
+        self.assertEqual([set(entry) for entry in received], [ENTRY_KEYS])
+        self.over_the_hub("agent1", "send_message", to="agent2", text="again")
+        self.assertEqual(set(json.loads(self.over_the_hub("agent2", "wait_for_message", timeout_ms=100))),
+                         ENTRY_KEYS)
+
+    def test_the_deliveries_of_one_broadcast_share_its_send_id(self):
+        self.over_the_hub("agent2", "broadcast", text="config.py is mine")
+        self.over_the_hub("agent2", "send_message", to="agent1", text="and you?")
+        tools = [e["seq"] for e in self.run.events if e["kind"] == "tool"]
+        sent = self.message_events()
+        self.assertEqual([(e["to"], e["send_id"]) for e in sent],
+                         [("agent1", tools[0]), ("agent3", tools[0]), ("agent1", tools[1])])
+        self.assertEqual(len({e["message_id"] for e in sent}), 3)
+
+    def test_a_handler_called_directly_has_no_send_id(self):
+        self.call("agent1", "send_message", to="agent2", text="hi")
+        self.assertIsNone(self.message_events()[0]["send_id"])
+
+    def test_receives_and_their_undo_name_the_message_ids(self):
+        for text in ("one", "two"):
+            self.over_the_hub("agent2", "send_message", to="agent1", text=text)
+        ids = [e["message_id"] for e in self.message_events()]
+        drain = Call(self.run, "agent1", {}, tool_seq=41)
+        tools()["receive_messages"].handler(drain)
+        drain.lost()
+        self.over_the_hub("agent1", "wait_for_message", timeout_ms=100)
+        self.over_the_hub("agent1", "receive_messages")
+        received = [(e["kind"], e["message_ids"], e["call_id"]) for e in self.run.events
+                    if e["kind"].startswith("receive")]
+        wait_seq, drain_seq = [e["seq"] for e in self.run.events if e["kind"] == "tool"][-2:]
+        self.assertEqual(received, [("receive", ids, 41), ("receive_lost", ids, 41),
+                                    ("receive", ids[:1], wait_seq), ("receive", ids[1:], drain_seq)])
+
+    def test_an_empty_drain_names_no_message(self):
+        self.over_the_hub("agent3", "receive_messages")
+        receive = next(e for e in self.run.events if e["kind"] == "receive")
+        self.assertEqual((receive["count"], receive["message_ids"]), (0, []))
+
+    def test_the_text_stays_in_the_record_and_off_the_trace_stream(self):
+        import trace
+        heard = trace.listen(trace.Memory())
+        self.addCleanup(trace.unlisten, heard)
+        self.over_the_hub("agent1", "send_message", to="agent2", text="a secret plan")
+        streamed = next(e for e in heard if e["kind"] == "message")
+        self.assertNotIn("content", streamed)
+        self.assertNotIn("a secret plan", json.dumps(list(heard)))
+        self.assertEqual(self.message_events()[0]["content"], "a secret plan")
+        self.assertEqual(streamed["message_id"], self.message_events()[0]["message_id"])
+
+    def test_the_metrics_count_words_beside_characters(self):
+        self.over_the_hub("agent1", "send_message", to="agent2", text="I take  cli.py\nand config.py")
+        self.over_the_hub("agent1", "broadcast", text="done")
+        metrics = kit.message_metrics(self.run)
+        self.assertEqual((metrics["messages_sent"], metrics["message_words"]), (3, 5 + 1 + 1))
+
+
+class GitLogTest(unittest.TestCase):
+    """The shared remote's history, taken as the run closes: in place for a
+    repository on this host, through a shallow fetch for a URL, and
+    without the upstream history the remote was seeded with."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.remote = self.tmp / "remote.git"
+        self.git("init", "-q", "--bare", str(self.remote))
+        work = self.tmp / "work"
+        self.git("init", "-q", "-b", "main", str(work))
+        self.base = self.commit(work, "upstream.txt", "the project's own history\n", "upstream commit")
+        self.git("-C", str(work), "push", "-q", str(self.remote), "main")
+        self.git("-C", str(work), "checkout", "-q", "-b", "agent1")
+        self.commit(work, "cli.py", "print('verbose')\n", "agent1 adds the flag")
+        self.git("-C", str(work), "push", "-q", str(self.remote), "agent1")
+
+    def git(self, *arguments):
+        # The host's own git configuration (a signing key, a push hook) is
+        # left out, so the repository is the same wherever the test runs.
+        environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@example.com",
+                       "GIT_COMMITTER_NAME": "a", "GIT_COMMITTER_EMAIL": "a@example.com"}
+        done = subprocess.run(["git", *arguments], capture_output=True, text=True, env=environment)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.strip()
+
+    def commit(self, work, name, text, message):
+        (work / name).write_text(text, encoding="utf-8")
+        self.git("-C", str(work), "add", name)
+        self.git("-C", str(work), "commit", "-q", "-m", message)
+        return self.git("-C", str(work), "rev-parse", "HEAD")
+
+    def test_a_repository_here_is_logged_in_place_with_every_branch_and_its_stat(self):
+        log = kit.git_log(str(self.remote))
+        self.assertIn("agent1 adds the flag", log)
+        self.assertIn("upstream commit", log)
+        self.assertIn("cli.py | 1 +", log)
+
+    def test_the_history_below_the_base_is_left_out(self):
+        log = kit.git_log(str(self.remote), self.base)
+        self.assertIn("agent1 adds the flag", log)
+        self.assertNotIn("upstream commit", log)
+
+    def test_a_base_the_repository_lacks_logs_everything(self):
+        self.assertIn("upstream commit", kit.git_log(str(self.remote), "0" * 40))
+
+    def test_a_url_is_fetched_first(self):
+        log = kit.git_log(self.remote.as_uri(), self.base)
+        self.assertIn("agent1 adds the flag", log)
+        self.assertNotIn("upstream commit", log)
+
+    def test_a_remote_that_is_not_there_is_a_runtime_error_naming_the_step(self):
+        with self.assertRaises(RuntimeError) as failed:
+            kit.git_log((self.tmp / "missing.git").as_uri())
+        self.assertTrue(str(failed.exception).startswith("git fetch failed"), str(failed.exception))
 
 
 if __name__ == "__main__":

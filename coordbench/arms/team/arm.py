@@ -49,6 +49,21 @@ prompt names (/workspace/shared) and runs without git, as the authors'
 ablation did; given a shared remote (the run option "git_remote") it adds
 CooperBench's git block, which coop-git holds.
 
+The run option tool_surface=bash reproduces what CooperBench's
+claude_code team agent had at 63b9d44: the coop-* commands in Bash, and
+one MCP server, cooperbench-team, serving wait_for_message alone, which
+its adapter registers in the agent's .claude.json. The driver then loads
+no plugin (no skill, no coordbench server), hands the hub over under
+that server's name (Arm.claude_surface), the hub's MCP endpoint lists
+that one tool, and the prompt leaves the added sentence out.
+
+What CooperBench's runner keeps of a team run is kept too: the task-log
+and the final list, handed to the runner at close as task_log.json and
+tasks.json in CooperBench's shapes (artifacts), and the lead and the
+team's switches beside the metrics (lead_agent, team_features, all on,
+since this arm has no switch). A request's and a response's body, which
+CooperBench's task-log does not keep, is in the run's events as content.
+
 Where this differs from CooperBench, and why:
 
 - The list lives in the run's memory, not Redis, and every check-and-write
@@ -98,10 +113,12 @@ import os
 import time
 import uuid
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import kit
-from arm import SUBMISSION_BLOCK, AgentSpec, Arm, Tool, ToolError, builtin_arms_dir
+from arm import (SUBMISSION_BLOCK, TOOL_SURFACES, AgentSpec, Arm, Tool, ToolError, builtin_arms_dir,
+                 tool_surface)
 
 # build_team_instruction joins its sections with this rule.
 SECTION_RULE = "\n\n---\n\n"
@@ -167,12 +184,17 @@ class Board:
         self.requests = {}
         self.responses = {}
 
-    def record(self, kind, **fields):
+    def record(self, kind, said=None, **fields):
         """One task-log entry, shaped as CooperBench's _log writes it, kept
-        also as a run event."""
+        also as a run event. `said` is what only the event carries: a
+        request's or a response's text (content, which stays off the trace
+        stream), its timestamps and the seq of the call that sent it
+        (send_id). CooperBench's task-log holds no body, so the entry
+        keeps its shape, and the text, which no other record keeps once
+        the run is released, is in events.jsonl."""
         self.log.append({"kind": kind, **fields, "ts": time.time()})
         details = {key: value for key, value in fields.items() if key != "by"}
-        self.run.emit(EVENT_KINDS[kind], fields.get("by"), **details)
+        self.run.emit(EVENT_KINDS[kind], fields.get("by"), **details, **(said or {}))
 
     def create(self, title, by, owner="", metadata=None):
         """task_list.py's create. A task starts open even when it has an
@@ -225,16 +247,18 @@ class Board:
                      for i in sorted(self.tasks)]
             return tasks, [dict(entry) for entry in self.log]
 
-    def request(self, sender, recipient, kind, body):
+    def request(self, sender, recipient, kind, body, send_id=None):
         """protocol.py's request: an open request in the recipient's queue,
         whoever the recipient is. protocol.py checks the name against
         nobody, so a request to a misspelt peer waits for an answer that
         never comes, as it does in CooperBench."""
         with self.run.lock:
             request_id = fresh_id(self.requests, self.responses)
+            sent = time.time()
             self.requests[request_id] = {"id": request_id, "from": sender, "to": recipient,
-                                         "kind": kind, "body": body, "ts": time.time()}
-            self.record("request", request_id=request_id, by=sender, to=recipient, request_kind=kind)
+                                         "kind": kind, "body": body, "ts": sent}
+            self.record("request", said=message_fields(body, sent, send_id),
+                        request_id=request_id, by=sender, to=recipient, request_kind=kind)
         return request_id
 
     def await_response(self, request_id, seconds, call=None):
@@ -264,7 +288,7 @@ class Board:
         with self.run.lock:
             self.responses.setdefault(request_id, []).insert(0, response)
 
-    def respond(self, responder, request_id, body):
+    def respond(self, responder, request_id, body, send_id=None):
         """protocol.py's respond: only the addressee answers, and only once,
         since answering closes the request."""
         with self.run.lock:
@@ -277,13 +301,22 @@ class Board:
                         "body": body, "ts": time.time()}
             self.responses.setdefault(request_id, []).append(response)
             del self.requests[request_id]
-            self.record("response", request_id=request_id, by=responder, to=request["from"])
+            self.record("response", said=message_fields(body, response["ts"], send_id),
+                        request_id=request_id, by=responder, to=request["from"])
 
     def pending(self, agent):
         """protocol.py's list_pending: the open requests to this agent, by id."""
         with self.run.lock:
             return [dict(self.requests[i]) for i in sorted(self.requests)
                     if self.requests[i]["to"] == agent]
+
+
+def message_fields(body, sent, send_id):
+    """The fields of a request's or response's event that the task-log
+    leaves out: its text and when it was sent, in coop_msg.py's two forms,
+    and the call that sent it."""
+    return {"content": body, "timestamp": sent, "timestamp_iso": datetime.fromtimestamp(sent).isoformat(),
+            "send_id": send_id}
 
 
 def board_of(run):
@@ -375,7 +408,7 @@ def send_request(call):
     wait = call.arguments.get("wait")
     seconds = None if wait is None else wait_seconds(wait)
     board = board_of(call.run)
-    request_id = board.request(call.agent, recipient, kind, optional_text(call, "body") or "")
+    request_id = board.request(call.agent, recipient, kind, optional_text(call, "body") or "", call.tool_seq)
     if seconds is None:
         return request_id
     response = board.await_response(request_id, seconds, call)
@@ -388,7 +421,8 @@ def send_request(call):
 
 
 def answer_request(call):
-    board_of(call.run).respond(call.agent, required(call, "request_id"), optional_text(call, "body") or "")
+    board_of(call.run).respond(call.agent, required(call, "request_id"), optional_text(call, "body") or "",
+                               call.tool_seq)
     return ""
 
 
@@ -747,12 +781,28 @@ def tool_call_counts(run):
     return dict(Counter(event["tool"] for event in run.events if event["kind"] == "tool"))
 
 
+# runner/team.py's team_features with every switch on, which is how
+# coordbench's team arm always runs: it has no switch to turn one off.
+# auto_refresh drives a poller CooperBench attaches to its Python-loop
+# adapters only, so for a Claude Code agent it changes nothing in either
+# harness, and the record keeps CooperBench's value for a default run.
+TEAM_FEATURES = {"task_list": True, "scratchpad": True, "mcp": True, "auto_refresh": True, "protocol": True}
+
+# The MCP server CooperBench's team mode registers for its CLI agents
+# (team_harness MCP_SERVER_NAME), and the one tool it serves; on the bash
+# tool surface the hub stands in for it under the same name.
+COOPERBENCH_MCP_SERVER = "cooperbench-team"
+
+
 class TeamArm(Arm):
     name = "team"
     description = ("CooperBench's team mode, the best arm of the authors' ablation: a lead and "
                    "members, one per feature, with a shared task list, typed requests, messages "
                    "and a shared scratchpad.")
     needs = ("shared_volume",)
+    tool_surfaces = TOOL_SURFACES
+    bash_mcp_server = COOPERBENCH_MCP_SERVER
+    bash_mcp_tools = ("wait_for_message",)
 
     def layout(self, features):
         # runner/team.py zips agent1, agent2 and so on with the sorted
@@ -795,13 +845,27 @@ class TeamArm(Arm):
         return sections
 
     def role_block(self, run, agent):
-        note = mcp_sentence(self.tools_for(run, agent).values())
+        note = ""
+        if tool_surface(run.options) == "mcp":
+            note = mcp_sentence(self.tools_for(run, agent).values())
         usage = TEAM_LIST_USAGE + (f"\n\n{note}" if note else "")
         if run.role_of(agent) == "lead":
             return lead_block(agent, run.peers(agent), usage)
         return member_block(agent, lead_of(run), usage)
 
     def metrics(self, run):
+        """compute_metrics' six, which are all CooperBench's result.json
+        holds under metrics, beside coordbench's counts, and the two
+        facts CooperBench's runner writes beside them: the lead and the
+        team's switches."""
         tasks, log = board_of(run).snapshot()
         return {**super().metrics(run), **compute_metrics(log, tasks), **kit.message_metrics(run),
-                "tool_calls": tool_call_counts(run)}
+                "tool_calls": tool_call_counts(run), "lead_agent": lead_of(run),
+                "team_features": dict(TEAM_FEATURES)}
+
+    def artifacts(self, run):
+        """runner/team.py's two files, taken when the run closes: the
+        task-log as it stands (task_log.json) and the final list in id
+        order (tasks.json), each in CooperBench's shape."""
+        tasks, log = board_of(run).snapshot()
+        return {"task_log.json": log, "tasks.json": tasks}

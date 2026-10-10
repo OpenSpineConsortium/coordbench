@@ -201,7 +201,7 @@ def call_tool(run, agent, tools, params, started=None, finished=None):
     if started is not None:
         started(call)
     debug_arguments(run, agent, name, arguments)
-    run.emit("tool", agent, tool=name)
+    call.tool_seq = run.emit("tool", agent, tool=name, via=call.via)["seq"]
     began = trace.now_ms()
     result, is_error = run_handler(run, tool, call)
     duration_ms = round(trace.now_ms() - began, 3)
@@ -308,7 +308,7 @@ def handle(message, run, agent, instructions="", sink=None, in_flight=None):
         return response(request_id, initialize_result(params, instructions))
     if method == "ping":
         return response(request_id, {})
-    tools = run.arm.tools_for(run, agent)
+    tools = run.arm.mcp_tools_for(run, agent)
     if method == "tools/list":
         return response(request_id, {"tools": [t.describe() for t in tools.values()]})
     if method == "tools/call":
