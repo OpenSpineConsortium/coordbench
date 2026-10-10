@@ -109,7 +109,7 @@ COOPERBENCH_SOLO_KEYS = ["repo", "task_id", "features", "setting", "run_id", "ru
                          "started_at", "ended_at", "duration_seconds", "agent", "total_cost", "total_steps", "log_dir"]
 # What coordbench adds after them.
 COORDBENCH_RESULT_KEYS = {"arm", "driver", "agents_seconds", "isolation", "options", "agent_models", "max_turns",
-                          "timeout_s", "disallowed_tools", "provenance", "image", "metrics", "timings",
+                          "error_kind",                          "timeout_s", "disallowed_tools", "provenance", "image", "metrics", "timings",
                           "utc_offset_seconds"}
 RESULT_KEYS = set(COOPERBENCH_COOP_KEYS) | COORDBENCH_RESULT_KEYS
 # coop.py's per-agent fields in its order, then coordbench's.
@@ -237,6 +237,7 @@ class FakeDocker:
         self.python = python
         self.mountpoint = mountpoint
         self.fail_seed = fail_seed
+        self.info_fails = False
         self.claude_times_out = False
         self.on_claude = None
         self.git_setups = {}
@@ -246,7 +247,10 @@ class FakeDocker:
     def __call__(self, *args, input=None, timeout=None, output=None, extra_env=None):
         args = [str(arg) for arg in args]
         with self.lock:
-            self.calls.append({"args": args, "input": input, "output": output, "extra_env": extra_env})
+            # The daemon check every run makes first is not a command that
+            # touches a container, so it is not recorded with those.
+            if args != ["info"]:
+                self.calls.append({"args": args, "input": input, "output": output, "extra_env": extra_env})
             if args[:3] == ["run", "-d", "--name"]:
                 self.environments[args[3]] = dict(extra_env or {})
         code, out = self.answer(args, output)
@@ -255,6 +259,8 @@ class FakeDocker:
     def answer(self, args, output):
         if output is not None:
             return self.run_claude(args, output)
+        if args == ["info"]:
+            return (1, "") if self.info_fails else (0, "")
         if args[:2] in (["network", "inspect"], ["container", "inspect"]):
             return 1, ""
         if args[:2] == ["run", "--rm"]:
@@ -1894,7 +1900,7 @@ class CooperBenchParity(RunnerCase):
         self.assertEqual((result["total_cost"], result["total_steps"]), (None, None))
         summary = json.loads((self.logs / "t" / "summary.json").read_text())
         self.assertEqual(summary["results"], [{"task": f"{REPO}/{TASK}/1,6", "status": "done", "cost": None,
-                                               "eval": "pass"}])
+                                               "error_kind": "agent", "eval": "pass"}])
         self.assertEqual((summary["eval"]["passed"], summary["pass_rate"], summary["total_cost"]), (1, 1.0, None))
         self.assertIn("summary: 1 completed, 0 skipped, 0 failed; evals: 1 evaluated, 1 passed", err)
 
@@ -2674,6 +2680,67 @@ class SecretsInTheDrivers(unittest.TestCase):
         self.assertEqual(cleaned.get("KEEP"), "1")
         for name in ("CLAUDE_CODE_OAUTH_TOKEN", "COORD_ADMIN_TOKEN", "COORD_AGENT_TOKEN"):
             self.assertNotIn(name, cleaned)
+
+
+class MachineFailuresAndReferenceMerges(RunnerCase):
+    """The docker preflight, the infrastructure kind of an error, and the
+    --reference-merge choice of pairs by CooperBench's gold report."""
+
+    def write_gold_report(self, conflicting):
+        rows = [{"repo": REPO, "task_id": TASK, "f1": f1, "f2": f2, "has_conflict": conflicting[(f1, f2)]}
+                for f1, f2 in conflicting]
+        (self.cooperbench / "dataset" / "gold_conflict_report.json").write_text(
+            json.dumps({"all_results": rows}), encoding="utf-8")
+
+    def test_a_run_refuses_to_start_while_the_docker_daemon_does_not_answer(self):
+        self.docker.info_fails = True
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 2)
+        self.assertIn("bash bench/cooperbench/setup.sh", err)
+        self.assertFalse((self.logs / "t").exists())
+
+    def test_a_pair_lost_to_docker_is_an_infrastructure_error_in_its_result_and_the_summary(self):
+        self.docker.fail_seed = True
+        code, _, err = self.main(*self.run_arguments("coop-git", "--features", "1,6"))
+        self.assertEqual(code, 1)
+        result = json.loads((self.pair() / "result.json").read_text())
+        self.assertEqual(result["error_kind"], "infrastructure")
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual(summary["infrastructure_errors"], 1)
+        self.assertIn("1 failed (1 infrastructure)", err)
+
+    def test_an_error_kind_names_the_machine_the_runner_or_the_agent(self):
+        agent_error = {"agent1": types.SimpleNamespace(status="Error")}
+        clean = {"agent1": types.SimpleNamespace(status="Submitted")}
+        self.assertEqual(runner.error_kind({"error_kind": "infrastructure"}, agent_error), "infrastructure")
+        self.assertEqual(runner.error_kind({}, agent_error), "agent")
+        self.assertEqual(runner.error_kind({}, clean), None)
+
+    def test_a_reference_merge_keeps_only_the_pairs_the_gold_patches_merge_that_way(self):
+        self.write_gold_report({(1, 6): False, (2, 10): True})
+        pairs = [(REPO, TASK, [1, 6]), (REPO, TASK, [2, 10])]
+        dataset = self.cooperbench / "dataset"
+        self.assertEqual(runner.by_reference_merge(pairs, dataset, "clean"), [(REPO, TASK, [1, 6])])
+        self.assertEqual(runner.by_reference_merge(pairs, dataset, "conflicting"), [(REPO, TASK, [2, 10])])
+
+    def test_a_reference_merge_names_a_missing_report_a_missing_pair_and_an_empty_choice(self):
+        pairs = [(REPO, TASK, [1, 6])]
+        dataset = self.cooperbench / "dataset"
+        with self.assertRaisesRegex(ValueError, "needs gold_conflict_report.json"):
+            runner.by_reference_merge(pairs, dataset, "clean")
+        self.write_gold_report({(2, 10): True})
+        with self.assertRaisesRegex(ValueError, "no result for"):
+            runner.by_reference_merge(pairs, dataset, "clean")
+        self.write_gold_report({(1, 6): True})
+        with self.assertRaisesRegex(ValueError, "merges clean"):
+            runner.by_reference_merge(pairs, dataset, "clean")
+
+    def test_the_command_line_applies_the_reference_merge_before_anything_runs(self):
+        self.write_gold_report({(1, 6): False, (2, 10): True})
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6", "--reference-merge", "conflicting"))
+        self.assertEqual(code, 2)
+        self.assertIn("merges conflicting", err)
+        self.assertFalse((self.logs / "t").exists())
 
 
 if __name__ == "__main__":

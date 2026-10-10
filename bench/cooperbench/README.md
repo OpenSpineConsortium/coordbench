@@ -166,6 +166,13 @@ which is why the steps take one task at a time.
 - run_arms.sh: runs the four arms on one task, and coop-nocomm
   (`--no-messaging`) when it is named, the no-communication baseline
   report.py sets against coop.
+- pilot.sh: the six-arm pilot on one task (solo, coop, coop-nocomm,
+  coop-git, team, sdlc) with the flags the click 2068 and jinja 1559 pilots
+  used, then report.py and the free judge heuristics. Usage:
+  `bash bench/cooperbench/pilot.sh <repo> <task> <prefix>`; the runs are
+  <prefix>-<arm> under the logs and the report is <prefix>-report.md. It
+  needs COORDBENCH_CLAUDE_TOKEN set, runs every arm even when one ends in
+  error, and makes no judge model calls.
 - report.py: the arms side by side, from CooperBench's logs; tested in
   tests/test_experiment_report.py.
 - difficulty.py: App C's relative difficulty, the ten-bucket curves, AUC

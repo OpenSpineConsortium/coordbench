@@ -1901,6 +1901,16 @@ def context(arms, options=None):
     return groups, roles, found
 
 
+def rules_section():
+    """What "Passed" counts, said where the tables are read: CooperBench's
+    63b9d44 verdict, which the pass tables use, and the paper-era rule,
+    which the merge cascade's table counts beside it."""
+    return ["", "Passed is eval.json's both_passed, CooperBench 63b9d44's verdict. A pair whose merge conflicts "
+                "passes only when agent1's own patch passes both features, since a conflicting merge is scored "
+                "as placeholder results. A pair whose merge is clean passes on the merged patch. The paper-era "
+                "rule (naive merge, union, resolver) is counted in the merge cascade's table."]
+
+
 def render(arms, runs=None, dataset=None, published=None, options=None):
     """The report as Markdown. arms is {label: {key: Pair}} (arm_outcomes)
     or {label: [Pair]}; runs, when given, is [(label, run name, [Pair],
@@ -1909,7 +1919,7 @@ def render(arms, runs=None, dataset=None, published=None, options=None):
     groups, roles, found = context(arms, options)
     everything = groups + pooled_groups(groups)
     seed = options.get("seed", 0)
-    lines = ["# Arms side by side"]
+    lines = ["# Arms side by side"] + rules_section()
     if runs:
         lines += runs_section(runs, dataset)
     lines += rates_section(everything, seed) + cooperbench_rates_section(everything) + cost_section(everything)

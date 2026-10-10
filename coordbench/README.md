@@ -497,6 +497,14 @@ python3 bench/cooperbench/report.py --run team-coordbench=flash-team-coordbench 
 `--subset` alone runs every pair of the subset across its tasks, as
 CooperBench's runner does, and `--repo`/`--task` narrow it;
 `--concurrency N` runs N pairs at once on one hub (CooperBench runs 20).
+`--reference-merge clean` (or `conflicting`) keeps only the pairs whose gold
+patches merge clean, or conflict, by the dataset's gold_conflict_report.json,
+so a subset can be drawn by what the reference solutions do. The run first
+checks that the Docker daemon answers `docker info` and refuses to start
+otherwise, as `prepare` does. A pair's result.json carries `error_kind`:
+`infrastructure` for a failure of Docker or the hub, `setup` for any other
+failure before the agents ran, and `agent` when an agent ended in Error;
+summary.json counts the infrastructure ones as `infrastructure_errors`.
 `--agent-model agent2=MODEL` gives one agent its own model,
 `--disallowed-tools WebFetch,WebSearch` keeps the agents to local tools
 as the paper did, and `--dataset-dir` points the specs and the scorer at
