@@ -22,7 +22,7 @@ pins a notice as one agent and reads it as the other, sends a message,
 closes the run and prints the metrics. Any step that fails ends the
 check with exit 1 and the exception's one line.
 
-experiment/coordbench/examples/board/ is the generator's own output for
+coordbench/examples/board/ is the generator's own output for
 the name "board", kept in the tree as the worked example; a test
 regenerates it and compares every byte, so the archetype and the example
 cannot drift apart.
@@ -147,9 +147,9 @@ The prompt is the base prompt (the agent's feature spec and CooperBench's
 submission block) with one paragraph about the board before the
 submission block. The metrics count the notices and the messages.
 
-experiment/coordbench/new_arm.py wrote this file, and it is yours to
+coordbench/new_arm.py wrote this file, and it is yours to
 change: the commented lines in the class below say where each override
-goes and what experiment/coordbench/README.md ("Writing an arm") says it
+goes and what coordbench/README.md ("Writing an arm") says it
 is for. An arm overrides only what it changes, so delete what this one
 does not need.
 """

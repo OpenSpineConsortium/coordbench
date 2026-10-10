@@ -80,14 +80,14 @@ Keep ANTHROPIC_API_KEY unset: the adapter prefers it, and it bills the API.
 
 ## Steps, in the new session
 
-1. `bash experiment/setup.sh`: Docker, CooperBench, Redis, the git server.
+1. `bash bench/cooperbench/setup.sh`: Docker, CooperBench, Redis, the git server.
 2. For each task of dataset/subsets/flash.json, one at a time:
-   `bash experiment/prepare_task.sh <repo> <task>`, then
-   `bash experiment/run_arms.sh <repo> <task>`, then remove the task's
+   `bash bench/cooperbench/prepare_task.sh <repo> <task>`, then
+   `bash bench/cooperbench/run_arms.sh <repo> <task>`, then remove the task's
    image (`docker rmi akhatua/cooperbench-...`) to free the disk. A
    session's background command stops after two hours, so the session
    drives one task per command.
-3. `python3 experiment/report.py` sets the four arms side by side: each
+3. `python3 bench/cooperbench/report.py` sets the four arms side by side: each
    arm's pass rate with a 95% interval next to the authors' number, every
    two arms compared on the pairs both scored (exact McNemar), and one row
    per pair. A pair an agent left in Error is counted apart, not as a

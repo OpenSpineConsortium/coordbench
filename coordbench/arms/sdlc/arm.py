@@ -1,7 +1,8 @@
-"""The sdlc arm: this repository's own claim protocol as a coordination arm.
+"""The sdlc arm: sdlc-template's claim protocol as a coordination arm.
 
-The template's way of working (docs/agents/PROTOCOL.md, with the merge
-habits of docs/agents/TEAM.md) is one more way of wiring agents together,
+The template's way of working (docs/agents/PROTOCOL.md in
+OpenSpineConsortium/sdlc-template, with the merge habits of its
+docs/agents/TEAM.md) is one more way of wiring agents together,
 so it can be benchmarked on CooperBench's tasks beside CooperBench's own
 arms. Each piece of the protocol becomes a tool the hub serves:
 
@@ -33,8 +34,8 @@ arms. Each piece of the protocol becomes a tool the hub serves:
   waits on a peer's has nothing better to do than wait for its comment.
 
 Labels beyond the four states, blockers, the 24-hour release, the lead and
-scripts/check.sh are left out: in a run of two or three agents on one task
-pair there is nothing for them to act on.
+the template's scripts/check.sh are left out: in a run of two or three
+agents on one task pair there is nothing for them to act on.
 
 The gate acts on the real repository, named by the run option
 "git_remote_host" (the shared remote as the hub's host reaches it). It

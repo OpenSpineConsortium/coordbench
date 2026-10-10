@@ -35,7 +35,7 @@ from then on as a bearer token, so no agent can speak as another and
 nothing else on the network can speak at all; a hub that predates the
 option gives none, and the run stays open as it was.
 
-The logs take CooperBench's layout, so experiment/report.py and
+The logs take CooperBench's layout, so bench/cooperbench/report.py and
 `cooperbench eval` read them as they read the authors' runs:
 
     <log_dir>/<run_name>/<setting>/<repo>/<task>/f<a>_f<b>/
@@ -671,7 +671,7 @@ def ensure_git_server():
         checked(drivers.docker("run", "-d", "--name", GIT_SERVER, "--network", NETWORK,
                                "-p", f"127.0.0.1:{GIT_PORT}:{GIT_PORT}", "-v", f"{GIT_DATA_VOLUME}:/git",
                                "--restart", "unless-stopped", GIT_IMAGE),
-                f"starting the git server (build {GIT_IMAGE} with experiment/setup.sh)")
+                f"starting the git server (build {GIT_IMAGE} with bench/cooperbench/setup.sh)")
     elif state.stdout.strip() != "true":
         checked(drivers.docker("start", GIT_SERVER), "starting the git server")
     wait_for_git_daemon()

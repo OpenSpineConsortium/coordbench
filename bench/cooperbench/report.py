@@ -1,6 +1,6 @@
 """Set the four arms of the experiment side by side, from CooperBench's logs.
 
-Each arm is one CooperBench run (experiment/run_arms.sh names them
+Each arm is one CooperBench run (bench/cooperbench/run_arms.sh names them
 flash-<arm>-<tag>), and each pair it ran leaves result.json (the agents'
 status, tokens and time) and eval.json (whether both features' tests
 passed on the merged code) under logs/<run>/<setting>/<repo>/<task>/<pair>/.
@@ -20,10 +20,10 @@ sets an eval error apart too but scores an errored agent's empty patch as
 a failure; here every arm's rate, CooperBench's runs and coordbench's
 alike, is its rate on the pairs its agents finished.
 
-    python3 experiment/report.py [--logs ~/cooperbench/logs] [--tag cc]
+    python3 bench/cooperbench/report.py [--logs ~/cooperbench/logs] [--tag cc]
         [--arm solo --arm team ...] [--run LABEL=RUN_NAME ...]
 
-Any arm, built in or a plug-in of one's own (experiment/coordbench), is
+Any arm, built in or a plug-in of one's own (coordbench/), is
 reported the same way: --arm NAME reads the run flash-NAME-<tag>, and
 --run LABEL=RUN_NAME reads any run under the label given, so a coordbench
 run of an arm can sit next to CooperBench's own run of the same arm.

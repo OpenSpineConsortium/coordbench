@@ -35,7 +35,7 @@ Three things plug in:
 | coop | one agent per feature, messages only (CooperBench's Coop) | nothing |
 | coop-git | coop plus a shared git remote they push to and merge from | git_remote |
 | team | a lead and members, a shared task list, typed requests, a scratchpad; its wait_for_message works, where CooperBench's did not (see below) | shared_volume |
-| sdlc | this repository's claim protocol: issues, exclusive claims, pull requests, a merge gate that answers "main moved" | git_remote |
+| sdlc | sdlc-template's claim protocol: issues, exclusive claims, pull requests, a merge gate that answers "main moved" | git_remote |
 
 solo, coop, coop-git and team are CooperBench's own arms (cooperbench/
 CooperBench at 63b9d44, MIT licence) re-made as plug-ins: their prompts
@@ -52,7 +52,7 @@ message of several words is a word too many (exit 2); coop-send says
 "sent to <recipient>" on stderr and nothing on stdout, and coop-broadcast
 says nothing; every received entry carries timestamp and timestamp_iso. A
 run through coordbench can therefore be checked against the same arm run
-through CooperBench's runner (experiment/run_arms.sh), which tells how
+through CooperBench's runner (bench/cooperbench/run_arms.sh), which tells how
 much of a result is the harness rather than the arm.
 
 The team arm keeps four differences from CooperBench's team mode, each
@@ -175,8 +175,8 @@ name, so a new arm starts from a working directory rather than from the
 prose that follows:
 
 ```
-python3 experiment/coordbench/new_arm.py my-arm path/to/arms [--description TEXT]
-python3 experiment/coordbench/new_arm.py --check path/to/arms/my-arm
+python3 coordbench/new_arm.py my-arm path/to/arms [--description TEXT]
+python3 coordbench/new_arm.py --check path/to/arms/my-arm
 ```
 
 The first command writes path/to/arms/my-arm/: .claude-plugin/plugin.json
@@ -395,7 +395,7 @@ benchmarked as coordination:
   tool); `run.py finish` waits for each agent's marker, scores and tears
   down. A subagent leaves no stream on the host, so result.json records
   its tokens, steps, cost, duration_ms and api_duration_ms as null
-  (unknown), never as zero, and experiment/report.py shows them as '-';
+  (unknown), never as zero, and bench/cooperbench/report.py shows them as '-';
   the agent's wall time is still in result.json's timings, measured by
   the runner from prepare's start to the marker.
 - your own: `--driver path/to/driver.py:Class`, any class with start(job)
@@ -406,16 +406,16 @@ benchmarked as coordination:
 
 ## Running
 
-After experiment/setup.sh and experiment/prepare_task.sh for the task:
+After bench/cooperbench/setup.sh and bench/cooperbench/prepare_task.sh for the task:
 
 ```
-python3 experiment/coordbench/run.py run --arm team --repo pallets_click_task --task 2068 \
+python3 coordbench/run.py run --arm team --repo pallets_click_task --task 2068 \
     --subset flash --driver claude-cli --name flash-team-coordbench
-python3 experiment/report.py --run team-coordbench=flash-team-coordbench --run team-cooperbench=flash-team-cc
+python3 bench/cooperbench/report.py --run team-coordbench=flash-team-coordbench --run team-cooperbench=flash-team-cc
 ```
 
 The logs take CooperBench's layout, so `cooperbench eval` and
-experiment/report.py read them as they read the authors' runs. result.json
+bench/cooperbench/report.py read them as they read the authors' runs. result.json
 holds the fields CooperBench's coop.py and solo.py write (per agent the
 status, cost, steps, the token counts, patch_lines and error; total_cost
 and total_steps for the run) plus the arm, the driver and the hub's
@@ -462,7 +462,7 @@ directory allowed.
 Reading the time. result.json's timings, each agent's duration_ms and
 api_duration_ms, and the hub's tool_done events (every call's duration_ms,
 its blocked_ms, whether it was an error or cancelled) are read into one
-page by `python3 experiment/coordbench/timeline.py <run_dir>` (the pair's
+page by `python3 coordbench/timeline.py <run_dir>` (the pair's
 directory, the one holding result.json; `--json` for the same as data).
 Every duration but a phase's is taken on one monotonic clock, the one
 trace.py's trace.now_ms reads, so the hub's tool_done figures, the runner's

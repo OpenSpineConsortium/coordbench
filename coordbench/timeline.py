@@ -1,6 +1,6 @@
 """Where one coordbench run's time went: the harness or the agents.
 
-    python3 experiment/coordbench/timeline.py <run_dir> [--json]
+    python3 coordbench/timeline.py <run_dir> [--json]
 
 The run directory is the one that holds result.json (the pair's directory
 under the logs); events.jsonl and eval.json beside it are read when they

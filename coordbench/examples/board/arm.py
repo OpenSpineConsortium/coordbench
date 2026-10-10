@@ -13,9 +13,9 @@ The prompt is the base prompt (the agent's feature spec and CooperBench's
 submission block) with one paragraph about the board before the
 submission block. The metrics count the notices and the messages.
 
-experiment/coordbench/new_arm.py wrote this file, and it is yours to
+coordbench/new_arm.py wrote this file, and it is yours to
 change: the commented lines in the class below say where each override
-goes and what experiment/coordbench/README.md ("Writing an arm") says it
+goes and what coordbench/README.md ("Writing an arm") says it
 is for. An arm overrides only what it changes, so delete what this one
 does not need.
 """
