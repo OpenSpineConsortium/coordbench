@@ -6,6 +6,7 @@ ephemeral port; CooperBench's scorer is a fake with the shape of its
 results. Nothing here starts a container or a Claude."""
 
 import contextlib
+import gzip
 import importlib.util
 import io
 import json
@@ -15,9 +16,11 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -76,7 +79,9 @@ PATCHES = {
     "agent2": "diff --git a/src/b.py b/src/b.py\n--- a/src/b.py\n+++ b/src/b.py\n@@ -1 +1 @@\n-b\n+B\n",
 }
 SAMPLE_STREAM = "\n".join(json.dumps(event) for event in [
-    {"type": "system", "subtype": "init", "session_id": "s1", "tools": ["Bash"]},
+    {"type": "system", "subtype": "init", "session_id": "s1", "tools": ["Bash", "mcp__coordbench__send_message"],
+     "mcp_servers": [{"name": "coordbench", "status": "connected"}], "model": "claude-test",
+     "claude_code_version": "2.1.300"},
     {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Working."}]}},
     "not json at all",
     {"type": "result", "subtype": "success", "is_error": False, "num_turns": 12, "total_cost_usd": 0.42,
@@ -93,19 +98,39 @@ MERGED_RESULT = {
 }
 SOLO_RESULT = {"setting": "solo", "patch_lines": 6, "feature1": {"passed": True, "test_output": "ok"},
                "feature2": {"passed": False, "test_output": "1 failed"}, "both_passed": False, "error": None}
-# CooperBench's coop.py writes these, plus log_dir and messages_sent; the
-# runner adds the arm, the driver and the hub's metrics.
-RESULT_KEYS = {"repo", "task_id", "features", "setting", "run_id", "run_name", "agent_framework", "model", "arm",
-               "driver", "started_at", "ended_at", "duration_seconds", "agents", "total_cost", "total_steps",
-               "metrics", "timings"}
-AGENT_KEYS = {"feature_id", "role", "status", "cost", "steps", "input_tokens", "output_tokens",
-              "cache_read_tokens", "cache_write_tokens", "duration_ms", "api_duration_ms", "patch_lines", "error"}
+# CooperBench's coop.py writes these, in this order (coop.py:210-241 at
+# 63b9d44); solo.py writes "agent" for "agents" and neither
+# messages_sent nor anything after total_steps but log_dir; team.py adds
+# lead_agent before the agents and metrics and team_features after.
+COOPERBENCH_COOP_KEYS = ["repo", "task_id", "features", "setting", "run_id", "run_name", "agent_framework", "model",
+                         "started_at", "ended_at", "duration_seconds", "agents", "total_cost", "total_steps",
+                         "messages_sent", "log_dir"]
+COOPERBENCH_SOLO_KEYS = ["repo", "task_id", "features", "setting", "run_id", "run_name", "agent_framework", "model",
+                         "started_at", "ended_at", "duration_seconds", "agent", "total_cost", "total_steps", "log_dir"]
+# What coordbench adds after them.
+COORDBENCH_RESULT_KEYS = {"arm", "driver", "agents_seconds", "isolation", "options", "agent_models", "max_turns",
+                          "timeout_s", "disallowed_tools", "provenance", "image", "metrics", "timings",
+                          "utc_offset_seconds"}
+RESULT_KEYS = set(COOPERBENCH_COOP_KEYS) | COORDBENCH_RESULT_KEYS
+# coop.py's per-agent fields in its order, then coordbench's.
+COOPERBENCH_AGENT_KEYS = ["feature_id", "status", "cost", "steps", "input_tokens", "output_tokens",
+                          "cache_read_tokens", "cache_write_tokens", "patch_lines", "error"]
+COORDBENCH_AGENT_KEYS = {"role", "duration_ms", "api_duration_ms", "end_reason", "model_requested", "model",
+                         "model_differs", "claude_code_version", "tools", "mcp_servers", "cost_source",
+                         "output_tokens_lower_bound", "cost_lower_bound"}
+AGENT_KEYS = set(COOPERBENCH_AGENT_KEYS) | COORDBENCH_AGENT_KEYS
 USAGE_KEYS = {"cost", "steps", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
+TRAJECTORY_KEYS = ["repo", "task_id", "feature_id", "agent_id", "model", "status", "cost", "steps", "messages"]
+CASCADE_BLOCK = {"route": "naive", "naive": {"conflict": False}, "verdict_63b9d44": True,
+                 "verdict_paper_era": True}
 # Claude Code's own wall and API time for the agent, from its result event.
 DURATION_KEYS = {"duration_ms", "api_duration_ms"}
 TIMING_KEYS = {"phase", "agent", "started", "ended", "seconds"}
 COOP_EVAL_KEYS = ["repo", "task_id", "features", "setting", "apply_status", "merge", "feature1", "feature2",
                   "both_passed", "error", "evaluated_at"]
+# eval.json of a merged pair once the cascade (cascade.py) ran: its block
+# after CooperBench's keys, never in their place.
+CASCADE_EVAL_KEYS = COOP_EVAL_KEYS + ["cascade"]
 SOLO_EVAL_KEYS = ["repo", "task_id", "features", "setting", "merge", "feature1", "feature2", "both_passed",
                   "error", "evaluated_at"]
 NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -299,6 +324,50 @@ class FakeScorer:
         return dict(SOLO_RESULT if kind == "solo" else MERGED_RESULT)
 
 
+class FakeCascade(types.ModuleType):
+    """Stands in for cascade.py (part of the parity work, owned apart):
+    run(plan, evaluation, settings) gives the block score() stores, and
+    the calls are kept to check what it was handed."""
+
+    def __init__(self, block=None, problem=None):
+        super().__init__("cascade")
+        self.block, self.problem, self.calls = block or CASCADE_BLOCK, problem, []
+
+    def run(self, plan, evaluation, settings):
+        self.calls.append((plan["run_id"], dict(evaluation), dict(settings)))
+        if self.problem:
+            raise self.problem
+        return dict(self.block)
+
+
+class FakeConversation(types.ModuleType):
+    """Stands in for conversation.py, built to its interface: pure
+    functions over the events list. It reads the 'message' events'
+    content, as the message logging adds it."""
+
+    def __init__(self):
+        super().__init__("conversation")
+
+    @staticmethod
+    def messages(events):
+        return [e for e in events if e.get("kind") == "message"]
+
+    def conversation(self, events):
+        return [{"from": e.get("agent"), "to": e.get("to"), "message": e.get("content", ""),
+                 "timestamp": e.get("t"), "feature_id": None} for e in self.messages(events)]
+
+    def sent_by(self, events):
+        rows = {}
+        for e in self.messages(events):
+            rows.setdefault(e.get("agent"), []).append({"from": e.get("agent"), "to": e.get("to"),
+                                                       "content": e.get("content", "")})
+        return rows
+
+    def store(self, events):
+        return [{"id": e.get("seq"), "sender_id": e.get("agent"), "recipient_id": e.get("to"),
+                 "content": e.get("content", ""), "is_read": 0} for e in self.messages(events)]
+
+
 class RecordingDriver:
     """A driver that starts nothing, for tests of provisioning alone."""
 
@@ -316,6 +385,57 @@ class RecordingDriver:
 
     def wait(self, job):
         return drivers.AgentOutcome(status="Submitted", patch=PATCHES.get(job.agent, ""))
+
+
+# A subagent's transcript as Claude Code writes one: the prompt, then one
+# API message over two lines (a text block and a tool call) whose usage
+# repeats and whose output count grows to its final figure on the line
+# carrying the stop_reason, then a second message. With final=False no
+# line carries one, as in most of Claude Code 2.1.295's messages, and the
+# output counts are the stream-start snapshot.
+TRANSCRIPT_TOKENS = {"input_tokens": 3 + 4, "output_tokens": 128 + 20, "cache_read_tokens": 0 + 51258,
+                     "cache_write_tokens": 51258 + 900}
+TRANSCRIPT_COST = (7 * 3.0 + 148 * 15.0 + 51258 * 0.3 + 52158 * 3.75) / 1_000_000
+
+
+def transcript_lines(token, model="claude-sonnet-4-5", final=True):
+    def assistant(message_id, blocks, usage, stop=None):
+        return {"type": "assistant", "isSidechain": True, "version": "2.1.295",
+                "timestamp": "2026-10-09T21:05:50.000Z",
+                "message": {"id": message_id, "role": "assistant", "model": model, "content": blocks,
+                            "stop_reason": stop if final else None, "usage": usage}}
+    first = {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 51258}
+    return [
+        {"type": "user", "isSidechain": True, "version": "2.1.295", "timestamp": "2026-10-09T21:05:48.000Z",
+         "message": {"role": "user", "content": "Your task is in /tmp/agent1.session-prompt.md."}},
+        assistant("msg_1", [{"type": "text", "text": f"{token}\nReading the task."}], first),
+        assistant("msg_1", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}],
+                  {**first, "output_tokens": 128}, stop="tool_use"),
+        assistant("msg_2", [{"type": "text", "text": "Done."}],
+                  {"input_tokens": 4, "output_tokens": 20, "cache_read_input_tokens": 51258,
+                   "cache_creation_input_tokens": 900}, stop="end_turn"),
+    ]
+
+
+def write_transcript(path, token, model="claude-sonnet-4-5", age=10, final=True):
+    """A transcript `age` seconds old, so the copy need not wait for it to settle."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(line) + "\n" for line in transcript_lines(token, model, final)))
+    os.utime(path, (time.time() - age, time.time() - age))
+    return path
+
+
+def user_line(text):
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def write_lines(path, lines):
+    """A transcript of the given lines, ten seconds old like write_transcript's."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    os.utime(path, (time.time() - 10, time.time() - 10))
+    return path
 
 
 def write_dataset(cooperbench_dir):
@@ -350,12 +470,28 @@ class RunnerCase(TracedCase):
         (self.tmp / "volume").mkdir()
         self.docker = FakeDocker(mountpoint=str(self.tmp / "volume"))
         self.scorer = FakeScorer()
+        self.cascade, self.conversation = FakeCascade(), FakeConversation()
+        self.transcripts = self.tmp / "claude-projects"
         environment = {"CLAUDE_CODE_OAUTH_TOKEN": SECRET, "COORD_ADMIN_TOKEN": ADMIN_SECRET}
+        # The session driver looks for transcripts here, never in the
+        # home directory of whoever runs the tests.
         for patcher in (mock.patch.object(drivers, "docker", self.docker),
                         mock.patch.object(runner, "cooperbench_test", self.scorer),
+                        mock.patch.object(drivers, "transcript_roots", lambda: [self.transcripts]),
                         mock.patch.dict(os.environ, environment)):
             patcher.start()
             self.addCleanup(patcher.stop)
+        self.use_module("cascade", self.cascade)
+        self.use_module("conversation", self.conversation)
+
+    def use_module(self, name, module):
+        """Put a fake in sys.modules under the name for this test alone,
+        and nothing else there: patch.dict would put back a copy of the
+        whole table, dropping whatever the test imported."""
+        previous = sys.modules.get(name)
+        sys.modules[name] = module
+        self.addCleanup(lambda: sys.modules.__setitem__(name, previous) if previous is not None
+                        else sys.modules.pop(name, None))
 
     def tearDown(self):
         self.server.shutdown()
@@ -395,6 +531,11 @@ class RunnerCase(TracedCase):
 
     def pair(self, setting="coop", features="f1_f6"):
         return self.logs / "t" / setting / REPO / str(TASK) / features
+
+    def container_work(self):
+        """The docker commands but the look at a task image config.json
+        and result.json take, which a finished pair also gets."""
+        return [c for c in self.docker.commands() if c[:2] != ["image", "inspect"]]
 
     def options_of(self, plan):
         return self.hub.runs[plan["run_id"]].run.options
@@ -583,8 +724,40 @@ class Provisioning(RunnerCase):
         self.assertEqual(plan["warnings"], [])
         self.assertFalse([c for c in self.docker.commands() if "coordbench-git" in c])
         runner.teardown(plan)
-        self.assertIn(["volume", "rm", "-f", volume], self.docker.commands())
-        self.assertIn(["rm", "-f", *[a["container"] for a in plan["agents"]]], self.docker.commands())
+        commands = self.docker.commands()
+        self.assertIn(["volume", "rm", "-f", volume], commands)
+        removed = ["rm", "-f", *[a["container"] for a in plan["agents"]]]
+        self.assertIn(removed, commands)
+        # The volume's last state is copied out of a container that mounts
+        # it, before the containers and the volume go.
+        copied = ["cp", f"{plan['agents'][0]['container']}:/workspace/shared/.", str(Path(plan["run_dir"]) / "shared")]
+        self.assertLess(commands.index(copied), commands.index(removed))
+        self.assertTrue((Path(plan["run_dir"]) / "shared").is_dir())
+
+    def test_a_pair_run_again_packs_the_earlier_attempt_s_files_first(self):
+        plan, _, _ = self.prepare("coop")
+        runner.teardown(plan)
+        run_dir = Path(plan["run_dir"])
+        (run_dir / "judge.json").write_text('{"speech_acts": {"6": "Plan"}}')
+        (run_dir / "agent2_sent.jsonl").write_text("{}\n")
+        (run_dir / "bin" / "agent1").mkdir(parents=True)
+        (run_dir / "bin" / "agent1" / "token").write_text("secret")
+        (run_dir / "workspaces" / "agent1").mkdir(parents=True)
+        again, _, _ = self.prepare("coop")
+        self.assertEqual(again["run_dir"], plan["run_dir"])
+        archives = sorted(run_dir.glob("previous-*.tar.gz"))
+        self.assertEqual(len(archives), 1)
+        self.assertFalse((run_dir / "judge.json").exists())
+        self.assertFalse((run_dir / "agent2_sent.jsonl").exists())
+        with tarfile.open(archives[0]) as bundle:
+            names = bundle.getnames()
+        self.assertIn("judge.json", names)
+        self.assertIn("agent2_sent.jsonl", names)
+        self.assertFalse([name for name in names if name.split("/")[0] in ("bin", "workspaces")])
+        self.assertIn(f"an earlier attempt's files in the pair directory were packed into {archives[0].name}",
+                      again["warnings"])
+        runner.teardown(again)
+        self.assertIsNone(runner.set_aside_earlier_attempt(self.tmp / "no-such-pair"))
 
     def test_a_shared_volume_with_no_host_path_fails_the_pair_and_one_not_writable_is_warned_of(self):
         self.docker.mountpoint = ""
@@ -601,6 +774,27 @@ class Provisioning(RunnerCase):
             with self.assertRaisesRegex(runner.PairFailed, "without git_remote_host, base_ref"), quietly():
                 self.prepare("coop-git")
         self.assertEqual(self.hub.run_count(), 0)
+
+    def test_the_bash_tool_surface_loads_no_arm_plugin_and_gives_team_cooperbench_s_one_server(self):
+        """tool_surface=bash is the surface CooperBench's claude_code agents
+        had: no arm plugin, so no skill, and for team the cooperbench-team
+        server alone (Arm.claude_surface); the default keeps the plugin."""
+        _, _, driver = self.prepare("coop", options={"tool_surface": "bash"})
+        flags = drivers.claude_flags(driver.jobs[0])
+        self.assertFalse(driver.jobs[0].arm_plugin)
+        self.assertNotIn("--plugin-dir", flags)
+        self.assertNotIn("--mcp-config", flags)
+        plan, _, driver = self.prepare("team", options={"tool_surface": "bash"})
+        self.assertEqual(plan["tool_surface"], "bash")
+        for job in driver.jobs:
+            self.assertEqual(list(job.mcp_servers), ["cooperbench-team"])
+            self.assertIn("--mcp-config", drivers.claude_flags(job))
+            self.assertNotIn("--plugin-dir", drivers.claude_flags(job))
+        _, _, driver = self.prepare("coop")
+        self.assertTrue(driver.jobs[0].arm_plugin)
+        self.assertIn("/opt/coordbench/arms/coop", drivers.claude_flags(driver.jobs[0]))
+        with self.assertRaisesRegex(ValueError, "tool_surface must be one of"):
+            self.prepare("coop", options={"tool_surface": "carrier pigeon"})
 
     def test_an_option_naming_a_need_gets_it_provisioned_as_cooperbench_s_git_gives_team_a_remote(self):
         plan, _, driver = self.prepare("team", options={"git_remote": True, "note": "kept"})
@@ -635,8 +829,13 @@ class Provisioning(RunnerCase):
         self.assertIn("left its git block untrue", err)
         self.assertEqual({a["status"] for a in result["agents"].values()}, {"Error"})
         self.assertNotIn(result["run_id"], self.hub.runs)  # closed, then released
-        self.assertEqual((result["total_cost"], result["total_steps"]), (0, 0))
+        # No agent ran, so nothing was measured: null, not CooperBench's 0.
+        self.assertEqual((result["total_cost"], result["total_steps"]), (None, None))
+        self.assertEqual({a[name] for a in result["agents"].values() for name in USAGE_KEYS}, {None})
         self.assertEqual({a["patch_lines"] for a in result["agents"].values()}, {0})
+        # The provisioning error is CooperBench's error (an exception) and coordbench's end_reason alike.
+        self.assertEqual({a["error"] for a in result["agents"].values()}, {result["error"]})
+        self.assertEqual({a["end_reason"] for a in result["agents"].values()}, {result["error"]})
         self.assertIn(["rm", "-f", f"coordbench-{result['run_id']}-agent1"], self.docker.commands())
         self.assertEqual(self.scorer.calls, [])
         self.assert_secret_nowhere(out, err)
@@ -841,7 +1040,9 @@ class TheClaudeCliDriver(RunnerCase):
         driver = drivers.ClaudeCliDriver()
         outcome = driver.wait(driver.start(self.job()))
         self.assertEqual(outcome.status, "Error")
+        # The adapter's timeout is an exception, which CooperBench writes as the error.
         self.assertIn("timed out", outcome.error)
+        self.assertEqual(outcome.end_reason, outcome.error)
         scripts = [c[-1] for c in self.docker.matching("exec", "c-agent1", "sh", "-c")]
         self.assertFalse([script for script in scripts if "pkill" in script])
         stops = [script for script in scripts if "/tmp/coord-claude.pid" in script]
@@ -849,12 +1050,26 @@ class TheClaudeCliDriver(RunnerCase):
         self.assertIn("cat /tmp/coord-claude.pid", stops[0])
         self.assertIn('kill "$pid"', stops[0])
 
-    def test_a_stream_cut_short_keeps_its_last_line_as_the_error(self):
+    def test_a_stream_cut_short_keeps_its_last_line_as_the_end_reason(self):
         self.docker.stream = '{"type": "system"}\nInvalid API key. Please run /login\n'
         driver = drivers.ClaudeCliDriver()
         outcome = driver.wait(driver.start(self.job()))
         self.assertEqual(outcome.status, "Error")
-        self.assertIn("Invalid API key", outcome.error)
+        self.assertIn("Invalid API key", outcome.end_reason)
+        self.assertIsNone(outcome.error, "no exception stopped the adapter, so CooperBench's error is null")
+
+    def test_the_session_transcript_is_written_even_when_empty_as_the_adapter_writes_it(self):
+        driver = drivers.ClaudeCliDriver()
+        driver.wait(driver.start(self.job()))
+        self.assertEqual((self.tmp / "agent1_session.jsonl").read_text(), "")
+        finds = [c for c in self.docker.matching("exec", "c-agent1", "sh", "-c") if "xargs -r cat" in c[-1]]
+        self.assertEqual(len(finds), 1)
+        self.assertIn("find /tmp/claude-cfg/projects -name '*.jsonl'", finds[0][-1])
+
+    def test_disallowed_tools_reach_claude_as_one_comma_joined_word(self):
+        flags = drivers.claude_flags(self.job(disallowed_tools=["WebFetch", "WebSearch"]))
+        self.assertIn(["--disallowedTools", "WebFetch,WebSearch"], pairs(flags))
+        self.assertNotIn("--disallowedTools", drivers.claude_flags(self.job()))
 
 
 class StreamParsing(unittest.TestCase):
@@ -876,12 +1091,28 @@ class StreamParsing(unittest.TestCase):
         self.assertEqual((limited.status, limited.steps, limited.input_tokens), ("LimitsExceeded", 3, 10))
         failed = drivers.summarize_stream(self.result(is_error=True, result="Usage limit reached"))
         self.assertEqual(failed.status, "Error")
-        self.assertIn("Usage limit", failed.error)
+        # CooperBench's error is its adapter's exception, null for an
+        # Error the result event reports; coordbench says why apart.
+        self.assertIsNone(failed.error)
+        self.assertIn("Usage limit", failed.end_reason)
+        self.assertIsNone(limited.error)
+        self.assertEqual(limited.end_reason, "error_max_turns")
 
     def test_a_stream_without_a_result_is_an_error_with_nothing_counted(self):
         outcome = drivers.summarize_stream('{"type": "assistant"}\ngarbage\n')
         self.assertEqual((outcome.status, outcome.input_tokens, outcome.steps, outcome.cost), ("Error", 0, 0, 0.0))
         self.assertEqual((outcome.duration_ms, outcome.api_duration_ms), (None, None))
+        # Nothing was measured, so result.json writes null where CooperBench writes 0.
+        self.assertEqual(outcome.measured, ())
+        self.assertEqual((outcome.error, outcome.end_reason), (None, drivers.NO_RESULT))
+
+    def test_the_init_event_says_what_the_agent_ran_with(self):
+        outcome = drivers.summarize_stream(SAMPLE_STREAM)
+        self.assertEqual((outcome.model, outcome.claude_code_version), ("claude-test", "2.1.300"))
+        self.assertEqual(outcome.tools, ["Bash", "mcp__coordbench__send_message"])
+        self.assertEqual(outcome.mcp_servers, [{"name": "coordbench", "status": "connected"}])
+        self.assertEqual((outcome.measured, outcome.cost_source), (drivers.USAGE_FIELDS, "claude code"))
+        self.assertEqual(drivers.stream_init(self.result()), {})
 
     def test_the_result_event_s_durations_are_read_and_unknown_when_it_lacks_them(self):
         """Claude Code's result event carries duration_ms, the agent's wall
@@ -939,8 +1170,15 @@ class TheSessionDriver(RunnerCase):
         self.assertEqual(outcome.ended_at, 1_700_000_000)
         # A subagent leaves no result event, so its durations are unknown.
         self.assertEqual((outcome.duration_ms, outcome.api_duration_ms), (None, None))
-        logged = json.loads(Path(job.log_path).read_text().splitlines()[-1])
-        self.assertEqual(logged["status"], "Submitted")
+        self.assertFalse(Path(job.log_path).exists(), "no file named like a stream that is not one")
+        logged = json.loads((self.tmp / "run" / "agent1_session_outcome.json").read_text())
+        self.assertEqual((logged["type"], logged["status"], logged["patch_lines"]), ("coordbench_session", "Submitted", 6))
+        # The marker's time, which export.py takes for the agent's end.
+        self.assertEqual(logged["ended_at"], 1_700_000_000)
+        self.assertEqual(logged["transcript"], {"source": None, "matches": 0,
+                                                "note": "no subagent transcript carried the run token"})
+        # Without a transcript nothing is measured, so result.json writes null.
+        self.assertEqual(outcome.measured, ())
 
     def test_an_agents_phase_ends_when_the_driver_says_the_agent_stopped(self):
         """finish may run long after the marker appeared; the recorded wall
@@ -987,7 +1225,7 @@ class TheSessionDriver(RunnerCase):
             self.assertEqual(set(poll), {"kind", "t", "ts", "agent", "found"})
         # The prompt it wrote and the line it logged are announced too.
         self.assertEqual([event["file"] for event in memory if event["kind"] == "wrote"],
-                         ["agent1.session-prompt.md", "agent1_stream.jsonl"])
+                         ["agent1.session-prompt.md", "agent1_session_outcome.json"])
 
     def test_drivers_load_by_name_or_from_a_file(self):
         self.assertIsInstance(drivers.load_driver("session"), drivers.SessionDriver)
@@ -1013,29 +1251,72 @@ class Runs(RunnerCase):
         self.assertEqual(code, 0, err)
         pair = self.pair()
         for name in ("result.json", "eval.json", "agent1.patch", "agent6.patch", "agent1_stream.jsonl",
-                     "agent2_stream.jsonl", "agent1_prompt.md", "events.jsonl", "metrics.json"):
+                     "agent2_stream.jsonl", "agent1_session.jsonl", "agent2_session.jsonl", "agent1_prompt.md",
+                     "agent1_traj.json", "agent6_traj.json", "conversation.json", "agent1_sent.jsonl",
+                     "conversation_store.json", "events.jsonl", "metrics.json"):
             self.assertTrue((pair / name).is_file(), name)
+        self.assertFalse((pair / "agent2_sent.jsonl").exists(), "a sender's log is written only when it sent")
+        # export.py's trajectory for the viewers, made once the pair was scored.
+        self.assertNotIn("exporting the trajectory failed", err)
+        with gzip.open(pair / "trajectory.json.gz", "rt", encoding="utf-8") as exported:
+            trajectory = json.load(exported)
+        self.assertEqual(trajectory["metadata"]["coordbench"]["outcome"]["both_passed"], True)
+        self.assertEqual(trajectory["metadata"]["coordbench"]["anchor"], "run_started")
         self.assertEqual((pair / "agent1.patch").read_text(), PATCHES["agent1"])
         self.assertEqual((pair / "agent6.patch").read_text(), PATCHES["agent2"])
         result = json.loads((pair / "result.json").read_text())
         self.assertEqual(set(result), RESULT_KEYS)
+        self.assertEqual(list(result)[:len(COOPERBENCH_COOP_KEYS)], COOPERBENCH_COOP_KEYS)
         self.assertEqual((result["setting"], result["arm"], result["driver"], result["agent_framework"]),
                          ("coop", "coop", "claude-cli", "claude_code"))
         self.assertEqual((result["repo"], result["task_id"], result["features"], result["model"]),
                          (REPO, TASK, [1, 6], "claude-test"))
+        self.assertEqual((result["log_dir"], result["isolation"], result["messages_sent"]), (str(pair), "container", 1))
         self.assertEqual(set(result["agents"]), {"agent1", "agent2"})
         for agent, feature in (("agent1", 1), ("agent2", 6)):
             record = result["agents"][agent]
             self.assertEqual(set(record), AGENT_KEYS)
+            self.assertEqual(list(record)[:len(COOPERBENCH_AGENT_KEYS)], COOPERBENCH_AGENT_KEYS)
             self.assertEqual((record["feature_id"], record["status"], record["input_tokens"], record["steps"]),
                              (feature, "Submitted", 1200, 12))
             # The fields CooperBench's coop.py writes and its summary reads.
-            self.assertEqual((record["cost"], record["patch_lines"]), (0.42, 6))
+            self.assertEqual((record["cost"], record["patch_lines"], record["error"]), (0.42, 6, None))
+            self.assertEqual((record["end_reason"], record["cost_source"]), (None, "claude code"))
             # Claude Code's own clock for the agent, from the result event.
             self.assertEqual((record["duration_ms"], record["api_duration_ms"]), (95000, 61000))
+            # What the stream's init event says the agent ran with.
+            self.assertEqual((record["model_requested"], record["model"], record["model_differs"]),
+                             ("claude-test", "claude-test", False))
+            self.assertEqual((record["claude_code_version"], record["tools"], record["mcp_servers"]),
+                             ("2.1.300", ["Bash", "mcp__coordbench__send_message"],
+                              [{"name": "coordbench", "status": "connected"}]))
         self.assertAlmostEqual(result["total_cost"], 0.84)
         self.assertEqual(result["total_steps"], 24)
         self.assertEqual(result["metrics"]["messages_sent"], 1)
+        agents = [r for r in result["timings"] if r["phase"] == "agent"]
+        self.assertAlmostEqual(result["agents_seconds"], runner.span_seconds(agents), places=6)
+        # The trajectories coop.py writes, named by feature, from each
+        # agent's session transcript (empty here, so no messages).
+        for name, agent, feature in (("agent1_traj.json", "agent1", 1), ("agent6_traj.json", "agent2", 6)):
+            trajectory = json.loads((pair / name).read_text())
+            self.assertEqual(list(trajectory), TRAJECTORY_KEYS)
+            self.assertEqual((trajectory["agent_id"], trajectory["feature_id"], trajectory["model"],
+                              trajectory["status"], trajectory["cost"], trajectory["messages"]),
+                             (agent, feature, "claude-test", "Submitted", 0.42, []))
+        # The conversation files, from the message events through conversation.py.
+        conversation = json.loads((pair / "conversation.json").read_text())
+        self.assertEqual([(m["from"], m["to"]) for m in conversation], [("agent1", "agent2")])
+        store = json.loads((pair / "conversation_store.json").read_text())
+        self.assertEqual((store["total_messages"], len(store["messages"])), (1, 1))
+        self.assertEqual(set(store), {"messages", "export_timestamp", "total_messages"})
+        # The run's config.json and summary.json, as CooperBench's runner writes them.
+        config = json.loads((self.logs / "t" / "config.json").read_text())
+        self.assertEqual((config["run_name"], config["setting"], config["total_tasks"], config["concurrency"]),
+                         ("t", "coop", 1, 1))
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual(summary["results"], [{"task": f"{REPO}/{TASK}/1,6", "status": "done",
+                                               "cost": result["total_cost"], "eval": "pass"}])
+        self.assertEqual((summary["completed"], summary["pass_rate"]), (1, 1.0))
         # Every phase of the pair is timed, the agents and their
         # provisioning one by one, and the score and the teardown are in
         # result.json though it was written before them.
@@ -1043,17 +1324,24 @@ class Runs(RunnerCase):
         self.assertEqual(phases(result["timings"]),
                          [("hub", None), ("run_create", None), ("provision", "agent1"), ("provision", "agent2"),
                           ("agent", "agent1"), ("agent", "agent2"), ("close", None), ("teardown", None),
-                          ("score", None)])
+                          ("score", None), ("cascade", None)])
         self.assertRegex(err, r"timings: hub [0-9.]+ s, run_create [0-9.]+ s, provision [0-9.]+ s, "
                               r"agents [0-9.]+ s \(agent1 [0-9.]+ s, agent2 [0-9.]+ s\), close [0-9.]+ s, "
-                              r"score [0-9.]+ s, teardown [0-9.]+ s\n")
+                              r"score [0-9.]+ s, cascade [0-9.]+ s, teardown [0-9.]+ s\n")
         self.assertEqual(json.loads((pair / "metrics.json").read_text()), result["metrics"])
         events = [json.loads(line) for line in (pair / "events.jsonl").read_text().splitlines()]
         self.assertIn("message", [event["kind"] for event in events])
         evaluation = json.loads((pair / "eval.json").read_text())
-        self.assertEqual(list(evaluation), COOP_EVAL_KEYS)
+        self.assertEqual(list(evaluation), CASCADE_EVAL_KEYS)
         self.assertEqual((evaluation["both_passed"], evaluation["setting"], evaluation["features"]),
                          (True, "coop", [1, 6]))
+        self.assertEqual(evaluation["cascade"], CASCADE_BLOCK)
+        (run_id, handed, cascade_settings), = self.cascade.calls
+        self.assertEqual(run_id, result["run_id"])
+        self.assertEqual({key: handed[key] for key in COOP_EVAL_KEYS}, {key: evaluation[key] for key in COOP_EVAL_KEYS})
+        self.assertEqual(cascade_settings, {"cooperbench_dir": str(self.cooperbench),
+                                            "dataset_dir": str(self.cooperbench / "dataset"), "run_dir": str(pair),
+                                            "scoring_timeout_s": runner.SCORING_TIMEOUT_SECONDS})
         kind, arguments, cooperbench_dir = self.scorer.calls[0]
         self.assertEqual(kind, "merged")
         self.assertEqual(arguments, {"repo_name": REPO, "task_id": TASK, "feature1_id": 1, "feature2_id": 6,
@@ -1145,43 +1433,103 @@ class Runs(RunnerCase):
             client.close_run("r-release")
         self.assertEqual(refused.exception.status, 404)
         plan = {"hub_run": False, "run_id": "r-release", "warnings": []}
-        self.assertEqual(runner.close_run(plan, client), ({}, []))
+        self.assertEqual(runner.close_run(plan, client), ({}, [], {}))
         self.assertEqual(plan["warnings"], [])
 
-    def test_a_solo_pair_is_scored_as_one_patch(self):
+    def test_a_solo_pair_is_scored_as_one_patch_and_recorded_as_solo_py_records_it(self):
         code, _, err = self.main(*self.run_arguments("solo", "--features", "1,6"))
         self.assertEqual(code, 0, err)
         pair = self.pair("solo")
         self.assertEqual((pair / "solo.patch").read_text(), PATCHES["agent1"])
         result = json.loads((pair / "result.json").read_text())
         self.assertEqual(result["setting"], "solo")
-        self.assertEqual(result["agents"]["agent1"]["feature_id"], [1, 6])
+        # solo.py's singular "agent" block, its keys first and in its
+        # order, coordbench's after them; no "agents", no messages_sent.
+        self.assertEqual(list(result)[:len(COOPERBENCH_SOLO_KEYS)], COOPERBENCH_SOLO_KEYS)
+        self.assertNotIn("agents", result)
+        self.assertNotIn("messages_sent", result)
+        block = result["agent"]
+        self.assertEqual(list(block)[:9], ["status", "cost", "steps", "input_tokens", "output_tokens",
+                                          "cache_read_tokens", "cache_write_tokens", "patch_lines", "error"])
+        self.assertEqual((block["id"], block["features"], block["role"], block["status"]),
+                         ("agent1", [1, 6], "solo", "Submitted"))
+        self.assertEqual((result["total_cost"], result["total_steps"]), (0.42, 12))
+        self.assertTrue(runner.pair_finished(pair))
+        # CooperBench's solo agent is "solo": its files are named so.
+        for name in ("solo_stream.jsonl", "solo_session.jsonl", "solo_prompt.md", "solo_traj.json"):
+            self.assertTrue((pair / name).is_file(), name)
+        self.assertFalse((pair / "agent1_stream.jsonl").exists())
+        trajectory = json.loads((pair / "solo_traj.json").read_text())
+        self.assertEqual(list(trajectory), ["repo", "task_id", "features", "agent_id", "model", "status", "cost",
+                                            "steps", "messages"])
+        self.assertEqual((trajectory["agent_id"], trajectory["features"]), ("solo", [1, 6]))
+        # Solo has no partner: no conversation files, and no cascade.
+        self.assertFalse((pair / "conversation.json").exists())
         evaluation = json.loads((pair / "eval.json").read_text())
         self.assertEqual(list(evaluation), SOLO_EVAL_KEYS)
         self.assertIsNone(evaluation["merge"])
+        self.assertEqual(self.cascade.calls, [])
         kind, arguments, _ = self.scorer.calls[0]
         self.assertEqual((kind, arguments["patch"]), ("solo", PATCHES["agent1"]))
+        # timeline.py finds the agent behind the singular block.
+        import timeline
+        self.assertEqual([row["agent"] for row in timeline.analyse(timeline.load_run(pair))["agents"]], ["agent1"])
 
     def test_a_subset_runs_every_pair_and_finished_pairs_are_kept(self):
         code, _, err = self.main(*self.run_arguments("coop", "--subset", "flash"))
         self.assertEqual(code, 0, err)
         self.assertTrue((self.pair(features="f1_f6") / "eval.json").exists())
         self.assertTrue((self.pair(features="f2_f10") / "eval.json").exists())
-        before = len(self.docker.calls)
+        before = len(self.container_work())
         code, _, err = self.main(*self.run_arguments("coop", "--subset", "flash"))
         self.assertEqual(code, 0)
-        self.assertEqual(len(self.docker.calls), before)
+        self.assertEqual(len(self.container_work()), before)
         self.assertIn("skipped", err)
+        # The second session's summary counts both pairs as skipped, their
+        # evaluations too, as CooperBench's runner and evaluator count them.
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual((summary["completed"], summary["skipped"], summary["eval"]["skipped"]), (0, 2, 2))
+        self.assertEqual([r["status"] for r in summary["results"]], ["skip", "skip"])
 
     def test_a_finished_pair_without_eval_json_is_only_scored_again(self):
         self.main(*self.run_arguments("coop", "--features", "1,6"))
         (self.pair() / "eval.json").unlink()
-        before = len(self.docker.calls)
+        before = len(self.container_work())
         code, _, _ = self.main(*self.run_arguments("coop", "--features", "1,6"))
         self.assertEqual(code, 0)
-        self.assertEqual(len(self.docker.calls), before)
+        self.assertEqual(len(self.container_work()), before)
         self.assertEqual(len(self.scorer.calls), 2)
         self.assertTrue((self.pair() / "eval.json").exists())
+
+    def test_rescore_scores_from_the_patches_and_never_starts_an_agent(self):
+        """An agent in Error makes a pair unfinished, so run would run it
+        again with its agents; rescore scores it from its patches alone,
+        and leaves the run's config.json and result.json as they were."""
+        self.main(*self.run_arguments("coop", "--features", "1,6"))
+        pair = self.pair()
+        result = json.loads((pair / "result.json").read_text())
+        result["agents"]["agent2"]["status"] = "Error"
+        (pair / "result.json").write_text(json.dumps(result))
+        evaluation = json.loads((pair / "eval.json").read_text())
+        evaluation.pop("cascade")
+        (pair / "eval.json").write_text(json.dumps(evaluation))
+        config, kept = (self.logs / "t" / "config.json").read_bytes(), (pair / "result.json").read_bytes()
+        before, scored = len(self.container_work()), len(self.scorer.calls)
+        code, _, err = self.main("rescore", "--run-dir", str(self.logs / "t"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.container_work()), before, "no container, no agent")
+        self.assertEqual(len(self.scorer.calls), scored + 1)
+        self.assertIn("cascade", json.loads((pair / "eval.json").read_text()))
+        self.assertEqual(((self.logs / "t" / "config.json").read_bytes(), (pair / "result.json").read_bytes()),
+                         (config, kept))
+        self.assertIn("rescored: 1 pass", err)
+        # A pair whose eval.json has its cascade is scored again only with --force.
+        code, _, err = self.main("rescore", "--run-dir", str(pair))
+        self.assertEqual((code, len(self.scorer.calls)), (0, scored + 1))
+        self.assertIn("rescored: 1 skipped", err)
+        code, _, err = self.main("rescore", "--run-dir", str(pair), "--force")
+        self.assertEqual((code, len(self.scorer.calls)), (0, scored + 2))
+        self.assertEqual(self.main("rescore", "--run-dir", str(self.tmp / "nothing"))[0], 1)
 
     def test_prepare_then_finish_with_the_session_driver(self):
         code, out, err = self.main("prepare", "--arm", "coop", "--repo", REPO, "--task", str(TASK),
@@ -1192,7 +1540,12 @@ class Runs(RunnerCase):
         pair = self.pair()
         self.assertEqual(plan["run_dir"], str(pair))
         self.assertEqual([a["id"] for a in plan["agents"]], ["agent1", "agent2"])
-        self.assertEqual(set(plan["agents"][0]), {"id", "prompt_file"})
+        # The model to run each subagent with goes to the orchestrating session.
+        self.assertEqual(set(plan["agents"][0]), {"id", "prompt_file", "model"})
+        self.assertEqual({a["model"] for a in plan["agents"]}, {"claude-sonnet-5-5"})
+        # The first prepare writes the run's config.json.
+        config = json.loads((self.logs / "t" / "config.json").read_text())
+        self.assertEqual((config["driver"], config["isolation"], config["total_tasks"]), ("session", "advisory", 1))
         saved = json.loads((pair / "plan.json").read_text())
         self.assertTrue(self.hub.runs[saved["run_id"]].tokens)
         for agent, entry in zip(saved["agents"], plan["agents"]):
@@ -1224,6 +1577,12 @@ class Runs(RunnerCase):
             workspace = Path(agent["workspace"])
             (workspace / "patch.txt").write_text(PATCHES[agent["id"]])
             (workspace / ".coordbench-done").touch()
+        # agent1's subagent opened its first reply with its run token, as
+        # its prompt asks; agent2's left no transcript to find.
+        token = saved["agents"][0]["handle"]["run_token"]
+        self.assertEqual(token, f"coordbench-run-token {saved['run_id']} agent1")
+        self.assertIn(f"`{token}`", Path(plan["agents"][0]["prompt_file"]).read_text())
+        transcript = write_transcript(self.transcripts / "proj" / "s1" / "subagents" / "agent-a1.jsonl", token)
 
         said = out + err
         code, out, err = self.main("finish", "--run-dir", str(pair))
@@ -1231,22 +1590,49 @@ class Runs(RunnerCase):
         self.assertEqual(json.loads(out), {"run_dir": str(pair), "verdict": "pass"})
         result = json.loads((pair / "result.json").read_text())
         self.assertEqual((result["driver"], result["agent_framework"]), ("session", "claude_code_subagent"))
+        self.assertEqual(result["isolation"], "advisory")
         self.assertEqual({a["status"] for a in result["agents"].values()}, {"Submitted"})
-        # A subagent's usage is not measured, so it is unknown, not zero,
-        # and so are the durations Claude Code's result event would give.
         for record in result["agents"].values():
             self.assertEqual(set(record), AGENT_KEYS)
-            self.assertEqual({record[name] for name in USAGE_KEYS | DURATION_KEYS}, {None})
             self.assertEqual(record["patch_lines"], 6)
-        self.assertEqual((result["total_cost"], result["total_steps"]), (None, None))
+            # No result event: steps and Claude Code's durations stay unknown.
+            self.assertEqual({record[name] for name in ("steps", *DURATION_KEYS)}, {None})
+        # agent1's tokens are its transcript's, each API message once, and
+        # its cost an estimate from them at its model's price.
+        first = result["agents"]["agent1"]
+        self.assertEqual({name: first[name] for name in TRANSCRIPT_TOKENS}, TRANSCRIPT_TOKENS)
+        self.assertAlmostEqual(first["cost"], TRANSCRIPT_COST)
+        self.assertEqual((first["cost_source"], first["model"], first["claude_code_version"]),
+                         ("estimated from tokens", "claude-sonnet-4-5", "2.1.295"))
+        self.assertEqual((first["model_requested"], first["model_differs"]), ("claude-sonnet-5-5", True))
+        self.assertEqual((pair / "agent1_session.jsonl").read_text(), transcript.read_text())
+        outcome = json.loads((pair / "agent1_session_outcome.json").read_text())
+        self.assertEqual(outcome["transcript"], {"source": str(transcript), "matches": 1})
+        self.assertFalse((pair / "agent1_stream.jsonl").exists())
+        trajectory = json.loads((pair / "agent1_traj.json").read_text())
+        # One message per transcript line, as parse_session_jsonl gives them.
+        self.assertEqual([m["role"] for m in trajectory["messages"]], ["user", "assistant", "assistant", "assistant"])
+        self.assertTrue(trajectory["messages"][1]["content"].startswith(token))
+        # agent2 left no transcript: its usage is unknown, never zero.
+        second = result["agents"]["agent2"]
+        self.assertEqual({second[name] for name in USAGE_KEYS}, {None})
+        self.assertEqual((second["cost_source"], second["model"]), (None, None))
+        self.assertAlmostEqual(result["total_cost"], TRANSCRIPT_COST)
+        self.assertIsNone(result["total_steps"])
         self.assertEqual(result["metrics"]["messages_sent"], 1)
+        # finish refreshes summary.json from every pair of the run on disk.
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual(summary["results"], [{"task": f"{REPO}/{TASK}/1,6", "status": "done",
+                                               "cost": result["total_cost"], "eval": "pass"}])
+        self.assertEqual(summary["total_time_source"], "run_totals wall_time")
+        self.assertEqual(summary["claude_code"]["cost_sources"], ["estimated from tokens"])
         # The agent's phase runs from prepare's start, kept in the plan,
         # to the marker finish saw: one record across the two processes.
         self.assert_timings_well_formed(result["timings"])
         self.assertEqual(phases(result["timings"]),
                          [("hub", None), ("run_create", None), ("provision", "agent1"), ("provision", "agent2"),
                           ("agent", "agent1"), ("agent", "agent2"), ("close", None), ("teardown", None),
-                          ("score", None)])
+                          ("score", None), ("cascade", None)])
         for agent, record in zip(saved["agents"], [r for r in result["timings"] if r["phase"] == "agent"]):
             self.assertEqual(record["started"], agent["started_at"])
             self.assertGreater(record["seconds"], 0)
@@ -1259,7 +1645,7 @@ class Runs(RunnerCase):
         self.assertEqual(self.hub.run_count(), 0)
         self.assertFalse(json.loads((pair / "plan.json").read_text())["hub_run"])
         self.assertEqual((pair / "agent6.patch").read_text(), PATCHES["agent2"])
-        self.assertEqual(list(json.loads((pair / "eval.json").read_text())), COOP_EVAL_KEYS)
+        self.assertEqual(list(json.loads((pair / "eval.json").read_text())), CASCADE_EVAL_KEYS)
         self.assertFalse((pair / "workspaces").exists())
         self.assertIn(["rm", "-f", *[a["container"] for a in saved["agents"]]], self.docker.commands())
         self.assert_secret_nowhere(said, out, err)
@@ -1336,6 +1722,400 @@ class Runs(RunnerCase):
         self.assert_secret_nowhere(said, out, err, sent.stdout, sent.stderr, secrets=(token,))
 
 
+def cooperbench_parsers():
+    """CooperBench's claude_code/parsers.py, loaded on its own from the
+    checkout COOPERBENCH_DIR names, or ~/cooperbench; it needs only the
+    standard library."""
+    for root in filter(None, [os.environ.get("COOPERBENCH_DIR"), str(Path.home() / "cooperbench")]):
+        path = Path(root) / "src" / "cooperbench" / "agents" / "claude_code" / "parsers.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("cooperbench_claude_code_parsers", path)
+            module = importlib.util.module_from_spec(spec)
+            # Its dataclass looks its own module up in sys.modules.
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
+COOPERBENCH_PARSERS = cooperbench_parsers()
+
+
+class CooperBenchParity(RunnerCase):
+    """What coordbench records the way CooperBench's runner records it,
+    and what it records beside it, pair by pair and run by run."""
+
+    def result(self, setting="coop", features="f1_f6"):
+        return json.loads((self.pair(setting, features) / "result.json").read_text())
+
+    def test_the_team_arm_writes_team_under_team_as_team_py_does(self):
+        code, _, err = self.main(*self.run_arguments("team", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        self.assertFalse(self.pair("coop").exists())
+        result = self.result("team")
+        self.assertEqual((result["setting"], result["arm"], result["lead_agent"]), ("team", "team", "agent1"))
+        self.assertLess(list(result).index("lead_agent"), list(result).index("agents"))
+        self.assertEqual([(a["team_role"], a["role"]) for a in result["agents"].values()],
+                         [("lead", "lead"), ("member", "member")])
+        self.assertEqual(list(result["agents"]["agent1"])[:2], ["feature_id", "team_role"])
+        self.assertEqual(json.loads((self.pair("team") / "agent1_traj.json").read_text())["team_role"], "lead")
+        # CooperBench's evaluator writes "coop" for every merged evaluation.
+        self.assertEqual(json.loads((self.pair("team") / "eval.json").read_text())["setting"], "coop")
+        config = json.loads((self.logs / "t" / "config.json").read_text())
+        self.assertEqual(config["setting"], "team")
+
+    def test_a_team_pair_finished_under_coop_before_the_team_setting_is_skipped_there(self):
+        legacy = self.pair("coop")
+        legacy.mkdir(parents=True)
+        (legacy / "result.json").write_text(json.dumps({
+            "repo": REPO, "task_id": TASK, "features": [1, 6], "setting": "coop", "arm": "team",
+            "total_cost": 1.5, "agents": {"agent1": {"status": "Submitted"}, "agent2": {"status": "Submitted"}}}))
+        (legacy / "eval.json").write_text(json.dumps({"both_passed": True, "error": None}))
+        code, _, err = self.main(*self.run_arguments("team", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        self.assertIn("skipped", err)
+        self.assertEqual(self.container_work(), [])
+        self.assertFalse(self.pair("team").exists())
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual(summary["results"], [{"task": f"{REPO}/{TASK}/1,6", "status": "skip", "cost": 1.5,
+                                               "eval": "pass"}])
+
+    def test_an_arm_may_name_its_setting_and_one_agent_is_always_solo(self):
+        arm = runner.find_arm(str(self.copy_arm("mine", setting="team")))
+        self.assertEqual(runner.pair_setting(arm, arm.layout([1, 6])), "team")
+        self.assertEqual(runner.pair_setting(arm, arm.layout([1])), "solo")
+        wrong = runner.find_arm(str(self.copy_arm("wrong", setting="pairs")))
+        with self.assertRaisesRegex(ValueError, "not one of coop, team"):
+            runner.pair_setting(wrong, wrong.layout([1, 6]))
+        for name, setting in (("coop", "coop"), ("coop-git", "coop"), ("sdlc", "coop"), ("solo", "solo")):
+            arm = runner.find_arm(name)
+            self.assertEqual(runner.pair_setting(arm, arm.layout([1, 6])), setting, name)
+
+    def test_a_subset_alone_runs_every_task_it_names_as_discover_tasks_orders_them(self):
+        other = self.cooperbench / "dataset" / "other_task" / "task1"
+        for feature in (1, 2, 3):
+            (other / f"feature{feature}").mkdir(parents=True)
+            (other / f"feature{feature}" / "feature.md").write_text(f"Do {feature}.\n")
+        dataset = self.cooperbench / "dataset"
+        self.assertEqual(runner.subset_tasks(dataset, "flash"),
+                         [("other_task", 1, [1, 2]), (REPO, TASK, [6, 1]), (REPO, TASK, [2, 10])])
+        self.assertEqual(runner.subset_tasks(dataset, "flash", repo=REPO), [(REPO, TASK, [6, 1]), (REPO, TASK, [2, 10])])
+        # team3_all.json names its sets "groups"; a task it names without
+        # sets gets every pair of its features; a set whose feature the task
+        # lacks is left out, as discover_tasks leaves it.
+        (dataset / "subsets" / "groups.json").write_text(json.dumps({"tasks": [
+            {"repo": "other_task", "task_id": 1}, {"repo": REPO, "task_id": TASK, "groups": [[1, 2, 6], [1, 99]]}]}))
+        self.assertEqual(runner.subset_tasks(dataset, "groups"),
+                         [("other_task", 1, [1, 2]), ("other_task", 1, [1, 3]), ("other_task", 1, [2, 3]),
+                          (REPO, TASK, [1, 2, 6])])
+        code, _, err = self.main("run", "--arm", "coop", "--subset", "flash", "--hub", self.hub_url,
+                                 "--cooperbench-dir", str(self.cooperbench), "--name", "t", "--model", "claude-test")
+        self.assertEqual(code, 0, err)
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual([r["task"] for r in summary["results"]],
+                         ["other_task/1/1,2", f"{REPO}/{TASK}/6,1", f"{REPO}/{TASK}/2,10"])
+        self.assertTrue((self.logs / "t" / "coop" / "other_task" / "1" / "f1_f2" / "eval.json").exists())
+        config = json.loads((self.logs / "t" / "config.json").read_text())
+        self.assertEqual(config["total_tasks"], 3)
+        self.assertEqual(set(config["images"]), {runner.image_name("other_task", 1), IMAGE})
+        code, _, err = self.main("run", "--arm", "coop", "--features", "1,6", "--hub", self.hub_url,
+                                 "--cooperbench-dir", str(self.cooperbench))
+        self.assertEqual(code, 2)
+        self.assertIn("--features needs --repo and --task", err)
+
+    def test_concurrency_runs_pairs_at_once_and_refuses_debug(self):
+        code, _, err = self.main(*self.run_arguments("coop-git", "--subset", "flash", "--concurrency", "2"))
+        self.assertEqual(code, 0, err)
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual(sorted(r["task"] for r in summary["results"]),
+                         [f"{REPO}/{TASK}/2,10", f"{REPO}/{TASK}/6,1"])
+        self.assertEqual(summary["completed"], 2)
+        self.assertEqual(json.loads((self.logs / "t" / "config.json").read_text())["concurrency"], 2)
+        # The fake never reports the git server running, so each pair
+        # started it, one at a time under the runner's lock.
+        self.assertEqual(len(self.docker.matching("run", "-d", "--name", "coordbench-git")), 2)
+        code, _, err = self.main(*self.run_arguments("coop", "--subset", "flash", "--concurrency", "2", "--debug"))
+        self.assertEqual(code, 2)
+        self.assertIn("--debug traces one pair at a time", err)
+
+    def test_a_pair_that_raises_is_its_error_and_the_run_goes_on(self):
+        real = runner.run_pair
+
+        def first_raises(settings, hub, driver, repo, task_id, features):
+            if features == [1, 6]:
+                raise RuntimeError("the disk is full")
+            return real(settings, hub, driver, repo, task_id, features)
+
+        with mock.patch.object(runner, "run_pair", side_effect=first_raises):
+            code, _, err = self.main(*self.run_arguments("coop", "--subset", "flash"))
+        self.assertEqual(code, 1)
+        self.assertIn("RuntimeError: the disk is full", err)
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual([(r["status"], r["eval"]) for r in summary["results"]], [("error", None), ("done", "pass")])
+        self.assertEqual((summary["failed"], summary["completed"]), (1, 1))
+
+    def test_config_json_keeps_cooperbench_s_keys_first_and_says_what_its_file_cannot(self):
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6", "--option", "tool_surface=bash",
+                                                     "--max-turns", "100", "--disallowed-tools", "WebFetch,WebSearch"))
+        self.assertEqual(code, 0, err)
+        config = json.loads((self.logs / "t" / "config.json").read_text())
+        self.assertEqual(list(config)[:7], ["run_name", "agent_framework", "model", "setting", "concurrency",
+                                            "total_tasks", "started_at"])
+        self.assertEqual((config["agent_framework"], config["arm"], config["driver"]), ("claude_code", "coop", "claude-cli"))
+        self.assertEqual((config["options"], config["max_turns"], config["timeout_s"], config["disallowed_tools"]),
+                         ({"tool_surface": "bash"}, 100, 7200.0, ["WebFetch", "WebSearch"]))
+        self.assertEqual((config["scoring_timeout_s"], config["cooperbench_sandbox_timeout_s"]),
+                         (runner.SCORING_TIMEOUT_SECONDS, 600))
+        self.assertEqual(config["differences_from_cooperbench"], list(drivers.CLI_DIFFERENCES))
+        provenance = config["provenance"]
+        self.assertEqual(provenance["cooperbench"]["dir"], str(self.cooperbench))
+        self.assertEqual(provenance["dataset"]["dir"], str(self.cooperbench / "dataset"))
+        self.assertRegex(provenance["dataset"]["sha256"], "^[0-9a-f]{64}$")
+        self.assertEqual(config["images"], {IMAGE: {"image": IMAGE, "id": None, "repo_digests": None, "overlay": None}})
+        self.assertEqual(config["pairs"], [{"repo": REPO, "task_id": TASK, "features": [1, 6]}])
+        result = self.result()
+        self.assertEqual(result["provenance"], provenance)
+        self.assertEqual((result["options"], result["max_turns"]), ({"tool_surface": "bash"}, 100))
+        flags = self.docker.matching("exec", "-w", "/workspace/repo")[-1][-1]
+        self.assertIn("--max-turns 100 --disallowedTools WebFetch,WebSearch", flags)
+
+    def test_the_summary_tallies_evaluations_as_cooperbench_does_whatever_the_agents_status(self):
+        """An agent in Error whose pair still evaluated counts by eval.json,
+        as _process_eval_result counts it; coordbench's verdict sets the pair
+        apart (exit 1), the summary does not."""
+        self.docker.stream = '{"type": "system", "subtype": "init"}\n'
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 1, err)
+        result = self.result()
+        self.assertEqual({a["status"] for a in result["agents"].values()}, {"Error"})
+        for record in result["agents"].values():
+            self.assertTrue(record["end_reason"].startswith(drivers.NO_RESULT), record["end_reason"])
+        self.assertEqual({a["error"] for a in result["agents"].values()}, {None})
+        self.assertEqual((result["total_cost"], result["total_steps"]), (None, None))
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual(summary["results"], [{"task": f"{REPO}/{TASK}/1,6", "status": "done", "cost": None,
+                                               "eval": "pass"}])
+        self.assertEqual((summary["eval"]["passed"], summary["pass_rate"], summary["total_cost"]), (1, 1.0, None))
+        self.assertIn("summary: 1 completed, 0 skipped, 0 failed; evals: 1 evaluated, 1 passed", err)
+
+    def test_a_pair_that_failed_to_provision_is_an_error_in_the_summary_and_never_evaluated(self):
+        self.docker.fail_seed = True
+        code, _, err = self.main(*self.run_arguments("coop-git", "--features", "1,6"))
+        self.assertEqual(code, 1)
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        (entry,) = summary["results"]
+        self.assertEqual((entry["status"], entry["eval"], summary["failed"], summary["eval"]["total_evaluated"]),
+                         ("error", None, 1, 0))
+        self.assertIn("seeding the shared repository", entry["error"])
+
+    def test_the_arm_s_artifacts_land_beside_result_json_and_none_replaces_the_runner_s_files(self):
+        real = runner.HubClient.close_run
+
+        def with_artifacts(client, run_id):
+            metrics, _ = real(client, run_id)
+            return metrics, {"git_log.txt": "commit 0123\n", "tasks.json": [{"id": 1, "status": "done"}],
+                             "result.json": {"forged": True}, "../escape.txt": "x", "judge.json": {"forged": True}}
+
+        with mock.patch.object(runner.HubClient, "close_run", with_artifacts):
+            code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        pair = self.pair()
+        self.assertEqual((pair / "git_log.txt").read_text(), "commit 0123\n")
+        self.assertEqual(json.loads((pair / "tasks.json").read_text()), [{"id": 1, "status": "done"}])
+        self.assertNotIn("forged", self.result())
+        self.assertFalse((pair.parent / "escape.txt").exists())
+        self.assertIn("the artifact 'result.json' was not written: the runner writes a file of that name", err)
+        self.assertIn("the artifact '../escape.txt' was not written: it is not a plain file name", err)
+        # Nor one the judge or the cascade writes there later.
+        self.assertIn("the artifact 'judge.json' was not written", err)
+        self.assertFalse((pair / "judge.json").exists())
+
+    def test_the_hub_s_close_answer_gives_metrics_and_artifacts_however_it_nests_them(self):
+        client = runner.HubClient("http://hub")
+        answers = {"top": {"metrics": {"events": {}}, "artifacts": {"a.txt": "x"}},
+                   "nested": {"metrics": {"events": {}, "artifacts": {"a.txt": "x"}}},
+                   "older": {"metrics": {"events": {}}}}
+        for name, answer in answers.items():
+            with mock.patch.object(client, "request", return_value=answer):
+                metrics, artifacts = client.close_run("r1")
+            self.assertEqual(metrics, {"events": {}}, name)
+            self.assertEqual(artifacts, {} if name == "older" else {"a.txt": "x"}, name)
+
+    def test_a_cascade_that_fails_says_so_and_leaves_cooperbench_s_keys_alone(self):
+        self.use_module("cascade", FakeCascade(problem=RuntimeError("no sandbox")))
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        evaluation = json.loads((self.pair() / "eval.json").read_text())
+        self.assertEqual(list(evaluation), CASCADE_EVAL_KEYS)
+        self.assertEqual(evaluation["cascade"], {"error": "RuntimeError: no sandbox"})
+        self.assertTrue(evaluation["both_passed"])
+
+    def test_no_cascade_runs_when_cooperbench_could_not_evaluate_or_when_cascade_py_is_absent(self):
+        with mock.patch.object(runner, "cooperbench_test", side_effect=RuntimeError("docker is down")):
+            self.main(*self.run_arguments("coop", "--features", "1,6"))
+        evaluation = json.loads((self.pair() / "eval.json").read_text())
+        self.assertEqual(list(evaluation), COOP_EVAL_KEYS)
+        self.assertEqual(self.cascade.calls, [])
+        self.assertIsNone(runner.sibling_module("coordbench_no_such_module"))
+        self.assertIs(runner.sibling_module("cascade"), self.cascade)
+        # A module of that name from elsewhere on the path is not coordbench's.
+        self.assertIsNone(runner.sibling_module("json"))
+        self.assertIs(runner.sibling_module("runconfig"), runner.runconfig)
+
+    def test_each_agent_may_have_its_own_model_and_a_difference_from_what_ran_is_flagged(self):
+        plan, _, driver = self.prepare("coop", agent_models={"agent2": "claude-opus-4-6"})
+        self.assertEqual([job.model for job in driver.jobs], ["claude-test", "claude-opus-4-6"])
+        self.assertEqual([a["model"] for a in runner.plan_summary(plan, {})["agents"]],
+                         ["claude-test", "claude-opus-4-6"])
+        before = len(self.docker.calls)
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6", "--agent-model", "agent3=claude-y"))
+        self.assertEqual(code, 2)
+        self.assertIn("--agent-model names agent3, which the arm does not lay out (agent1, agent2)", err)
+        self.assertEqual(len(self.docker.calls), before, "refused before anything ran")
+        for requested, observed, differs in (("claude-x", "claude-x", False), ("claude-x", "claude-x-20250929", False),
+                                             ("anthropic/claude-x", "claude-x", False), ("claude-x", "claude-y", True),
+                                             ("claude-x", None, None)):
+            self.assertEqual(runner.model_differs(requested, observed), differs, (requested, observed))
+
+    def test_a_dataset_dir_of_its_own_feeds_the_specs_and_the_scorer(self):
+        paper = self.tmp / "paper-dataset"
+        shutil.copytree(self.cooperbench / "dataset", paper)
+        (paper / REPO / f"task{TASK}" / "feature1" / "feature.md").write_text("The paper's spec 1.\n")
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6", "--dataset-dir", str(paper)))
+        self.assertEqual(code, 0, err)
+        self.assertIn("The paper's spec 1.", (self.pair() / "agent1_prompt.md").read_text())
+        _, arguments, cooperbench_dir = self.scorer.calls[0]
+        self.assertEqual((arguments["dataset_dir"], cooperbench_dir), (str(paper), str(self.cooperbench)))
+        self.assertEqual(self.result()["provenance"]["dataset"]["dir"], str(paper))
+
+    @unittest.skipUnless(COOPERBENCH_PARSERS, "needs CooperBench's checkout for its parsers.py")
+    def test_the_trajectory_messages_are_cooperbench_s_parse_session_jsonl(self):
+        text = "".join(json.dumps(line) + "\n" for line in transcript_lines("t0"))
+        text += '{"type": "user", "timestamp": "2026-10-09T21:05:49.000Z", "message": {"role": "user", "content": [' \
+                '{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "a.py"}]}]}}\n' \
+                'not json\n{"type": "summary"}\n'
+        self.assertEqual(drivers.parse_session_jsonl(text), COOPERBENCH_PARSERS.parse_session_jsonl(text))
+        for content in (None, "plain", {"a": 1}, [{"type": "thinking", "thinking": "hm"}, {"type": "image"}, 3]):
+            self.assertEqual(drivers.content_blocks_to_text(content),
+                             COOPERBENCH_PARSERS._content_blocks_to_text(content))
+
+
+class SessionTranscripts(unittest.TestCase):
+    """How the session driver finds, copies and counts a subagent's
+    transcript, on files written here."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-transcripts-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.root = self.tmp / "projects"
+
+    def test_the_transcript_is_the_subagent_s_whose_first_reply_or_prompt_carries_the_token(self):
+        mine = write_transcript(self.root / "p" / "s" / "subagents" / "agent-1.jsonl", "tok-1")
+        write_transcript(self.root / "p" / "s" / "subagents" / "agent-2.jsonl", "tok-2")
+        write_transcript(self.root / "p" / "s.jsonl", "tok-1")  # the orchestrator's own: not a subagent's
+        old = write_transcript(self.root / "p" / "old" / "subagents" / "agent-3.jsonl", "tok-1", age=3600)
+        self.assertEqual(drivers.find_transcripts("tok-1", [self.root], time.time() - 600), [mine])
+        self.assertEqual(drivers.find_transcripts("tok-1", [self.root], 0), [mine, old])
+        pasted = self.root / "p" / "s" / "subagents" / "agent-4.jsonl"
+        write_lines(pasted, [user_line("[Workflow harness - user request] ...tok-5..."),
+                             user_line("[Workflow harness - computed task] ...tok-6..."),
+                             {"type": "assistant", "message": {"role": "assistant", "content": [
+                                 {"type": "text", "text": "Reading it."}]}},
+                             user_line("tok-7, read back from a file after the first reply")])
+        self.assertEqual(drivers.carries_token(pasted, "tok-5"), "prompt")
+        self.assertEqual(drivers.carries_token(pasted, "tok-6"), "prompt", "every user line before a reply is the prompt")
+        self.assertIsNone(drivers.carries_token(pasted, "tok-7"))
+
+    def test_an_orchestrator_that_pasted_both_prompts_is_neither_agent_s(self):
+        """An orchestrating subagent carries both agents' tokens in its
+        tool calls' inputs, and is the newest file, since it runs finish;
+        a token in a tool call's input never counts, and a transcript that
+        names another agent of the run is nobody's."""
+        one, two = drivers.run_token("run-1", "agent1"), drivers.run_token("run-1", "agent10")
+        subagents = self.root / "p" / "s" / "subagents"
+        mine = write_transcript(subagents / "agent-a1.jsonl", one, age=100)
+        write_transcript(subagents / "agent-a10.jsonl", two, age=90)
+        launch = [{"type": "tool_use", "id": f"t{n}", "name": "Agent", "input": {"prompt": f"Begin with {token}."}}
+                  for n, token in enumerate((one, two))]
+        orchestrator = write_lines(subagents / "agent-orchestrator.jsonl", [
+            user_line("Run the pair."), {"type": "assistant", "message": {"role": "assistant", "content": launch}}])
+        self.assertIsNone(drivers.carries_token(orchestrator, one))
+        self.assertEqual(drivers.find_transcripts(one, [self.root], 0), [mine])
+        self.assertEqual(drivers.find_transcripts(two, [self.root], 0), [subagents / "agent-a10.jsonl"])
+        alone = write_lines(subagents / "agent-launcher.jsonl", [
+            user_line("Run agent1."), {"type": "assistant", "message": {"role": "assistant", "content": launch[:1]}}])
+        self.assertIsNone(drivers.carries_token(alone, one), "a token in a tool call's input is not a reply")
+
+    def test_a_transcript_whose_reply_carries_the_token_comes_before_a_newer_one_whose_prompt_does(self):
+        token = drivers.run_token("run-2", "agent1")
+        subagents = self.root / "p" / "s" / "subagents"
+        replied = write_transcript(subagents / "agent-replied.jsonl", token, age=100)
+        prompted = write_lines(subagents / "agent-prompted.jsonl", [user_line(f"Begin with {token}.")])
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0), [replied, prompted])
+
+    def test_usage_counts_each_api_message_once_with_its_largest_figures(self):
+        usage = drivers.transcript_usage("".join(json.dumps(line) + "\n" for line in transcript_lines("t")))
+        self.assertEqual(usage["tokens"], TRANSCRIPT_TOKENS)
+        self.assertEqual((usage["messages"], usage["models"], usage["claude_code_version"], usage["output_final"]),
+                         (2, ["claude-sonnet-4-5"], "2.1.295", True))
+        self.assertAlmostEqual(drivers.estimated_cost(usage["models"], usage["tokens"]), TRANSCRIPT_COST)
+        synthetic = json.dumps({"type": "assistant", "message": {"id": "s", "model": "<synthetic>", "usage": {}}})
+        self.assertEqual(drivers.transcript_usage(synthetic + "\n")["models"], [])
+
+    def test_a_model_without_a_price_or_a_mix_of_models_gets_no_estimate(self):
+        tokens = dict.fromkeys(drivers.TOKEN_FIELDS, 1000)
+        self.assertIsNone(drivers.estimated_cost(["claude-sonnet-5-5"], tokens))
+        self.assertIsNone(drivers.estimated_cost(["claude-sonnet-4-5", "claude-haiku-4-5"], tokens))
+        self.assertIsNone(drivers.estimated_cost([], tokens))
+        self.assertAlmostEqual(drivers.estimated_cost(["anthropic/claude-haiku-4-5"], tokens),
+                               (1.0 + 5.0 + 0.1 + 1.25) / 1000)
+
+    def test_the_driver_copies_the_transcript_and_fills_the_outcome_from_it(self):
+        workspace = self.tmp / "run" / "workspaces" / "agent1"
+        workspace.mkdir(parents=True)
+        job = drivers.AgentJob(run_id="r1", agent="agent1", role="peer", features=(1,), container="c", prompt="P",
+                               env={}, arm_dir=str(COORDBENCH / "arms" / "coop"), timeout_s=5.0, model="claude-x",
+                               log_path=str(self.tmp / "run" / "agent1_stream.jsonl"), workspace=str(workspace))
+        driver = drivers.SessionDriver(poll_seconds=0.01, settle_seconds=0, transcript_roots=[self.root])
+        handle = driver.start(job)
+        source = write_transcript(self.root / "p" / "s" / "subagents" / "agent-a.jsonl", handle["run_token"])
+        (workspace / ".coordbench-done").touch()
+        outcome = driver.wait(handle)
+        self.assertEqual(set(outcome.measured), {"cost", *drivers.TOKEN_FIELDS})
+        self.assertEqual((outcome.cost_source, outcome.model, outcome.input_tokens), ("estimated from tokens",
+                                                                                      "claude-sonnet-4-5", 7))
+        self.assertEqual((self.tmp / "run" / "agent1_session.jsonl").read_text(), source.read_text())
+        logged = json.loads((self.tmp / "run" / "agent1_session_outcome.json").read_text())
+        self.assertEqual((logged["model_requested"], logged["model"], logged["tokens"]),
+                         ("claude-x", "claude-sonnet-4-5", TRANSCRIPT_TOKENS))
+        self.assertAlmostEqual(logged["cost"], TRANSCRIPT_COST)
+
+    def test_output_without_its_final_count_is_a_lower_bound_and_the_cost_unknown(self):
+        """Most messages in Claude Code's transcripts carry no stop_reason,
+        and their output count is the stream-start snapshot: summing it
+        would undercount, so output_tokens and the cost stay unknown and
+        their lower bounds are kept apart."""
+        text = "".join(json.dumps(line) + "\n" for line in transcript_lines("t", final=False))
+        usage = drivers.transcript_usage(text)
+        self.assertFalse(usage["output_final"])
+        outcome = drivers.AgentOutcome(status="Submitted", measured=())
+        drivers.fill_from_transcript(outcome, usage)
+        self.assertEqual(set(outcome.measured), {"input_tokens", "cache_read_tokens", "cache_write_tokens"})
+        self.assertEqual((outcome.cost_source, outcome.output_tokens_lower_bound), (None, 148))
+        self.assertAlmostEqual(outcome.cost_lower_bound, TRANSCRIPT_COST)
+
+    def test_settling_waits_for_a_transcript_still_being_written_and_no_longer(self):
+        path = self.tmp / "t.jsonl"
+        path.write_text("{}\n")
+        started = time.time()
+        drivers.settle(path, 0.3, poll=0.05)
+        self.assertGreaterEqual(time.time() - started, 0.25)
+        os.utime(path, (time.time() - 10, time.time() - 10))
+        started = time.time()
+        drivers.settle(path, 0.3)
+        self.assertLess(time.time() - started, 0.2)
+
+
 class Tracing(RunnerCase):
     """The phases are also events on trace's stream, for a deployment that
     listens (run.listen); --debug adds the rest and a trace.jsonl per run,
@@ -1401,7 +2181,7 @@ class Tracing(RunnerCase):
         kinds = {e["kind"] for e in runner_events(events)}
         self.assertTrue({"phase", "phase_done", "hub_call", "wrote"} <= kinds, kinds)
         self.assertEqual([e["kind"] for e in runner_events(events, "phase_done")],
-                         ["phase_done"] * 8, "the hub's phase came before the run directory existed")
+                         ["phase_done"] * 9, "the hub's phase came before the run directory existed")
         result = json.loads((pair / "result.json").read_text())
         calls = runner_events(events, "hub_call")
         for call in calls:
@@ -1423,7 +2203,9 @@ class Tracing(RunnerCase):
             self.assertEqual(size, (pair / name).stat().st_size, name)
         # The listener a deployment attached saw the same events the file holds.
         ours = runner_events(events)
-        self.assertEqual([e["kind"] for e in runner_events(memory)][-len(ours):], [e["kind"] for e in ours])
+        # summary.json is written once the pair's sink has closed.
+        seen = [e for e in runner_events(memory) if e.get("file") != "summary.json"]
+        self.assertEqual([e["kind"] for e in seen][-len(ours):], [e["kind"] for e in ours])
         self.assert_secret_nowhere(err)
         self.assert_tokens_kept_private(json.loads((pair / "plan.json").read_text()), err)
 
@@ -1455,7 +2237,7 @@ class Tracing(RunnerCase):
         later = runner_events(finished[len(prepared):])
         self.assertEqual([(e["phase"], e["agent"]) for e in later if e["kind"] == "phase_done"],
                          [("agent", "agent1"), ("agent", "agent2"), ("close", None), ("teardown", None),
-                          ("score", None)])
+                          ("score", None), ("cascade", None)])
         polls = [e for e in later if e["kind"] == "marker_poll"]
         self.assertEqual([(e["agent"], e["found"]) for e in polls], [("agent1", True), ("agent2", True)])
         for poll in polls:
@@ -1707,7 +2489,9 @@ class TheHubProcess(unittest.TestCase):
         with self.assertRaises(runner.HubError) as refused:
             runner.HubClient(client.base_url).close_run("r-mine")
         self.assertEqual(refused.exception.status, 401)
-        self.assertIn("events", client.close_run("r-mine"))
+        metrics, artifacts = client.close_run("r-mine")
+        self.assertIn("events", metrics)
+        self.assertEqual(artifacts, {})
         self.assertNotIn(client.admin_token, " ".join(process.args))
         self.assertIn(str((self.tmp / "arms").resolve()), process.args)
 
@@ -1782,6 +2566,33 @@ class TheGitSetUp(unittest.TestCase):
     def unkept(self, agent, repository):
         promises = runner.git_promises(agent, {"git_remote": self.remote, "base_ref": self.base})
         return runner.unkept_promises(promises, self.shell(runner.git_read_script(promises, repository)).stdout)
+
+    def test_the_runs_repository_keeps_a_reflog_so_the_git_log_shows_a_force_push(self):
+        """The git server's per-run init, run by real git, keeps a reflog,
+        and the hub's git_log of that directory (kit.git_log, read in place
+        through git_remote_dir) still names the commit a force-push threw
+        away, which a fetch over git:// could not carry."""
+        import kit
+        remote = str(self.tmp / "server" / "run" / "repo.git")
+        self.assertEqual(self.shell(runner.init_repository_script(remote)).returncode, 0)
+        self.git("-C", str(self.task), "push", "-q", remote, "HEAD:refs/heads/agent1")
+        (self.task / "README.md").write_text("work an agent pushed\n")
+        self.git("-C", str(self.task), "-c", "user.name=agent1", "-c", "user.email=a@example.invalid",
+                 "commit", "-q", "-am", "the pushed work")
+        lost = self.git("-C", str(self.task), "rev-parse", "HEAD").strip()
+        self.git("-C", str(self.task), "push", "-q", remote, "HEAD:refs/heads/agent1")
+        self.git("-C", str(self.task), "push", "-q", "--force", remote, f"{self.base}:refs/heads/agent1")
+        self.assertIn(f"commit {lost}", kit.git_log(remote, self.base))
+
+    def test_the_repository_is_named_to_the_hub_only_where_this_host_owns_it(self):
+        volume = self.tmp / "volume"
+        (volume / "run-1" / "repo.git").mkdir(parents=True)
+        inspected = subprocess.CompletedProcess([], 0, stdout=f"{volume}\n", stderr="")
+        with mock.patch.object(drivers, "docker", return_value=inspected):
+            self.assertEqual(runner.repository_on_host("run-1"), str(volume / "run-1" / "repo.git"))
+            self.assertIsNone(runner.repository_on_host("run-2"))
+        with mock.patch.object(drivers, "docker", return_value=subprocess.CompletedProcess([], 1, "", "no volume")):
+            self.assertIsNone(runner.repository_on_host("run-1"))
 
     def test_the_setup_command_keeps_every_promise_of_the_git_block(self):
         for agent in ("agent1", "agent2"):

@@ -27,6 +27,7 @@ import types
 import unittest
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -171,8 +172,23 @@ def cooperbench_coop_task():
         return load_module("cooperbench_coop_task", path)
 
 
+def cooperbench_team_clients():
+    """CooperBench's TaskListClient and ProtocolClient, from task_list.py
+    and protocol.py, which import nothing beyond the standard library and
+    take any object with Redis's methods; None when the source is not
+    here."""
+    source = cooperbench_source()
+    if source is None:
+        return None
+    task_list = load_module("cooperbench_task_list", source / "team_harness" / "task_list.py")
+    protocol = load_module("cooperbench_protocol", source / "team_harness" / "protocol.py")
+    return task_list.TaskListClient, protocol.ProtocolClient
+
+
 COOPERBENCH = cooperbench_team_prompt()
 COOP_TASK = cooperbench_coop_task()
+TEAM_CLIENTS = cooperbench_team_clients()
+BASH = {**{"shared_dir": "/workspace/shared"}, "tool_surface": "bash"}
 NO_SOURCE = "CooperBench's source is not here; set COOPERBENCH_DIR to its checkout"
 
 
@@ -931,6 +947,23 @@ class Prompts(unittest.TestCase):
     def test_a_team_of_one_gets_the_solo_prompt(self):
         self.assertEqual(self.prompts(features=(3,))["agent1"], SPECS[3] + RULE + SUBMISSION_BLOCK)
 
+    def test_the_bash_surface_leaves_the_mcp_sentence_out(self):
+        for prompt in self.prompts(options=BASH).values():
+            self.assertNotIn(MCP_SENTENCE, prompt)
+            self.assertNotIn("MCP", prompt)
+
+    @unittest.skipIf(COOPERBENCH is None, NO_SOURCE)
+    def test_bash_surface_prompts_are_cooperbenchs_byte_for_byte(self):
+        team, stand_ins = COOPERBENCH
+        for git in (False, True):
+            arm, run = new_run(options={**BASH, **({"git_remote": "git://host/team.git"} if git else {})})
+            for agent, spec in run.agents.items():
+                with self.subTest(agent=agent, git=git), mock.patch.dict(sys.modules, stand_ins):
+                    theirs = team.build_team_instruction(
+                        SPECS[spec.features[0]], agents=list(run.agents), agent_id=agent,
+                        team_role=spec.role, git_enabled=git)
+                    self.assertEqual(arm.prompt(run, agent, SPECS), theirs)
+
     @unittest.skipIf(COOPERBENCH is None, NO_SOURCE)
     def test_prompts_are_cooperbenchs_but_for_the_mcp_sentence(self):
         team, stand_ins = COOPERBENCH
@@ -984,6 +1017,124 @@ class Metrics(unittest.TestCase):
         hub = hub_module.Hub()
         hub.create_run("team", [1, 2], {1: "a", 2: "b"}, SHARED, run_id="m")
         self.assertEqual(hub.close_run("m")["tasks_total"], 2)
+
+    def test_the_metrics_record_the_lead_and_the_teams_switches(self):
+        # runner/team.py writes lead_agent and team_features beside the
+        # metrics; this arm has no switch, so every feature is on.
+        _, run = new_run()
+        metrics = run.arm.metrics(run)
+        self.assertEqual(metrics["lead_agent"], "agent1")
+        self.assertEqual(metrics["team_features"], {"task_list": True, "scratchpad": True, "mcp": True,
+                                                    "auto_refresh": True, "protocol": True})
+
+
+class Surfaces(unittest.TestCase):
+    """tool_surface=bash: what CooperBench's claude_code team agent had,
+    the coop-* commands in Bash and wait_for_message alone over MCP, under
+    the server name CooperBench registers."""
+
+    def test_on_bash_mcp_serves_wait_for_message_alone_and_the_shell_everything(self):
+        arm, run = new_run(options=BASH)
+        self.assertEqual(list(arm.mcp_tools_for(run, "agent2")), ["wait_for_message"])
+        self.assertEqual(set(arm.tools_for(run, "agent2")), set(ALIASES))
+        listed = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, run, "agent2")
+        self.assertEqual([tool["name"] for tool in listed["result"]["tools"]], ["wait_for_message"])
+
+    def test_on_mcp_every_tool_is_served(self):
+        arm, run = new_run()
+        self.assertEqual(set(arm.mcp_tools_for(run, "agent2")), set(ALIASES))
+
+    def test_the_bash_surface_hands_claude_code_cooperbenchs_server_and_no_plugin(self):
+        surface = find_arm(str(TEAM)).claude_surface(BASH)
+        self.assertEqual((surface["tool_surface"], surface["plugin"]), ("bash", False))
+        self.assertEqual(list(surface["mcp_servers"]), ["cooperbench-team"])
+        server = surface["mcp_servers"]["cooperbench-team"]
+        self.assertEqual(server, json.loads((TEAM / ".mcp.json").read_text(encoding="utf-8"))
+                         ["mcpServers"]["coordbench"])
+
+    @unittest.skipIf(cooperbench_source() is None, NO_SOURCE)
+    def test_the_server_name_is_cooperbenchs(self):
+        init = (cooperbench_source() / "team_harness" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn(f'MCP_SERVER_NAME = "{TEAM_MODULE.COOPERBENCH_MCP_SERVER}"', init)
+
+
+class Record(unittest.TestCase):
+    """A request's and a response's text, which CooperBench's task-log does
+    not keep, is in the run's events, tied to the call that sent it."""
+
+    def test_a_request_and_its_response_carry_their_text_and_their_call(self):
+        _, run = new_run()
+        request_id = text_of(run, "agent2", "request", recipient="agent1", kind="plan_approval", body="may I?")
+        text_of(run, "agent1", "respond", request_id=request_id, body="yes, take cli.py")
+        tools = [e for e in run.events if e["kind"] == "tool"]
+        request, response = [e for e in run.events if e["kind"] in ("request", "response")]
+        self.assertEqual((request["content"], request["send_id"]), ("may I?", tools[0]["seq"]))
+        self.assertEqual((response["content"], response["send_id"]), ("yes, take cli.py", tools[1]["seq"]))
+        self.assertIsInstance(request["timestamp"], float)
+        self.assertAlmostEqual(datetime.fromisoformat(request["timestamp_iso"]).timestamp(),
+                               request["timestamp"], places=5)
+        self.assertNotIn("content", board(run).log[-1], "the task-log keeps CooperBench's shape")
+
+
+class Artifacts(unittest.TestCase):
+    """runner/team.py's task_log.json and tasks.json, taken at close."""
+
+    def session(self, run):
+        member_task = task_titled(run, "Implement feature 7")["id"]
+        text_of(run, "agent2", "task_claim", task_id=member_task)
+        text_of(run, "agent2", "task_update", task_id=member_task, status="done", note="patch at x")
+        request_id = text_of(run, "agent2", "request", recipient="agent1", kind="review", body="look")
+        text_of(run, "agent1", "respond", request_id=request_id, body="fine")
+
+    def test_the_artifacts_are_the_task_log_and_the_final_list_in_id_order(self):
+        arm, run = new_run(features=(3, 7))
+        self.session(run)
+        artifacts = arm.artifacts(run)
+        self.assertEqual(set(artifacts), {"task_log.json", "tasks.json"})
+        self.assertEqual([e["kind"] for e in artifacts["task_log.json"]],
+                         ["create", "create", "claim", "update", "request", "response"])
+        tasks = artifacts["tasks.json"]
+        self.assertEqual([t["id"] for t in tasks], sorted(t["id"] for t in tasks))
+        self.assertEqual([list(t) for t in tasks], [TASK_FIELDS] * 2)
+        json.dumps(artifacts)
+
+    def test_the_hub_hands_them_over_at_close(self):
+        hub = hub_module.Hub()
+        hub.create_run("team", [3, 7], {3: "a", 7: "b"}, SHARED, run_id="art")
+        self.session(hub.hosted("art").run)
+        artifacts = hub.close_answer("art")["artifacts"]
+        self.assertEqual(len(artifacts["tasks.json"]), 2)
+        self.assertEqual(artifacts["task_log.json"][-1]["kind"], "response")
+
+    @unittest.skipIf(TEAM_CLIENTS is None, NO_SOURCE)
+    def test_their_shapes_are_cooperbenchs(self):
+        # The same seeding and session through CooperBench's own clients
+        # over a FakeRedis: every entry and task has the same keys, in the
+        # same order, with values of the same types.
+        task_list_client, protocol_client = TEAM_CLIENTS
+        fake = FakeRedis()
+        tasks = task_list_client(fake, "r1")
+        member = tasks.create(title="Implement feature 7", created_by="bench-runner", owner="agent2",
+                              metadata={"feature_id": 7, "assigned_to": "agent2"})
+        tasks.create(title="Lead-only: integrate and submit feature 3", created_by="bench-runner",
+                     owner="agent1", metadata={"feature_id": 3, "assigned_to": "agent1", "lead_task": True})
+        tasks.claim(member, by="agent2")
+        tasks.update(member, by="agent2", status="done", note="patch at x")
+        request_id = protocol_client(fake, "r1", "agent2").request(to="agent1", kind="review", body="look")
+        protocol_client(fake, "r1", "agent1").respond(request_id=request_id, body="fine")
+        theirs_log, theirs_tasks = tasks.log_events(), tasks.list()
+        arm, run = new_run(features=(3, 7))
+        self.session(run)
+        ours = arm.artifacts(run)
+
+        def shape(rows):
+            return [[(key, type(value).__name__) for key, value in row.items()] for row in rows]
+
+        self.assertEqual(shape(ours["task_log.json"]), shape(theirs_log))
+        self.assertEqual(shape(sorted(ours["tasks.json"], key=lambda t: t["title"])),
+                         shape(sorted(theirs_tasks, key=lambda t: t["title"])))
+        self.assertEqual([t["metadata"] for t in sorted(ours["tasks.json"], key=lambda t: t["title"])],
+                         [t["metadata"] for t in sorted(theirs_tasks, key=lambda t: t["title"])])
 
 
 class Mirror(unittest.TestCase):

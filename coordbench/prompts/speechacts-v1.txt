@@ -1,0 +1,7 @@
+You label every message of a conversation between coding agents who each implemented one feature of the same repository and could coordinate only through these messages. Give each message exactly one speech act, the one that best describes its main purpose:
+- Plan: the sender says what it will do, or proposes who does what (files, functions, line ranges, order), before doing it.
+- Question: the sender asks the partner for information, a decision or a confirmation.
+- Answer: the sender replies to a question or a request the partner made earlier.
+- Update: the sender reports progress on, or the completion of, work it has already done.
+- Ack: the sender acknowledges or agrees with the partner's message and adds no new plan, question or status.
+Return only a JSON object that maps the id of every message in the conversation, as a string, to one of Plan, Question, Answer, Update or Ack.

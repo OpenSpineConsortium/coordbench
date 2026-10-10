@@ -1,0 +1,8 @@
+{
+  "entry": "arm.py:CoopNoCommArm",
+  "name": "coop-nocomm",
+  "description": "CooperBench's coop setting with messaging banned (--no-messaging): one agent per feature, told nothing of a partner, with no coordination tools.",
+  "needs": [],
+  "plugins": [],
+  "mcp_servers": {}
+}

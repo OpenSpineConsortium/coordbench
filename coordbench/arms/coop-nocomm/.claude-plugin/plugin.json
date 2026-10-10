@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-coop-nocomm",
+  "version": "0.1.0",
+  "description": "coordbench's coop-nocomm arm, CooperBench's communication ablation: one agent per feature of the same codebase, with no messaging and no word of a partner."
+}

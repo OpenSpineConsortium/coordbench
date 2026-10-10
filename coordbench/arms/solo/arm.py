@@ -22,7 +22,7 @@ file.
 """
 
 import kit
-from arm import AgentSpec, Arm, SUBMISSION_BLOCK
+from arm import TOOL_SURFACES, AgentSpec, Arm, SUBMISSION_BLOCK
 
 # The rule CooperBench puts between the features and between sections.
 SECTION_RULE = "\n\n---\n\n"
@@ -48,6 +48,8 @@ class SoloArm(Arm):
     name = "solo"
     description = "CooperBench's solo setting: one agent implements every feature, alone."
     needs = ()
+    # No tools, so the bash tool surface is the same as the mcp one.
+    tool_surfaces = TOOL_SURFACES
 
     def layout(self, features):
         return [AgentSpec("agent1", "solo", tuple(features))]

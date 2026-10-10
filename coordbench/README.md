@@ -33,16 +33,30 @@ Three things plug in:
 | --- | --- | --- |
 | solo | one agent implements both features | nothing |
 | coop | one agent per feature, messages only (CooperBench's Coop) | nothing |
+| coop-nocomm | coop's layout with messaging banned, CooperBench's `--no-messaging`: no tools and no word of a partner | nothing |
 | coop-git | coop plus a shared git remote they push to and merge from | git_remote |
 | team | a lead and members, a shared task list, typed requests, a scratchpad; its wait_for_message works, where CooperBench's did not (see below) | shared_volume |
 | sdlc | sdlc-template's claim protocol: issues, exclusive claims, pull requests, a merge gate that answers "main moved" | git_remote |
 
-solo, coop, coop-git and team are CooperBench's own arms (cooperbench/
-CooperBench at 63b9d44, MIT licence) re-made as plug-ins: their prompts
-are CooperBench's word for word, and tests compare them with CooperBench's
-own builders when its source is present (COOPERBENCH_DIR). Their tools
-keep CooperBench's command names (coop-send, coop-task-claim and the rest,
-with the same arguments and exit codes) and are also MCP tools. coop-send
+solo, coop, coop-git, coop-nocomm and team are CooperBench's own arms
+(cooperbench/CooperBench at 63b9d44, MIT licence) re-made as plug-ins:
+their prompts are CooperBench's word for word but for one sentence that
+coop, coop-git and team add naming the MCP tool behind each command, and
+tests compare them with CooperBench's own builders when its source is
+present (COOPERBENCH_DIR). Their tools keep CooperBench's command names
+(coop-send, coop-task-claim and the rest, with the same arguments and exit
+codes) and are also MCP tools, and the arm loads as a Claude Code plugin
+with a skill. That surface, the run option tool_surface "mcp", is the
+default. `--option tool_surface=bash` reproduces the surface CooperBench's
+claude_code agents had instead, for coop, coop-git and team: the prompt
+without the added sentence, byte for byte the authors' text; no plugin, so
+no skill; and the coop-* commands in Bash, with, for team, the one MCP
+server CooperBench registers, cooperbench-team, serving wait_for_message
+alone. Arm.claude_surface(options) says what a driver hands Claude Code
+for it (whether to load the plugin, which MCP servers), the hub's MCP
+endpoint lists only that tool, and the metrics record tool_surface. The
+sdlc arm, whose prompt names its MCP tools, offers "mcp" alone and the hub
+refuses it the other. coop-send
 and coop-broadcast behave as coop_msg.py's do in every arm that has them,
 the sdlc arm included: a message to any name is queued, an inbox being
 made for the name, so a misspelt peer is written to where nobody reads and
@@ -284,19 +298,43 @@ What the base class gives and what an arm may override:
   none (its team server sends no instructions and its other modes have no
   server); the key is left out of initialize when it is empty.
 - `metrics(run)`: numbers from run.events (every tool call, framed by a
-  "tool" event before its handler runs and a "tool_done" event after it
-  returns, the second with duration_ms, the handler's wall time,
-  blocked_ms, the part of it spent waiting for another agent, is_error
-  and cancelled; and every `run.emit(kind, agent, ...)`) and run.state.
-  The default metrics count events by kind, so that count includes
-  tool_done. Both durations are milliseconds as floats rounded to three
-  decimals, so a hub cost below a millisecond still shows.
+  "tool" event before its handler runs, with via, "mcp" or "shell", the
+  transport it came by, and a "tool_done" event after it returns, the
+  second with duration_ms, the handler's wall time, blocked_ms, the part
+  of it spent waiting for another agent, is_error and cancelled; and
+  every `run.emit(kind, agent, ...)`) and run.state. The default metrics
+  count events by kind, so that count includes tool_done, and name the
+  run's tool_surface. Both durations are milliseconds as floats rounded to
+  three decimals, so a hub cost below a millisecond still shows.
+- `artifacts(run)`: files the run leaves, {file name: a JSON value or
+  text}, taken once when the run closes, before teardown, and answered
+  beside the metrics; the team arm's are CooperBench's task_log.json and
+  tasks.json. The hub adds git_log.txt itself for a run with a shared
+  remote (below).
 - `teardown(run)`: free what setup took, once, when the run closes.
 - `needs`: "git_remote" (a bare repository, remote `team` in every agent's
   repository; run.options git_remote, git_remote_host and base_ref say
   where) and "shared_volume" (/workspace/shared in every container;
   run.options shared_dir and shared_dir_host). The hub refuses a run
   whose options do not provide what its arm needs.
+
+The record. The hub's first event in every run, seq 0, is run_started:
+the wall clock its t counts from (epoch, and iso in UTC), the arm, the
+agents with their roles and features, and the tool surface, so epoch + t
+puts any event at its absolute time. kit's messaging records each
+delivery as a "message" event carrying the text (content), coop_msg.py's
+timestamp and timestamp_iso, its own seq as message_id and the seq of
+the send's or broadcast's "tool" event as send_id (the call's
+`call.tool_seq`), so the deliveries of one broadcast share it; each
+"receive" and "receive_lost" names the message_ids it handed over or put
+back and the call (call_id). The team arm's request and response events
+carry their body as content too, which CooperBench's task-log does not
+keep. conversation.py, which imports nothing of coordbench, derives
+CooperBench's conversation.json, each sender's <agent>_sent.jsonl and the
+paper-era message store, conversation_store.json, from these events. The
+text stays in the run's own record and events.jsonl, written as it is
+sent, and is left off trace.py's stream: a field named content never
+reaches a listener, the hub's --debug file included.
 
 run.lock is a re-entrant condition that guards run.state; every change
 under it, and every emit, wakes the tools waiting on it, so a blocking tool
@@ -393,8 +431,12 @@ benchmarked as coordination:
 
 ## Drivers
 
-- `claude-cli`: headless Claude Code in each agent's container, the arm
-  loaded with --plugin-dir, as CooperBench's claude_code adapter runs it.
+- `claude-cli`: headless Claude Code in each agent's container, as
+  CooperBench's claude_code adapter runs it, the arm loaded with
+  --plugin-dir on the default tool surface; `--option tool_surface=bash`
+  loads no plugin and, for team, hands over only the cooperbench-team
+  server through --mcp-config (Claude Code expands ${COORD_MCP_URL} and
+  ${COORD_AGENT_TOKEN:-} there as in a plugin's .mcp.json).
   It needs CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in the
   runner's environment, or COORDBENCH_CLAUDE_TOKEN in a cloud environment,
   which withholds the first name and which run.py copies to it; the token reaches the container by name only and is
@@ -416,17 +458,31 @@ benchmarked as coordination:
   holds the tokens too and has the same mode, and the plan prepare prints
   leaves them out. `run.py prepare` provisions the pair and prints a plan
   of prompts; the session spawns one subagent per prompt (the Workflow
-  tool); `run.py finish` waits for each agent's marker, scores and tears
-  down. A subagent leaves no stream on the host, so result.json records
-  its tokens, steps, cost, duration_ms and api_duration_ms as null
-  (unknown), never as zero, and bench/cooperbench/report.py shows them as '-';
-  the agent's wall time is still in result.json's timings, measured by
-  the runner from prepare's start to the marker.
+  tool, with the model each agent's entry names); `run.py finish` waits
+  for each agent's marker, scores and tears down. A subagent leaves no
+  stream on the host, so result.json records its steps, duration_ms and
+  api_duration_ms as null (unknown), never as zero. Its tokens come from
+  its own transcript: the prompt asks the subagent to open its first
+  reply with a run token, finish finds the transcript under Claude Code's
+  projects directory that carries it, copies it as
+  `<agent>_session.jsonl`, sums each API message's usage once and
+  estimates the cost at the model's price (cost_source "estimated from
+  tokens"; null for a model without a price). Claude Code writes a
+  message's final output count only on the line that carries its
+  stop_reason, which most messages lack; for those the output count and
+  the cost stay null, and output_tokens_lower_bound and cost_lower_bound
+  give what the transcript does show. A subagent whose transcript
+  is not found keeps null usage, and bench/cooperbench/report.py shows
+  it as '-'. How it ended is in `<agent>_session_outcome.json`, and
+  result.json marks the run's isolation "advisory", since the subagent's
+  file tools reach the host. The agent's wall time is in result.json's
+  timings, measured by the runner from prepare's start to the marker.
 - your own: `--driver path/to/driver.py:Class`, any class with start(job)
   and wait(handle) (drivers.py says what they take and return; the class
-  attributes host_workspace, resumable, framework and measures_usage tell
-  the runner what the driver wants, and a driver that does not set
-  measures_usage = True has its usage recorded as null).
+  attributes host_workspace, resumable, framework, measures_usage,
+  isolation and differences_from_cooperbench tell the runner what the
+  driver wants and what config.json says of it, and a driver that does
+  not set measures_usage = True has its usage recorded as null).
 
 ## Running
 
@@ -438,21 +494,50 @@ python3 coordbench/run.py run --arm team --repo pallets_click_task --task 2068 \
 python3 bench/cooperbench/report.py --run team-coordbench=flash-team-coordbench --run team-cooperbench=flash-team-cc
 ```
 
+`--subset` alone runs every pair of the subset across its tasks, as
+CooperBench's runner does, and `--repo`/`--task` narrow it;
+`--concurrency N` runs N pairs at once on one hub (CooperBench runs 20).
+`--agent-model agent2=MODEL` gives one agent its own model,
+`--disallowed-tools WebFetch,WebSearch` keeps the agents to local tools
+as the paper did, and `--dataset-dir` points the specs and the scorer at
+another dataset (a 59bbf65 worktree for the paper's) while CooperBench's
+own code scores.
+
 The logs take CooperBench's layout, so `cooperbench eval` and
-bench/cooperbench/report.py read them as they read the authors' runs. result.json
-holds the fields CooperBench's coop.py and solo.py write (per agent the
-status, cost, steps, the token counts, patch_lines and error; total_cost
-and total_steps for the run) plus the arm, the driver and the hub's
-metrics. A driver that cannot measure usage (drivers.py, measures_usage)
-writes null, not 0, for an agent's cost, steps and token counts, and null
-totals when no agent was measured; report.py takes a null as unknown,
-leaves such a pair out of "Tokens per pair", and shows '-' when no pair of
-the arm was measured.
+bench/cooperbench/report.py read them as they read the authors' runs.
+`<run>/config.json` is written when the run starts and `<run>/summary.json`
+when it ends, with the keys and formulas of CooperBench's runner (the
+summary's pass_rate is passed over passed and failed, the tally comes
+from eval.json alone) and coordbench's beside them: the arm, driver,
+options and limits, the CooperBench commit and the dataset's tree hash,
+each task image's id and overlay label, the driver's departures from
+CooperBench's adapter, and the Claude Code versions, models, tools and
+MCP servers the agents reported. result.json holds the fields
+CooperBench's coop.py, team.py and solo.py write, in their order (per
+agent the status, cost, steps, the token counts, patch_lines and error;
+total_cost, total_steps, messages_sent and log_dir for the run; team's
+lead_agent and team_role; solo's one agent under "agent", its files named
+solo_*), with error CooperBench's (an exception's message) and
+coordbench's account of how an agent ended in end_reason, and then the
+arm, the driver, agents_seconds, the isolation, the provenance, the
+image and the hub's metrics. The team arm's pairs go under team/ with
+the setting "team", as CooperBench's team runner writes them. Beside
+result.json are each agent's agent<feature>_traj.json (or solo_traj.json)
+in CooperBench's shape, the conversation files, and what the arm hands
+back at close. A driver that cannot measure usage (drivers.py,
+measures_usage) writes null, not 0, for an agent's cost, steps and token
+counts, and null totals when no agent was measured; report.py takes a
+null as unknown, leaves such a pair out of "Tokens per pair", and shows
+'-' when no pair of the arm was measured.
 
 Each agent's record also carries duration_ms and api_duration_ms, Claude
 Code's own wall time for the agent and the part of it spent waiting on
 the API, read from its result event; the session driver, which sees no
-stream, writes null for both. result.json's "timings" is the harness's
+stream, writes null for both. result.json's duration_seconds runs from
+the pair's plan to the agents' end, so it holds the run's creation on the
+hub and the provisioning, where CooperBench's holds each agent's
+container start, install and cleanup; agents_seconds is the agents' phase
+alone, from the first start to the last end. result.json's "timings" is the harness's
 own clock: one record per phase of the pair, with the phase, the agent it
 was for (null for the run's own phases), its start and end as ISO 8601
 and its seconds. The phases are hub (starting or connecting to the hub;
@@ -461,8 +546,8 @@ in every pair), run_create (POST /api/runs), git_remote, shared_volume,
 provision (one per agent, from its docker run through its wrappers),
 agent (one per agent, from the driver's start to its wait's return; for
 the session driver, from prepare's start to the marker finish sees),
-close (close and release on the hub), score (CooperBench's evaluation)
-and teardown. Only the phases that happened are recorded, and run and
+close (close and release on the hub), score (CooperBench's evaluation),
+cascade (the merge cascade beside it in eval.json) and teardown. Only the phases that happened are recorded, and run and
 finish end with one line such as `timings: provision 42 s, agents 1040 s
 (agent1 1030 s, agent2 980 s), score 95 s, teardown 6.0 s`, where the
 agents' figure is the span from the first start to the last end, since
@@ -574,6 +659,47 @@ never the standard library's module of that name, and a process that
 already imported coordbench's trace shares it; a copy of cli.py or
 bridge.py alone records nothing and works as before.
 
+## After a run
+
+What a pair leaves is read by four tools, none of which calls a model
+unless the owner asks it to:
+
+- The merge cascade, coordbench/cascade.py, runs as part of scoring, for
+  every merged pair CooperBench could evaluate, and adds a "cascade"
+  block to eval.json beside CooperBench's own keys, which it never
+  changes: the paper's naive, union and learned-resolver merges, each
+  agent's patch alone against both suites, and both verdicts, 63b9d44's
+  (verdict_63b9d44, CooperBench's both_passed) and the paper era's
+  (verdict_paper_era), never mixed. It runs in a sandbox of its own
+  through CooperBench's backend and merge helpers, from the dataset the
+  scorer was handed, and writes merge_naive.diff, merge_union.diff and
+  merge_llm.diff beside eval.json. The learned resolver runs only when
+  COORDBENCH_RESOLVER_URL names an OpenAI-compatible API base
+  (COORDBENCH_RESOLVER_MODEL picks the model, COORDBENCH_RESOLVER_KEY the
+  key, which no file holds); otherwise the block says it did not run. It
+  costs a sandbox and at least four test runs per pair.
+- export.py writes the pair's trajectory.json.gz once the pair is
+  scored, and `python3 coordbench/export.py <pair or run dir>... --site
+  OUT` lays runs out as CooperBench's website does, so its own viewer
+  opens them; `python3 coordbench/compare.py <pair dir or .json.gz>...
+  -o report.html` puts runs and CooperBench's published trajectories side
+  by side in one offline page (coordbench/viewer/README.md).
+- judge.py labels failure modes as the paper does, run on purpose:
+  `heuristics` (free, no model), `commerrors` (App F), `symptoms`,
+  `speechacts` and `emergent`, with `--backend claude-cli` (the default,
+  the owner's subscription through COORDBENCH_CLAUDE_TOKEN or
+  CLAUDE_CODE_OAUTH_TOKEN, never ANTHROPIC_API_KEY) or
+  `--backend openai-compatible` (COORDBENCH_JUDGE_URL and
+  COORDBENCH_JUDGE_KEY); --dry-run says what would be sent. Each pair
+  gets a judge.json recording, per section, the backend, model and
+  prompt variant; the prompts are under coordbench/prompts/.
+  annotate.py draws the seeded sample of failed pairs for the human
+  cause labels (`causes`), tallies them and writes each into judge.json
+  (`tally --apply`), and measures the symptom judge against human labels
+  (`validate`, `agreement`).
+- bench/cooperbench/report.py reads all of it, old runs included, where a
+  file a run did not write reads "not recorded".
+
 ## The hub, for other harnesses
 
 `python3 hub.py --host 0.0.0.0 --port 8765 [--log-dir DIR] [--arm-dir DIR] [--debug]`
@@ -584,7 +710,15 @@ serves:
   prompt, and with "agent_tokens": true a bearer token of its own, which
   this answer alone carries; features must not repeat and are at most 16
   (a task pair is 2); `GET /api/runs/{run}`, `GET /api/runs/{run}/events`,
-  `POST /api/runs/{run}/close` -> metrics; `DELETE /api/runs/{run}` ->
+  `POST /api/runs/{run}/close` -> {"metrics", "artifacts"}, the second the
+  files the close that closed the run took before the arm's teardown:
+  the arm's own (Arm.artifacts) and, for a run whose options name a
+  shared remote, git_log.txt, `git log --all --reflog --stat` of it less
+  the history below base_ref: read in place, reflog included, from
+  git_remote_dir, the bare repository's directory on the hub's host, when
+  the options give one, and otherwise fetched from git_remote_host, 500
+  commits deep and with no reflog, which git's protocol does not send;
+  `DELETE /api/runs/{run}` ->
   {"run_id", "released": true}, which closes the run if it is still open
   and then forgets it, so a hub that serves many runs keeps none of the
   finished ones (the runner sends it once it holds the metrics and the

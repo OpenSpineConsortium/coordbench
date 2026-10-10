@@ -1,0 +1,5 @@
+--- a/src/util.py
++++ b/src/util.py
+@@ -1 +1 @@
+-a = 0
++a = 6

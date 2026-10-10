@@ -6,6 +6,9 @@
 #   coop       two agents, each in its own container, messages only
 #   coop-git   the same, plus a shared git remote they push to and merge from
 #   team       a lead and a member with a shared task list and scratchpad
+# and, when named, coop-nocomm: coop with messaging off (--no-messaging),
+# the no-communication baseline of the paper's Fig 5b and Table 6, which
+# coordbench's coop-nocomm arm re-makes.
 # The agents are Claude Code, on the subscription token in
 # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`); an API key, if one is
 # set, would win over it and bill the API, so it is unset here. A pair whose
@@ -39,6 +42,7 @@ for arm in "${arms[@]}"; do
         solo) run "flash-solo-$tag" --setting solo ;;
         coop) run "flash-coop-$tag" --setting coop ;;
         coop-git) run "flash-coop-git-$tag" --setting coop --git ;;
+        coop-nocomm) run "flash-coop-nocomm-$tag" --setting coop --no-messaging ;;
         team) run "flash-team-$tag" --setting team ;;
         *) echo "unknown arm: $arm" >&2; exit 2 ;;
     esac

@@ -1,0 +1,88 @@
+You are annotating one failed trajectory of two coding agents for coordination failure symptoms. Each agent implemented one feature of the same repository in a workspace of its own, under workspace isolation: neither could see the other's code, they could coordinate only through the messages shown, and their two patches were merged and tested after both had finished.
+
+Table 1 | Coordination failure symptoms. Observable patterns in how coordination breakdowns surface in merged artifacts.
+- Work overlap: Both agents independently implement the same functionality, duplicating work and overwriting details.
+- Divergent architecture: Incompatible design decisions lead to semantic loss even under a clean merge.
+- Repetition: Verbose status messages add little new information and reduce signal.
+- Unresponsiveness: Direct questions or requests are not answered, breaking the decision loop.
+- Unverifiable claims: Agent asserts a change or interface decision without evidence the partner can check (no checkable commitment).
+- Broken commitment: Confident completion claims create false shared context when the promised change is absent.
+- Dependency access: Missing risk communication leaves agents unable to anticipate merged dependency interactions (e.g., circular imports).
+- Placeholder misuse: An explicit integration contract exists but is applied differently than agreed.
+- Parameter flow: Ambiguity about a changing interface leaves one agent implementing against an outdated contract.
+- Timing dependency: Agents agree on order but fail to communicate an enforceable plan that preserves it after merge.
+- Information asymmetry: One agent lacks information about the code or the plan that its partner holds, and the conversation never closes the gap. (This name is not in Table 1: CooperBench's website lists it in its failure taxonomy tree under Information, beside Unverifiable claims, with no definition; the definition here is coordbench's.)
+
+Examples. One representative example for each symptom, as CooperBench's App H prints them (quotes, arrows and dashes in ASCII):
+Work overlap.
+  A msg: guid regex includes surrounding curly braces ({...}), and A warns about overlap.
+  A msg: WAIT Agent 10! If you add the section header AND my guid type to your branch, that WILL create a merge conflict!
+  B msg: I'll add the COMPLETE section (lines 72-81) to my branch, which includes both the section header, your guid type, AND my hash_sha256 type.
+  Explanation: Despite explicit boundaries and warnings, B duplicates A's work; the merged artifact keeps B's (incorrect) version.
+  Outcome: Wrong regex version wins; GUID tests fail (merged guid pattern missing curly braces).
+Divergent architecture.
+  A msg: Lines 15-66: My global filter registry code is present... Line 69: Still has @dataclass decorator.
+  B msg: Removed dataclass import... Converted Prompt from dataclass to regular class with explicit __init__.
+  B msg: The 2-way merge should combine our changes cleanly.
+  Merge: clean (0 conflicts), but A's additions are missing from the merged module.
+  Explanation: Despite explicit expectations about merge behavior, B's class rewrite overwrites the region where A added register_filter/unregister_filter; the merge reports 0 conflicts but the exported API is missing.
+  Outcome: ImportError: cannot import name register_filter from outlines.prompts.
+Repetition.
+  Near-duplicate status updates (different strings, same info).
+  A msg: I have successfully added the url type to outlines/types/__init__.py at lines 72-77:
+  A msg: Successfully added to outlines/types/__init__.py at lines 72-77
+  Explanation: The same completion/location is restated with minimal new information, consuming turns without adding constraints a partner can act on.
+  Outcome: Repeated status updates reduce signal-to-noise and can crowd out missing coordination details.
+Unresponsiveness.
+  A msg: Which approach would you prefer? I want to ensure we don't lose any functionality while resolving this conflict.
+  B: no later message answers this question in the conversation log.
+  Explanation: The decision is explicitly requested and never resolved, breaking the coordination loop.
+  Outcome: The team proceeds without an agreed decision; implementation assumptions diverge.
+Unverifiable claims.
+  A claim: max_resolution is already added at specific line ranges.
+  B constraint: I cannot verify your intermediate changes (separate branches).
+  Result: the merge can be clean while one side's asserted change is silently absent.
+  Explanation: The claim is specific but non-checkable; coordination lacks a verification mechanism (e.g., pasted signature, exact diff, or an agreed placeholder).
+  Outcome: False shared context about code state leads to incompatible downstream edits.
+Broken commitment.
+  A msg: I'll add BOTH parameters (fallback_processor and max_batch_size) to the constructor signature, BOTH docstrings, and BOTH initializations.
+  A msg: (check mark) Line 26: Added BOTH parameters (fallback_processor and max_batch_size) to constructor signature.
+  Observed after merge: constructor only has fallback_processor, missing max_batch_size.
+  Explanation: A makes a confident completion claim that is not corrected or verified by B; under partial observability, this creates false shared context.
+  Outcome: TypeError: __init__() got an unexpected keyword argument max_batch_size (tests fail).
+Dependency access.
+  Conversation evidence: 0 coordination messages were sent (total_messages=0), so neither agent disclosed import/initialization risks.
+  Merge traceback excerpt: src/PIL/Image.py:60 executes from . import ImageDraw. Then src/PIL/ImageDraw.py:45 reads Image.core.
+  (PIL.Image still initializing => circular import failure).
+  Explanation: With no communication at all, the merged import graph is never discussed; the first shared integration check happens only at import time and fails deterministically.
+  Outcome: AttributeError: partially initialized module PIL.Image has no attribute core (most likely due to a circular import).
+Placeholder misuse.
+  A msg: I'll add a clear comment marker: [Conditional filters overlay insertion point].
+  A msg: Please insert your logic immediately AFTER the marker... without modifying lines above it.
+  B msg: Given your marker plan, I didn't alter those methods... I rely on __post_init__ to overlay filters.
+  Explanation: The agreed integration point (insert-after-marker) is not used; B implements an alternative wiring path, so the merged decorator surface no longer matches the expected call pattern.
+  Outcome: TypeError: prompt got an unexpected keyword argument conditional_filters.
+Parameter flow.
+  A msg: renamed edit_file to edit_files with multi-file command construction.
+  B msg: I'm going to continue... based on the current state I see (edit_file method).
+  B code shape: builds a shell command by interpolating filename into a quoted string, assuming it is a single string.
+  Explanation: Ambiguity about a changing interface leaves one agent implementing against an outdated contract; after merge, a list flows into string-only formatting.
+  Outcome: sed: can't read [...]: No such file or directory (list passed as a literal string).
+Timing dependency.
+  A msg: Processing Pipeline: load -> image.load -> EXIF correction (NEW) -> B crop (pending) -> mode conversion -> return.
+  B msg: Applied AFTER EXIF correction (A) and BEFORE mode conversion... Pipeline (after merge): load -> EXIF correction -> center-crop.
+  Merge: CLEAN (0 textual conflicts); both declare No conflicts expected.
+  Merged code excerpt: image = image.crop(...)
+  Merged code absence: no ImageOps.exif_transpose(...) call exists in the merged function.
+  Explanation: They agree on the intended order, but fail to ensure the EXIF correction block is actually present at the agreed insertion point after merge.
+  Outcome: assert (640, 480) == (480, 640) (EXIF correction missing).
+
+Evidence. Each labeled instance is grounded in three artifacts: (i) conversation evidence (the coordination dialogue), (ii) patch/code evidence (what each agent changed), and (iii) outcome evidence (merge reports and test outputs).
+
+Decision rule. A key operational distinction in our rubric is between implementation failures (an individual agent delivers incomplete/buggy code regardless of coordination) and coordination failures (a breakdown that is only apparent when we consider what agents said and assumed under workspace isolation). Concretely, we require explicit conversation evidence to assign a coordination-failure label; if the only evidence is in the code or error trace, we default to implementation-level failure rather than inferring a coordination breakdown.
+
+Common confusion. Between "unverifiable claims" and "work overlap": prefer Work overlap when both patches implement the same functionality, and Unverifiable claims when one agent asserts a change the other cannot check.
+
+Labels. Emit structured labels (a primary symptom plus any secondary symptoms) together with short supporting evidence snippets. Every symptom you name is one of the names listed above, written as it is written there. An implementation-level failure has no primary symptom.
+
+Output. Return only the JSON object {"level": "coordination" or "implementation", "primary_symptom": "<a name listed above>" or null, "secondary_symptoms": ["<name>", ...], "evidence": [{"source": "conversation" or "patch" or "outcome", "quote": "<text copied exactly from that source>", "message_id": "<the message's id, for a conversation quote>"}]}.

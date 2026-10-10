@@ -21,6 +21,15 @@ DELETE /api/runs/{run} once it has fetched the metrics and the events;
 that closes the run first if it is still open, then forgets it, so a hub
 that serves many runs does not grow with every one it ever hosted.
 
+Closing a run (POST /api/runs/{run}/close) answers {"metrics",
+"artifacts"}: the arm's metrics, and the files the run leaves as {file
+name: a JSON value or text}, taken once, by the close that closes it,
+before the arm's teardown frees what they are read from: git_log.txt
+for a run with a shared remote (the options git_remote_dir or
+git_remote_host), and what the arm adds (the team arm's task_log.json
+and tasks.json). The run's first event is run_started, before anything
+the arm's setup records.
+
 On /mcp a body the hub cannot read as a request (not JSON, or nested too
 deep to parse, or a lone message with no id to answer under: no JSON-RPC
 object, an object with no method that is no response either, an id that
@@ -126,9 +135,10 @@ from urllib.parse import quote, unquote, urlsplit
 
 import os
 
+import kit
 import mcp
 import trace
-from arm import Arm, Run, builtin_arms_dir, load_arm_class, unmet_needs
+from arm import Arm, Run, builtin_arms_dir, load_arm_class, tool_surface, unmet_needs
 
 MAX_BODY = 1024 * 1024
 # A task pair is two features; the room above that is for arms that lay
@@ -160,15 +170,17 @@ class Hosted:
     """A run as the hub keeps it: the run itself, the prompt each agent was
     given, the bearer token each agent's /mcp and /rpc want (empty for a
     run created without agent_tokens, which wants none), the MCP session
-    ids issued to each agent, and the tools/calls under way by session id
+    ids issued to each agent, the tools/calls under way by session id
     (None for a client that opened none) and then by request id, which is
-    where a notifications/cancelled on a session finds the call it names."""
+    where a notifications/cancelled on a session finds the call it names,
+    and the artifacts the close that closed the run took (None before)."""
 
     run: Run
     prompts: dict
     tokens: dict = field(default_factory=dict)
     sessions: dict = field(default_factory=dict)
     calls: dict = field(default_factory=dict)
+    artifacts: dict | None = None
 
 
 class Hub:
@@ -216,6 +228,7 @@ class Hub:
         if missing:
             raise HubError(400, f"the {arm_name(arm)} arm needs {', '.join(missing)}, "
                                 "which the run's options do not provide")
+        check_tool_surface(arm, options)
         run_id = self.reserve(run_id)
         try:
             hosted = self.build(arm, run_id, features, specs, options)
@@ -243,12 +256,14 @@ class Hub:
         return run_id
 
     def build(self, arm, run_id, features, specs, options):
-        """The run, seeded, with each agent's prompt. A run whose arm fails
-        to set it up or prompt for it has its log closed before the
-        failure goes up, since nobody will release it."""
+        """The run, seeded, with each agent's prompt. Its first event, seq
+        0, is run_started, before anything the arm's setup records. A run
+        whose arm fails to set it up or prompt for it has its log closed
+        before the failure goes up, since nobody will release it."""
         agents = arm.layout(features)
         run = Run(run_id, arm, agents, options, self.events_path(run_id), specs)
         try:
+            run.emit_started()
             arm.setup(run)
             prompts = {agent: arm.prompt(run, agent, specs) for agent in run.agents}
         except BaseException:
@@ -284,10 +299,19 @@ class Hub:
     def close_run(self, run_id):
         return self.close(self.hosted(run_id))
 
+    def close_answer(self, run_id):
+        """POST /api/runs/{run}/close: the metrics and the artifacts, the
+        files the arm and the hub took when the run closed."""
+        hosted = self.hosted(run_id)
+        metrics = self.close(hosted)
+        return {"metrics": metrics, "artifacts": hosted.artifacts or {}}
+
     def close(self, hosted):
         """Mark the run closed and give its metrics. Tools keep answering,
         since an agent may still be finishing its last call; the runner
-        decides what a closed run's late events mean."""
+        decides what a closed run's late events mean. The close that
+        closes the run also takes its artifacts, before the arm's
+        teardown, while what they are read from is still there."""
         run = hosted.run
         with run.lock:
             first_close = not run.closed
@@ -296,7 +320,9 @@ class Hub:
             metrics = run.arm.metrics(run)
         if first_close:
             # Outside the lock: an arm freeing a resource may need to wait
-            # on its own locks, which a tool holding run.lock could hold.
+            # on its own locks, which a tool holding run.lock could hold,
+            # and the git log takes seconds no tool should wait for.
+            hosted.artifacts = collect_artifacts(run)
             try:
                 run.arm.teardown(run)
             except Exception:
@@ -399,7 +425,12 @@ class Hub:
         tools/call refuses them. The Call goes onto `sink`, a list, before
         its handler runs, as mcp.handle's does."""
         tools = run.arm.tools_for(run, agent)
-        started = None if sink is None else sink.append
+
+        def started(call):
+            call.via = "shell"
+            if sink is not None:
+                sink.append(call)
+
         result, problem = mcp.call_tool(run, agent, tools, {"name": name, "arguments": arguments}, started)
         if problem is not None:
             raise HubError(400, problem[1])
@@ -449,6 +480,53 @@ class Hub:
 
 def arm_name(arm):
     return arm.config.get("name") or arm.name
+
+
+def check_tool_surface(arm, options):
+    """The run option tool_surface, refused before the run exists when it
+    names no surface, or one the arm does not offer: an arm whose prompt
+    names its MCP tools cannot run without them."""
+    try:
+        surface = tool_surface(options)
+    except ValueError as problem:
+        raise HubError(400, str(problem)) from None
+    if surface not in arm.tool_surfaces:
+        raise HubError(400, f"the {arm_name(arm)} arm offers tool_surface {', '.join(arm.tool_surfaces)}, "
+                            f"not {surface}")
+
+
+def collect_artifacts(run):
+    """The files a run leaves for the runner, taken as it closes: the
+    shared remote's history as git_log.txt for a run that has one (the
+    hub's, so every arm with a git remote gets it), then whatever the arm
+    adds (Arm.artifacts). The remote is read where the options say:
+    git_remote_dir, the bare repository's directory on this host, when
+    the runner can name it and it is a directory here, which gives git's
+    reflog as well, and otherwise git_remote_host, the URL the hub
+    fetches from. Either failing costs its own files and a complaint on
+    stderr, never the close."""
+    artifacts = {}
+    remote = shared_remote(run.options)
+    if remote:
+        try:
+            artifacts["git_log.txt"] = kit.git_log(remote, run.options.get("base_ref"))
+        except RuntimeError as problem:
+            print(f"coordbench hub: run {run.id} keeps no git_log.txt: {problem}", file=sys.stderr, flush=True)
+    try:
+        artifacts.update(run.arm.artifacts(run))
+    except Exception:
+        complain(f"the {arm_name(run.arm)} arm's artifacts of run {run.id} failed")
+    return artifacts
+
+
+def shared_remote(options):
+    """Where the hub reads the run's shared remote from: the directory the
+    runner named when this host has it (a hub on another host does not),
+    else the URL."""
+    directory = options.get("git_remote_dir")
+    if directory and Path(directory).is_dir():
+        return directory
+    return options.get("git_remote_host") or None
 
 
 def parse_features(features):
@@ -816,7 +894,7 @@ class HubHandler(BaseHTTPRequestHandler):
 
     def post_close(self, run_id):
         self.hub.check_admin(self.headers.get("Authorization"))
-        self.reply(200, {"metrics": self.hub.close_run(run_id)})
+        self.reply(200, self.hub.close_answer(run_id))
 
 
 class HubServer(ThreadingHTTPServer):

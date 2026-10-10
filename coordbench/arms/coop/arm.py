@@ -20,12 +20,20 @@ CooperBench's own function when its source is at hand. The skill
 to it, so an agent that loads the plugin knows no more than CooperBench's
 agents did.
 
+That is the default tool surface, "mcp". The run option
+tool_surface=bash reproduces the surface CooperBench's claude_code agent
+had at 63b9d44 exactly: the driver loads no plugin, so there is no skill
+and no MCP server, the hub's MCP endpoint lists no tool, and the prompt
+leaves the sentence out, so it is the authors' text byte for byte and
+the coop-* commands in Bash are all the agent has. The metrics say which
+surface ran (tool_surface).
+
 coop-git (../coop-git) is this arm plus CooperBench's git block; it
 subclasses CoopArm through sections(), so both share one copy of the text.
 """
 
 import kit
-from arm import AgentSpec, Arm, SUBMISSION_BLOCK
+from arm import TOOL_SURFACES, AgentSpec, Arm, SUBMISSION_BLOCK, tool_surface
 
 # build_instruction joins its sections with this rule, and solo.py joins
 # the features of a solo task with the same one.
@@ -116,6 +124,7 @@ class CoopArm(Arm):
     description = ("CooperBench's coop setting: one agent per feature, coordinating by "
                    "messages only.")
     needs = ()
+    tool_surfaces = TOOL_SURFACES
 
     def layout(self, features):
         # coop.py sorts the features and gives agent1 the lowest, agent2 the
@@ -139,6 +148,9 @@ class CoopArm(Arm):
         return sections
 
     def mcp_note(self, run, agent):
+        """The sentence naming the MCP tools, on the surface that has them."""
+        if tool_surface(run.options) != "mcp":
+            return ""
         return mcp_sentence(self.tools_for(run, agent).values())
 
     def metrics(self, run):

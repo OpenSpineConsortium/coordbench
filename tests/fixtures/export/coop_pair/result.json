@@ -1,0 +1,85 @@
+{
+  "repo": "pallets_click_task",
+  "task_id": 2068,
+  "features": [
+    1,
+    6
+  ],
+  "setting": "coop",
+  "run_id": "coop-2068-f1_f6-abc123",
+  "run_name": "fixture",
+  "agent_framework": "claude_code",
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-10-09T21:06:38",
+  "ended_at": "2026-10-09T21:07:20",
+  "duration_seconds": 42.0,
+  "agents": {
+    "agent1": {
+      "feature_id": 1,
+      "status": "Submitted",
+      "cost": 0.1234,
+      "steps": 17,
+      "input_tokens": 64,
+      "output_tokens": 520,
+      "cache_read_tokens": 32000,
+      "cache_write_tokens": 16000,
+      "patch_lines": 12,
+      "error": null,
+      "role": "agent",
+      "duration_ms": 21000,
+      "api_duration_ms": 12000,
+      "end_reason": null,
+      "model_requested": "claude-sonnet-5-5",
+      "model": "claude-sonnet-5-5-20260101",
+      "model_differs": false
+    },
+    "agent2": {
+      "feature_id": 6,
+      "status": "Submitted",
+      "cost": 0.05,
+      "steps": 4,
+      "input_tokens": 64,
+      "output_tokens": 520,
+      "cache_read_tokens": 32000,
+      "cache_write_tokens": 16000,
+      "patch_lines": 12,
+      "error": null,
+      "role": "agent",
+      "duration_ms": 21000,
+      "api_duration_ms": 12000,
+      "end_reason": null,
+      "model_requested": "claude-sonnet-5-5",
+      "model": "claude-sonnet-5-5-20260101",
+      "model_differs": false
+    }
+  },
+  "total_cost": 0.1734,
+  "total_steps": 21,
+  "messages_sent": 4,
+  "log_dir": "/logs/fixture/coop/pallets_click_task/2068/f1_f6",
+  "arm": "coop",
+  "driver": "claude-cli",
+  "timings": [
+    {
+      "phase": "run_create",
+      "agent": null,
+      "started": "2026-10-09T21:06:39.990000",
+      "ended": "2026-10-09T21:06:40.010000",
+      "seconds": 0.02
+    },
+    {
+      "phase": "agent",
+      "agent": "agent1",
+      "started": "2026-10-09T21:06:40",
+      "ended": "2026-10-09T21:07:01.500000",
+      "seconds": 21.5
+    },
+    {
+      "phase": "agent",
+      "agent": "agent2",
+      "started": "2026-10-09T21:06:40",
+      "ended": "2026-10-09T21:07:02.500000",
+      "seconds": 22.5
+    }
+  ]
+}
