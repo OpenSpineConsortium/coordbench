@@ -1838,7 +1838,7 @@ class CooperBenchParity(RunnerCase):
         def with_artifacts(client, run_id):
             metrics, _ = real(client, run_id)
             return metrics, {"git_log.txt": "commit 0123\n", "tasks.json": [{"id": 1, "status": "done"}],
-                             "result.json": {"forged": True}, "../escape.txt": "x"}
+                             "result.json": {"forged": True}, "../escape.txt": "x", "judge.json": {"forged": True}}
 
         with mock.patch.object(runner.HubClient, "close_run", with_artifacts):
             code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
@@ -1850,6 +1850,9 @@ class CooperBenchParity(RunnerCase):
         self.assertFalse((pair.parent / "escape.txt").exists())
         self.assertIn("the artifact 'result.json' was not written: the runner writes a file of that name", err)
         self.assertIn("the artifact '../escape.txt' was not written: it is not a plain file name", err)
+        # Nor one the judge or the cascade writes there later.
+        self.assertIn("the artifact 'judge.json' was not written", err)
+        self.assertFalse((pair / "judge.json").exists())
 
     def test_the_hub_s_close_answer_gives_metrics_and_artifacts_however_it_nests_them(self):
         client = runner.HubClient("http://hub")

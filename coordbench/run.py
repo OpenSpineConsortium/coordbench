@@ -1766,10 +1766,13 @@ def write_trajectories(plan, result):
             write_json(Path(plan["run_dir"]) / name, trajectory_record(plan, agent, record or {}, feature, messages))
 
 
-# The files the runner writes itself, which an arm's artifact may not
-# replace: an artifact named like one is refused with a warning.
+# The files the runner writes itself, and those the cascade, the export
+# and the judge write into the pair directory after it, which an arm's
+# artifact may not replace or pre-empt: an artifact named like one is
+# refused with a warning.
 RUNNER_FILES = {"result.json", "eval.json", "metrics.json", "events.jsonl", "plan.json", "trace.jsonl",
-                "conversation.json", "conversation_store.json", "config.json", "summary.json"}
+                "conversation.json", "conversation_store.json", "config.json", "summary.json",
+                "merge_naive.diff", "merge_union.diff", "merge_llm.diff", "trajectory.json.gz", "judge.json"}
 RUNNER_SUFFIXES = (".patch", "_stream.jsonl", "_session.jsonl", "_prompt.md", "_traj.json",
                    "_session_outcome.json", "_sent.jsonl", ".session-prompt.md")
 ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")

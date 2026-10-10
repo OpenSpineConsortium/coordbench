@@ -163,7 +163,9 @@ which is why the steps take one task at a time.
   checks that its features are gradeable.
 - survey.sh: prepares every flash task in turn and checks its gold
   patches grade here; it is what made the table above.
-- run_arms.sh: runs the four arms on one task.
+- run_arms.sh: runs the four arms on one task, and coop-nocomm
+  (`--no-messaging`) when it is named, the no-communication baseline
+  report.py sets against coop.
 - report.py: the arms side by side, from CooperBench's logs; tested in
   tests/test_experiment_report.py.
 - difficulty.py: App C's relative difficulty, the ten-bucket curves, AUC

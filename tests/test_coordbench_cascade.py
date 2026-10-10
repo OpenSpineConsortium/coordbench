@@ -535,6 +535,13 @@ class TheEntryPoint(unittest.TestCase):
                 cascade.run(plan, merged_record("clean", clean_feature(PASS), clean_feature(PASS)), settings)
             self.assertEqual(sandbox.patches["tests1.patch"], "paper-era tests for 1\n")
 
+    def test_no_arm_artifact_may_take_a_merged_diff_s_name(self):
+        """run.py writes an arm's artifacts before scoring; one named like
+        a merged diff would be overwritten, or outlive a step that did
+        not run, so the runner refuses those names."""
+        import run
+        self.assertLessEqual(set(cascade.DIFF_FILES), run.RUNNER_FILES)
+
     def test_it_names_the_basis_by_cooperbench_s_commit(self):
         with mock.patch.object(cascade, "cooperbench_commit", return_value="63b9d44" + "f" * 33):
             block = self.run_with(FakeSandbox(tests=alone_runs()),
