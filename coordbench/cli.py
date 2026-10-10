@@ -10,7 +10,7 @@ or --url) lists the tools with their aliases and runs them:
     python3 cli.py call <tool> '{"to": "agent2", "text": "hi"}'
     python3 cli.py call <tool> to=agent2 text=hi
     python3 cli.py alias-run <tool> agent2 "hi there"
-    python3 cli.py install /usr/local/bin [--url URL] [--python PATH] [--token-file PATH]
+    python3 cli.py install /usr/local/bin [--url URL] [--python PATH] [--token-file PATH] [--debug]
 
 install writes one small sh wrapper per alias (coop-send) and one per tool
 (coord-send_message), each running `alias-run <tool>`, so the agent types
@@ -25,7 +25,11 @@ not empty. Given --token-file, install reads the token from that file for
 its own request and writes wrappers that read it with cat at run time and
 export it, so the token is in no wrapper's text and on no command line. A
 401 from the hub is reported as the hub's own words, exit 2, as any other
-HTTP error is.
+HTTP error is. Given --debug, install writes wrappers that export
+COORD_TRACE=debug, so the commands trace in debug (below) whatever the
+environment that runs them says: the session driver's agents run them from
+a shell the runner does not start, and a --debug run has them time
+themselves all the same.
 
 alias-run reads the words as the tool's command line. A word naming one of
 the tool's flags sets that flag's argument wherever it stands, before,
@@ -107,7 +111,9 @@ TOKEN_VARIABLE = "COORD_AGENT_TOKEN"
 TYPES_PARSED_AS_JSON = {"integer", "number", "boolean", "array", "object", "null"}
 NUMBER_TYPES = {"integer", "number"}
 
-# Where a debug run's events go instead of stderr, when set.
+# The trace level, which trace.py reads from the environment once, and
+# where a debug run's events go instead of stderr, when set.
+TRACE_VARIABLE = "COORD_TRACE"
 TRACE_FILE_VARIABLE = "COORD_TRACE_FILE"
 
 
@@ -574,18 +580,21 @@ def alias_run(args):
                              duration_ms=round((time.monotonic() - began) * 1000, 3))
 
 
-def wrapper_script(tool_name, python, url=None, token_file=None):
+def wrapper_script(tool_name, python, url=None, token_file=None, debug=False):
     """The wrapper's text. A token file is read when the command runs,
     with cat, so the token is in neither this text nor a process list;
     the shell drops the newline the file ends with. The path is written
     absolute (install makes it so), since the command runs from whatever
-    directory the agent is in, not the one install ran in."""
+    directory the agent is in, not the one install ran in. With debug the
+    wrapper sets the trace level itself, before cli.py reads it."""
     cli = Path(__file__).resolve()
     lines = ["#!/bin/sh"]
     if url:
         lines.append(f"export COORD_RPC_URL={shlex.quote(url)}")
     if token_file:
         lines.append(f'export {TOKEN_VARIABLE}="$(cat {shlex.quote(str(token_file))})"')
+    if debug:
+        lines.append(f"export {TRACE_VARIABLE}=debug")
     lines.append(f"exec {shlex.quote(python)} {shlex.quote(str(cli))} alias-run "
                  f"{shlex.quote(tool_name)} \"$@\"")
     return "\n".join(lines) + "\n"
@@ -616,7 +625,7 @@ def install(args):
     bin_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for tool in describe_agent(args.url, args.token).get("tools") or []:
-        script = wrapper_script(tool["name"], args.python, baked_url, token_file)
+        script = wrapper_script(tool["name"], args.python, baked_url, token_file, args.debug)
         for command in commands_for(tool):
             if not SAFE_COMMAND.match(command):
                 print(f"coordbench: skipped the command {command!r}: not a safe file name",
@@ -650,6 +659,9 @@ def parser():
     installing.add_argument("--token-file", metavar="PATH",
                             help=f"have the commands read this agent's bearer token from PATH when they "
                                  f"run, as {TOKEN_VARIABLE} (default: the variable as set)")
+    installing.add_argument("--debug", action="store_true",
+                            help=f"have the commands trace in debug ({TRACE_VARIABLE}=debug) whatever "
+                                 f"their environment says")
     installing.set_defaults(func=install)
     return top
 

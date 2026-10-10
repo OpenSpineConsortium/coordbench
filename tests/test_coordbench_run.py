@@ -1464,6 +1464,41 @@ class Tracing(RunnerCase):
         self.assert_secret_nowhere(out, err)
         self.assert_tokens_kept_private(saved, out, err)
 
+    def test_debug_reaches_the_agents_containers_and_the_session_drivers_wrappers(self):
+        """--debug traces the agents' side too: each agent's container starts
+        with COORD_TRACE=debug, which every command run in it inherits, and
+        the session driver's wrappers on this host export it, so a command
+        an agent runs writes its timing to the agent's stderr even from a
+        shell with no COORD_TRACE of its own. In prod neither is so, and
+        what the agents' commands print is what it was."""
+        quiet = {name: value for name, value in os.environ.items()
+                 if name not in ("COORD_TRACE", "COORD_TRACE_FILE", "COORD_AGENT_TOKEN")}
+        for name, debug in (("prod", False), ("debug", True)):
+            with self.subTest(level=name):
+                code, out, err = self.main("prepare", "--arm", "coop", "--repo", REPO, "--task", str(TASK),
+                                           "--features", "1,6", "--hub", self.hub_url, "--name", name,
+                                           "--cooperbench-dir", str(self.cooperbench),
+                                           *(["--debug"] if debug else []))
+                self.assertEqual(code, 0, err)
+                run_dir = Path(json.loads(out)["run_dir"])
+                for agent in json.loads((run_dir / "plan.json").read_text())["agents"]:
+                    started, = self.docker.matching("run", "-d", "--name", agent["container"])
+                    self.assertEqual(env_value(started, "COORD_TRACE"), "debug" if debug else None)
+                    wrapper = (run_dir / "bin" / agent["id"] / "coop-peek").read_text()
+                    self.assertEqual("export COORD_TRACE=debug\n" in wrapper, debug)
+                peek = subprocess.run([str(run_dir / "bin" / "agent1" / "coop-peek")], capture_output=True,
+                                      text=True, timeout=60, env=quiet)
+                self.assertEqual((peek.returncode, peek.stdout.strip()), (0, "0"), peek.stderr)
+                if not debug:
+                    self.assertEqual(peek.stderr, "")
+                    continue
+                events = [json.loads(line) for line in peek.stderr.splitlines()]
+                command, = [event for event in events if event["kind"] == "command"]
+                self.assertEqual((command["command"], command["tool"], command["exit_code"]),
+                                 ("coop-peek", "peek_messages", 0))
+                self.assertGreaterEqual(command["duration_ms"], 0)
+                self.assertIn("rpc_call_done", {event["kind"] for event in events})
+
     def test_hub_calls_are_traced_in_debug_alone_with_the_status_the_hub_gave(self):
         memory = self.memory()
         client = runner.HubClient(self.hub_url, ADMIN_SECRET)

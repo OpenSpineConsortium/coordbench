@@ -97,7 +97,12 @@ name and bytes, never its text) and the session driver's every look for
 its marker ("marker_poll"); and the runner writes every event of the
 process to <run_dir>/trace.jsonl (open_debug_sink). In prod no listener
 is registered for the file, and each of those costs one comparison, with
-a clock read before a docker command or a hub call.
+a clock read before a docker command or a hub call. In debug the agents'
+side traces too (agent_trace_environment): every agent's container starts
+with COORD_TRACE=debug, which each command run in it inherits, and the
+session driver's wrappers on this host export it, so the shell commands
+and the stdio bridge an agent runs (cli.py, bridge.py) write their timings
+to the agent's own stderr, beside what each command prints.
 
 Every docker command goes through drivers.docker, so tests swap in a fake.
 The subscription token reaches agents by name only (drivers.PASSED_BY_NAME)
@@ -882,11 +887,21 @@ def container_arguments(plan, agent):
         # By name alone: the docker client copies the value from its own
         # environment, which holds it for this one call (token_environment).
         arguments += ["-e", drivers.AGENT_TOKEN]
+    for name, value in agent_trace_environment().items():
+        arguments += ["-e", f"{name}={value}"]
     if plan["resources"]["volume"]:
         arguments += ["-v", f"{plan['resources']['volume']}:{SHARED_DIR}"]
     if agent.get("workspace"):
         arguments += ["-v", f"{agent['workspace']}:{CONTAINER_REPO}"]
     return arguments + ["-w", CONTAINER_REPO, "--entrypoint", "sh", plan["image"], "-c", KEEP_ALIVE]
+
+
+def agent_trace_environment():
+    """The trace level the agents' side is given: debug when this runner
+    traces in debug (--debug), so an agent's own commands time themselves
+    as the runner's do, and nothing otherwise, which leaves the agents'
+    environment in prod exactly as it was."""
+    return {cli.TRACE_VARIABLE: "debug"} if trace.level == "debug" else {}
 
 
 def install_coordbench(plan, container):
@@ -1033,12 +1048,16 @@ def write_token_file(bin_dir, token):
 def install_host_wrappers(plan, agent, hub):
     """The session driver's agent runs on this host, so its commands are
     wrappers here, each carrying the agent's /rpc URL as this host reaches
-    it and reading the agent's token from its file when the run wants one."""
+    it, reading the agent's token from its file when the run wants one,
+    and in debug exporting the trace level, since the session's shell that
+    runs them is not one the runner starts."""
     url = hub.base_url + urlsplit(agent["rpc_url"]).path
     bin_dir = drivers.session_bin_dir(plan["run_dir"], agent["id"])
     arguments = ["install", str(bin_dir), "--url", url, "--python", sys.executable]
     if agent.get("token"):
         arguments += ["--token-file", str(write_token_file(bin_dir, agent["token"]))]
+    if agent_trace_environment():
+        arguments.append("--debug")
     with contextlib.redirect_stdout(sys.stderr):
         code = cli.main(arguments)
     if code != 0:

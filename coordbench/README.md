@@ -166,9 +166,11 @@ other HTTP error. Any shell reaches the tools as commands: `python3 cli.py
 install /usr/local/bin` writes one wrapper per tool, under the tool's alias
 (coop-send) and as coord-<tool>, and the wrappers send the same token on
 every request; `install --token-file PATH` writes PATH absolute into the
-wrappers, so they read the token from any directory. Both read COORD_TRACE
-and COORD_TRACE_FILE from their environment, as "Running" describes under
-the agent's side of a debug run; in prod they write nothing. A command's
+wrappers, so they read the token from any directory, and `install --debug`
+writes wrappers that export COORD_TRACE=debug themselves. Both read
+COORD_TRACE and COORD_TRACE_FILE from their environment, as "Running"
+describes under the agent's side of a debug run; in prod they write
+nothing. A command's
 last positional word comes from stdin when it is missing and the tool's
 schema does not require it (coop-send's text and coop-request's body, as
 coop_msg.py and coop_task.py read theirs), so `coop-send agent2 < note.txt`
@@ -516,8 +518,13 @@ to find where time goes; it adds events and never changes the ones
 result.json and events.jsonl hold today (tool, tool_done with duration_ms
 and blocked_ms, the timings with phase, agent, started, ended and seconds),
 so a reader of a debug run reads the same fields plus more kinds. The flag
-does not reach the agents' containers: an agent's side records when its own
-environment carries COORD_TRACE, as the paragraph on it below says.
+reaches the agents' side too: every agent's container starts with
+COORD_TRACE=debug, which each command run in it inherits, and the session
+driver's wrappers on the host are written with `install --debug`, since
+the shell that runs them is the session's, not one the runner starts; so
+the agents' shell commands and their stdio bridge record their timings,
+as the paragraph on the agent's side below says. In prod the runner gives
+the agents no COORD_TRACE at all.
 
 Tracing. The timings are also events on trace.py's one stream as they
 happen: a `phase` event when a phase begins (with `phase` and `agent`) and
