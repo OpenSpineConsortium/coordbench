@@ -603,7 +603,11 @@ different.
   largest value of each field over a message's lines, by message.id); the
   output count counts only when every message's final count is in the
   transcript (its stop_reason line), else it is recorded as a lower bound.
-  A field nobody measured is null, never 0.
+  A field nobody measured is null, never 0. coordbench/export.py
+  transcript_usage sums a transcript or a stream the same way and says
+  whether the output count is final, so each exported agent carries
+  tokens_source (transcript, stream or result.json) and
+  tokens_output_final.
 - Why: better; a 0 would read as a measurement.
 
 **26. total_cost and total_steps per pair.** Status: equivalent.
@@ -626,7 +630,10 @@ Status: same.
   null (the session driver's output count without its final figure) apart
   as a lower bound with output_tokens_lower_bound, the cost summed over the
   pairs that have one, and the cost sources. compare.html marks a token
-  total that leaves a count out as a lower bound (">=") in the same way.
+  total as a lower bound (">=", its reason in the cell's title) when it
+  leaves a count out, and when an agent's output counts were summed from
+  a transcript or a stream whose messages lack the stop_reason line that
+  holds the final count (tokens_output_final false, row 25).
 
 ## Communication
 
@@ -1010,9 +1017,15 @@ different.
   agent inserts" and "you must send a final status update message"
   (L1565-1571).
 - coordbench: coordbench/judge.py final_status (an agent whose last
-  message comes before its last edit) and insertion_markers (insertion
-  point comments in a patch), among the free heuristics, beside Placeholder
-  misuse.
+  message comes before its last edit) and insertion_markers, among the
+  free heuristics, beside Placeholder misuse: an added comment, outside
+  the test files, that marks where another agent inserts code, as App D's
+  example does (is_insertion_marker: an agent that inserts, adds or puts
+  code, the verb right after it or after a modal such as "will", or whose
+  code goes here; a place reserved for an agent; or App D's bracketed
+  anchor with an agent or an insertion beside it). A comment that only
+  names an agent ("# agent1 was here", "# Added by agent2") or a
+  placeholder of the code's own is not one.
 - Why: App D gives targets and effects, no procedure or rates, so the two
   detectors are coordbench's.
 
@@ -1332,13 +1345,34 @@ Status: same.
   field order) and stock_viewer_drops: prompts are never steps, and any
   other step the filter would drop is listed in filtered_by_stock_viewer.
 
-**118. Run info panel and stats bar.** Status: same.
+**118. Run info panel and stats bar.** Status: same, but for the
+clock of a coordbench run.
 - CooperBench: viewer.astro (623-700): the model from the first
   model_response.model, else the last llm_metrics; tokens and cost from the
-  last llm_metrics; a cost of 0 printed N/A.
+  last llm_metrics; a cost of 0 printed N/A. The stats bar (1079-1081)
+  counts each agent's steps as every entry of the file the system-prompt
+  filter keeps (splitStepsByAgent 597-611, so an OpenHands event list's
+  observations are steps too), and its duration runs from the first
+  step's time to the last (1073-1075).
 - coordbench: coordbench/export.py add_llm_metrics (each agent's last step,
   the cost left out when null) and mark_models (model_response.model on
-  each agent's first step).
+  each agent's first step). compare.html's "steps" is the stats bar's
+  count (stockCounts), in its status line, its steps per agent and its
+  speed table alike; its one other count, its own step cards without the
+  message receipts (an OpenHands observation sits in its action's card),
+  is always labelled "steps without observations and receipts". Its clock
+  starts at the first agent's own start (its phase in the timings, or its
+  transcript's first line) when one is known, else, for a coordbench run
+  with no run_started event (the session-driver pilots, from before
+  per-agent timings), at result.json's started_at, else at the file's
+  first event, as the stats bar's; the runs table and each timeline say
+  which ("clock: agents' start", "pair start", "first event").
+- Why: a pilot's first step is its first hub call, 68 s after the pair's
+  start in the coop pilot, so a clock from it made the wall time short
+  and the time to the first message near zero; the pair's start, though
+  it holds the setup, is the nearest start such a run recorded. A run
+  with per-agent timings but no run_started event (the demo) keeps its
+  agents' start, as every later run does, so the two read alike.
 
 **119. Step cards, filters, timeline, time markers, highlight, show more.**
 Status: different.
@@ -1350,7 +1384,16 @@ Status: different.
   filters (Communication, Edits, File View, Terminal, Other, and Show
   receipts), escapes all text, expands every collapsed box, links timeline
   blocks to steps by a stable uid and shows load errors instead of a
-  random example.
+  random example. Its timelines draw one unit to a pixel, never under
+  560 px wide, so their lane letters and axis labels keep their 12 and
+  11 px at a phone's width and the timeline scrolls in its own box. Beside
+  the times it flags agent logs that do not overlap, and an agent whose
+  own log covers under a tenth of the run's wall time (of the longest
+  agent's log when the logs do not overlap) as possibly truncated, as
+  CooperBench's gpt5 pallets_click 2068 feature1_feature6 file is: 6
+  events over 7 s of a 20-minute run. Only real step times are checked,
+  since interpolated ones fill each agent's phase and the hub's record
+  holds only the coordination calls.
 - Why: better; the same views without the bugs.
 
 **120. Outcome display (pass or fail, conflict, tests).** Status:
@@ -1358,12 +1401,22 @@ different.
 - CooperBench: not in viewer.astro; the leaderboard panel shows pass or
   fail (leaderboard.astro 792-858).
 - coordbench: compare.html's runs table and failure-mode presence matrix
-  show the outcome, the conflict, the route (N, U, L, lead-alone) and the
-  failure modes per run, each cell marked by its source (judge, rule,
-  human, heuristic, data): a symptom level judge.json says App G's rule
-  decided (decided_by "rule", a failed pair with no message, where no
-  model was called) or set over the judge's (coerced) reads "rule", and
-  the judge caption shows only when judge.json names a judge;
+  show the outcome and the failure modes per run. The outcome keeps each
+  scoring rule under its own name (decision 1): "63b9d44 pass" or "fail"
+  with "63b9d44 strategy" (eval.json merge.strategy: naive merge,
+  identical patches, lead's patch alone), "paper-era pass" or "fail" with
+  "paper-era route" (cascade.route: naive, union, learned resolver, none
+  passed), or "paper-era not scored" where eval.json has no cascade;
+  "naive conflict", which both rules share; and for a published run
+  "index pass" or "fail", the website index's own mix of rules (row
+  110). Each matrix cell is marked by its source (judge, rule, human,
+  heuristic, data): a symptom level judge.json says App G's rule decided
+  (decided_by "rule", a failed pair with no message, where no model was
+  called) or set over the judge's (coerced) reads "rule", and the judge
+  caption shows only when judge.json names a judge. A failure present is
+  red and absent green; role division, resource division and negotiation
+  are coordination behaviours (Sec 6.4), not failures, so their columns
+  stand under their own heading, present in purple and absent plain.
   timeline.py's header prints the verdict.
 - Why: better; the stock viewer cannot show why a run failed.
 
@@ -1675,8 +1728,9 @@ different.
 1. Reproduce CooperBench at 63b9d44 by default and record the paper era
    beside it, never mixing the two scoring rules. eval.json's both_passed
    is 63b9d44's own test_merged; the paper era's verdict is a separate
-   block under its own names (verdict_paper_era, route), and every report
-   table names the rule it uses. Why: 63b9d44 is the code the owner runs
+   block under its own names (verdict_paper_era, route), every report
+   table names the rule it uses, and so does the comparison viewer's
+   outcome cell (row 120). Why: 63b9d44 is the code the owner runs
    and the baseline run_arms.sh measures, while every published number
    came from the paper era's cascade.
 2. Message delivery stays pull, as 63b9d44's claude_code adapter delivers.
@@ -1850,9 +1904,15 @@ needs a service that is not here: a real Claude Code agent under the new
 capture (the end-to-end check replaced the claude binary in the real task
 image with a fake that edits, messages and submits); the session driver's
 transcript copy and cost estimate on a real subagent's transcript; the
-judge against a real model; and the resolver step. The three end-to-end
-pairs all failed by design, so the cascade's passing routes are covered by
-the unit tests only.
+judge against a real model; and the resolver step. The end-to-end pairs
+all failed by design, but rescoring copies of the three real
+session-driver pilots with run.py rescore ran the cascade on their real
+patches: the naive route passed the demo coop pair and the pilot coop
+pair (whose identical patches 63b9d44 skips merging), and the union
+route passed the pilot team pair, whose naive merge conflicted (2
+sections, 24 lines) and which 63b9d44 passed on the lead's patch alone.
+The end-to-end pairs took the route none; the learned resolver's route is
+covered by the unit tests only, since it needs a model server.
 
 ## Open questions only the authors can answer
 
