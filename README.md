@@ -42,6 +42,17 @@ CooperBench's own source run when a CooperBench checkout is at
 COOPERBENCH_DIR or ~/cooperbench (bench/cooperbench/setup.sh makes one)
 and are skipped otherwise, as on CI.
 
+## Where this repository fits
+
+coordbench is one of the repositories around the claim protocol of
+OpenSpineConsortium/sdlc-protocol. That repository's ECOSYSTEM.md,
+https://github.com/OpenSpineConsortium/sdlc-protocol/blob/main/ECOSYSTEM.md,
+draws all of them, says which modules each one takes and how a change to
+the protocol reaches each. Here the sdlc arm decides through a copy of
+the library at coordbench/vendor. The copy is never edited here:
+sdlc-protocol's sync workflow keeps it current by the pull request
+sdlc-protocol/sync, and coordbench/vendor/README.md says the rest.
+
 ## Where it came from
 
 coordbench was split from OpenSpineConsortium/sdlc-template, where it was
