@@ -1562,7 +1562,7 @@ def run_pair(settings, hub, driver, repo, task_id, features):
 
 def warn_about_credentials(driver):
     if isinstance(driver, drivers.ClaudeCliDriver) and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        say("CLAUDE_CODE_OAUTH_TOKEN is not set, so the agents cannot sign in")
+        say("neither CLAUDE_CODE_OAUTH_TOKEN nor COORDBENCH_CLAUDE_TOKEN is set, so the agents cannot sign in")
 
 
 def command_run(args):
@@ -1680,6 +1680,7 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    drivers.adopt_token_alias()
     if args.debug:
         trace.set_level("debug")
     try:
