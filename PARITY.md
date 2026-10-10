@@ -588,6 +588,13 @@ under the session driver.
   them, cost_source "estimated from tokens". The cost stays null, with
   output_tokens_lower_bound and cost_lower_bound, when the transcript's
   output count is not final, and null for a model the table lacks.
+  coordbench/export.py passes cost_source and cost_lower_bound on with
+  each agent, and compare.html shows a cost lower bound as ">=", with why
+  in the value's title; a run's cost that leaves out an agent's (none
+  measured, or only a lower bound) is marked the same way, and every cost
+  says where it came from in its title: Claude Code's own total, the
+  estimate from tokens, OpenHands' accumulated_cost or the website file's
+  metadata.
 - Why: decision 6. A subagent reports no cost; litellm is a dependency
   coordbench refuses, so its table is vendored as data. Note that no
   Claude 5 model is in that table, so the default claude-sonnet-5-5 gets
@@ -1020,12 +1027,23 @@ different.
   message comes before its last edit) and insertion_markers, among the
   free heuristics, beside Placeholder misuse: an added comment, outside
   the test files, that marks where another agent inserts code, as App D's
-  example does (is_insertion_marker: an agent that inserts, adds or puts
-  code, the verb right after it or after a modal such as "will", or whose
-  code goes here; a place reserved for an agent; or App D's bracketed
-  anchor with an agent or an insertion beside it). A comment that only
-  names an agent ("# agent1 was here", "# Added by agent2") or a
-  placeholder of the code's own is not one.
+  example does. is_insertion_marker takes a party other than the writer
+  (another agent, a numbered agent such as agent2 or agent_2 but never an
+  identifier such as agent_config, a teammate or partner, and for a
+  reserved place, an insertion point or code that goes here also a
+  feature by number) and asks for the insertion itself: the party
+  inserts (or plugs, hooks, fills in); it adds, puts, places or appends
+  with a modal before the verb ("will add") or a place after it ("here",
+  "below"), since the bare present tense describes code ("# Our partner
+  adds a fee"); code goes here with the party named anywhere ("# Feature
+  2 code goes here (other agent)"); a place reserved for the party; an
+  insertion point named with the party ("# insertion point for agent2")
+  or inside brackets (App H's "[Conditional filters overlay insertion
+  point]"); or App D's bracketed anchor with a party or an insertion
+  beside it. A comment that only names an agent ("# agent1 was here",
+  "# Added by agent2", "# Agent 1 put this in"), says what someone's code
+  does ("# teammate puts the files on disk") or is a placeholder of the
+  code's own is not one. The three pilots' real patches hold none.
 - Why: App D gives targets and effects, no procedure or rates, so the two
   detectors are coordbench's.
 
@@ -1345,8 +1363,8 @@ Status: same.
   field order) and stock_viewer_drops: prompts are never steps, and any
   other step the filter would drop is listed in filtered_by_stock_viewer.
 
-**118. Run info panel and stats bar.** Status: same, but for the
-clock of a coordbench run.
+**118. Run info panel and stats bar.** Status: same in the counts;
+different in the clock.
 - CooperBench: viewer.astro (623-700): the model from the first
   model_response.model, else the last llm_metrics; tokens and cost from the
   last llm_metrics; a cost of 0 printed N/A. The stats bar (1079-1081)
@@ -1360,19 +1378,39 @@ clock of a coordbench run.
   count (stockCounts), in its status line, its steps per agent and its
   speed table alike; its one other count, its own step cards without the
   message receipts (an OpenHands observation sits in its action's card),
-  is always labelled "steps without observations and receipts". Its clock
-  starts at the first agent's own start (its phase in the timings, or its
-  transcript's first line) when one is known, else, for a coordbench run
-  with no run_started event (the session-driver pilots, from before
-  per-agent timings), at result.json's started_at, else at the file's
-  first event, as the stats bar's; the runs table and each timeline say
-  which ("clock: agents' start", "pair start", "first event").
-- Why: a pilot's first step is its first hub call, 68 s after the pair's
-  start in the coop pilot, so a clock from it made the wall time short
-  and the time to the first message near zero; the pair's start, though
-  it holds the setup, is the nearest start such a run recorded. A run
-  with per-agent timings but no run_started event (the demo) keeps its
-  agents' start, as every later run does, so the two read alike.
+  is always labelled "steps without observations and receipts". A run
+  with no transcript (the session-driver pilots) has only the hub's
+  record of its coordination calls for steps, so its counts are marked as
+  floors (">=", "hub calls only"), and its steps per minute, time per
+  step, communication share, longest idle gap and times to the first edit
+  and test run are left out as not measured, each with why in its title.
+  Its clock starts at the first agent's own start (its phase in the
+  timings, or its transcript's first line) when one is known, else, for
+  a coordbench run with no run_started event (the session-driver pilots,
+  from before per-agent timings), at result.json's started_at, where each
+  agent's span then starts too, else at the file's first event. That
+  last is not the stats bar's start: the page counts from the earliest
+  event in the file, the system prompt included, and the stats bar from
+  the first entry its prompt filter keeps, so a published run's wall
+  time is longer by the prompt's lead (gpt5 dottxt_ai_outlines 1371
+  feature1_feature2: 8m 21s against the stats bar's 8m 12s; claude's:
+  10m 11s against 10m 3s, as the stats bar prints whole seconds rounded
+  down). The runs table and each timeline say which
+  clock a run uses ("clock: agents' start", "pair start", "first
+  event"), and the wall time's title gives the stats bar's duration where
+  the two differ.
+- Why: an agent has begun when its system prompt is logged, so the
+  page's wall time starts there, and the stats bar's figure stays in
+  view beside it. A pilot's first step is its first hub call, 68 s after
+  the pair's start in the coop pilot, so a clock from it made the wall
+  time short and the time to the first message near zero; the pair's
+  start, though it holds the setup, is the nearest start such a run
+  recorded, and the agents' spans start there with it so the active span
+  and the wall time agree. A run with per-agent timings but no
+  run_started event (the demo) keeps its agents' start, as every later
+  run does, so the two read alike. Step counts and rates over hub calls
+  alone would set a coordination log beside full trajectories as if it
+  were one.
 
 **119. Step cards, filters, timeline, time markers, highlight, show more.**
 Status: different.
@@ -1386,12 +1424,22 @@ Status: different.
   blocks to steps by a stable uid and shows load errors instead of a
   random example. Its timelines draw one unit to a pixel, never under
   560 px wide, so their lane letters and axis labels keep their 12 and
-  11 px at a phone's width and the timeline scrolls in its own box. Beside
-  the times it flags agent logs that do not overlap, and an agent whose
-  own log covers under a tenth of the run's wall time (of the longest
-  agent's log when the logs do not overlap) as possibly truncated, as
-  CooperBench's gpt5 pallets_click 2068 feature1_feature6 file is: 6
-  events over 7 s of a 20-minute run. Only real step times are checked,
+  11 px at a phone's width and the timeline scrolls in its own box; a
+  timeline wider than its box fades at the edge it scrolls toward and
+  says which stretch of its axis is in view ("In view: 0.0 s to 8m 55s
+  of 17m 50s"), since a phone hides its scroll bars. A run with
+  no transcript draws each hub call only as long as it took, over a
+  dashed band marking the agent's span whose own calls were not
+  recorded, where a full log's step lasts until the next. Beside the
+  times it flags agent logs that do not overlap, and an agent whose own
+  log covers under a tenth of the run's wall time (of the longest
+  agent's log when the logs do not overlap) and does not end with its
+  finish step as possibly truncated, as CooperBench's gpt5 pallets_click
+  2068 feature1_feature6 file is: 6 events over 7 s of a 20-minute run.
+  A log that ends with its finish is complete however short: over the
+  website's coop files that rule leaves 20 of gpt5's 548 flagged (21
+  before), 3 of claude's 589 (8) and 1 of gemini_flash_miniswe's 652
+  (27), none ending with a finish. Only real step times are checked,
   since interpolated ones fill each agent's phase and the hub's record
   holds only the coordination calls.
 - Why: better; the same views without the bugs.
@@ -1404,9 +1452,15 @@ different.
   show the outcome and the failure modes per run. The outcome keeps each
   scoring rule under its own name (decision 1): "63b9d44 pass" or "fail"
   with "63b9d44 strategy" (eval.json merge.strategy: naive merge,
-  identical patches, lead's patch alone), "paper-era pass" or "fail" with
-  "paper-era route" (cascade.route: naive, union, learned resolver, none
-  passed), or "paper-era not scored" where eval.json has no cascade;
+  identical patches, lead's patch alone, or, where 63b9d44's sandbox.py
+  leaves "naive" after a conflict or a patch that did not apply, "none
+  (naive conflicted, lead's patch alone failed)", since no merge was
+  tested), "paper-era pass" or "fail" with "paper-era route"
+  (cascade.route: naive, union, learned resolver, none passed), "paper-era
+  undecided" with "paper-era route: learned resolver not run" where naive
+  and union failed and the resolver was needed but did not run
+  (cascade.llm, its lower_bound; decision 7), or "paper-era not scored"
+  where eval.json has no cascade;
   "naive conflict", which both rules share; and for a published run
   "index pass" or "fail", the website index's own mix of rules (row
   110). Each matrix cell is marked by its source (judge, rule, human,
@@ -1765,7 +1819,11 @@ different.
 7. The learned merge resolver cannot run here (no model server, the
    Hugging Face host blocked): the cascade runs naive and union, records
    the LLM step as not run with the reason, and takes an OpenAI-compatible
-   endpoint through COORDBENCH_RESOLVER_URL when one exists.
+   endpoint through COORDBENCH_RESOLVER_URL when one exists. A pair that
+   failed naive and union and needed the resolver is a fail of those two
+   only (the cascade's lower_bound): export.py passes the step on, and the
+   comparison viewer shows it as "paper-era undecided", never as the full
+   cascade's fail beside a published verdict that ran it.
 8. Difficulty, buckets and AUC are App C's exactly, with their degeneracy
    under one or two models stated in the output and no claim of
    comparability with Table 5.

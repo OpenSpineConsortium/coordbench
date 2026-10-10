@@ -313,6 +313,32 @@ class Metadata(unittest.TestCase):
         self.assertEqual(outcome["cascade_route"], "union")
         self.assertEqual(outcome["merge_strategy"], "solo-agent1")
         self.assertTrue(outcome["has_naive_merge_conflict"])
+        self.assertEqual(outcome["cascade_llm"], {"ran": False, "needed": False,
+                                                  "reason": "not needed: the union merge passed both suites"})
+
+    def test_a_paper_era_fail_that_needed_the_resolver_says_so(self):
+        """A cascade that failed naive and union and needed the learned
+        resolver, which did not run, failed those two only; the export
+        keeps the step and the lower bound beside the verdict."""
+        evaluation = {"merge": {"status": "conflicts", "strategy": "naive"}, "both_passed": False,
+                      "cascade": {"verdict_paper_era": False, "route": "none", "lower_bound": True,
+                                  "llm": {"ran": False, "needed": True, "reason": "no resolver endpoint", "extra": 1}}}
+        outcome = export.outcome_of(evaluation)
+        self.assertEqual((outcome["paper_both_passed"], outcome["cascade_route"], outcome["cascade_lower_bound"]),
+                         (False, "none", True))
+        self.assertEqual(outcome["cascade_llm"], {"ran": False, "needed": True, "reason": "no resolver endpoint"})
+        self.assertEqual(outcome["merge_status"], "conflicts")
+        self.assertIsNone(export.outcome_of({"both_passed": True})["cascade_llm"])
+
+    def test_an_agent_s_cost_says_where_it_came_from_and_keeps_its_lower_bound(self):
+        with PairCopy() as pair:
+            result = json.loads((pair / "result.json").read_text())
+            result["agents"]["agent1"]["cost_source"] = "claude code"
+            result["agents"]["agent2"].update({"cost": None, "cost_source": None, "cost_lower_bound": 0.04})
+            (pair / "result.json").write_text(json.dumps(result))
+            agents = build(pair)["metadata"]["coordbench"]["agents"]
+        self.assertEqual([(a["cost"], a["cost_source"], a["cost_lower_bound"]) for a in agents],
+                         [(0.1234, "claude code", None), (None, None, 0.04)])
 
     def test_the_agents_are_ordinal_lanes_in_feature_order(self):
         agents = self.block["agents"]

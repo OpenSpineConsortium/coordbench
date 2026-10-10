@@ -76,7 +76,12 @@ from result.json, else summed from its stream) and say where they came
 from (tokens_source) and whether the output count is final
 (tokens_output_final): a transcript holds a message's final output count
 only on its stop_reason line, so a sum over messages without one is a
-lower bound, which the comparison viewer marks as one.
+lower bound, which the comparison viewer marks as one. Its cost is
+result.json's, with cost_source ("claude code" for Claude Code's own
+total, "estimated from tokens" for the session driver's) and, where the
+session driver's output counts were not final and it recorded no cost,
+cost_lower_bound, the estimate from the counts as they stood, which the
+viewer shows as a lower bound.
 
 The stock viewer drops a step whose text contains any of
 STOCK_VIEWER_FILTERS (viewer.astro:513-522, on the first non-empty of
@@ -1496,7 +1501,8 @@ def agent_meta(agent, found, result):
     return {"lane": agent["lane"], "id": agent["id"], "feature_id": agent["feature_id"], "role": agent["role"],
             "model": model, "status": record.get("status"), "steps": number(record.get("steps")),
             "tokens": usage, "tokens_source": source, "tokens_output_final": final,
-            "cost": number(record.get("cost")), "duration_ms": number(record.get("duration_ms")),
+            "cost": number(record.get("cost")), "cost_source": record.get("cost_source"),
+            "cost_lower_bound": number(record.get("cost_lower_bound")), "duration_ms": number(record.get("duration_ms")),
             "api_duration_ms": number(record.get("api_duration_ms")), "started_at": utc_iso(agent_start(result, agent, found)),
             "ended_at": utc_iso(found.get("end")), "model_usage": result_event.get("modelUsage")}
 
@@ -1536,13 +1542,20 @@ def stock_agent_block(meta, record):
 
 
 def outcome_of(evaluation):
+    """Both scoring rules' verdicts. The paper-era cascade's comes with its
+    learned-resolver step (ran, needed, why not) and lower_bound, since a
+    fail that needed the resolver coordbench does not run (cascade.py
+    llm_step) is a fail of naive and union only, not the full cascade's."""
     evaluation = evaluation if isinstance(evaluation, dict) else {}
     merge = evaluation.get("merge") if isinstance(evaluation.get("merge"), dict) else {}
     cascade = evaluation.get("cascade") if isinstance(evaluation.get("cascade"), dict) else {}
+    llm = cascade.get("llm") if isinstance(cascade.get("llm"), dict) else None
     return {"both_passed": evaluation.get("both_passed") if evaluation else None,
             "merge_status": merge.get("status"), "merge_strategy": merge.get("strategy"),
             "apply_status": evaluation.get("apply_status"), "has_naive_merge_conflict": naive_conflict(merge, cascade),
-            "paper_both_passed": cascade.get("verdict_paper_era"), "cascade_route": cascade.get("route")}
+            "paper_both_passed": cascade.get("verdict_paper_era"), "cascade_route": cascade.get("route"),
+            "cascade_lower_bound": cascade.get("lower_bound"),
+            "cascade_llm": {key: llm.get(key) for key in ("ran", "needed", "reason")} if llm else None}
 
 
 def naive_conflict(merge, cascade):

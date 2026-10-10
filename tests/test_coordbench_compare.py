@@ -51,6 +51,12 @@ class Page(unittest.TestCase):
         self.assertNotIn(b"\r", data)
         self.assertTrue(data.endswith(b"\n"))
 
+    def test_a_bar_has_no_minimum_width(self):
+        """A bar is as wide as its value; a minimum would draw a stub for a
+        "-" or a 0."""
+        rule = re.search(r"\.bar \{([^}]*)\}", page_text()).group(1)
+        self.assertNotIn("min-width", rule)
+
     def test_the_page_loads_nothing_from_outside(self):
         html = page_text()
         self.assertNotRegex(html, r"<script[^>]+src=")
@@ -184,7 +190,7 @@ const sandbox = { console, URLSearchParams, TextDecoder, Date, JSON, Math, Set, 
   document: { getElementById: (id) => ({ textContent: id === "coordbench-schema" ? schema : "null" }) } };
 vm.createContext(sandbox);
 vm.runInContext(main + "\n;globalThis.__api = { detectShape, normalise, matrixCell, MATRIX_COLUMNS, judgeCaption, outcomeParts, " +
-  "cellClass, stepsText, listCountText };", sandbox);
+  "cellClass, stepsText, listCountText, kindBadge, agentStepsCell, agentMetrics };", sandbox);
 const api = sandbox.__api;
 const cases = JSON.parse(fs.readFileSync(0, "utf8"));
 const out = cases.map((c) => {
@@ -200,7 +206,10 @@ const out = cases.map((c) => {
       judge: run.labels.judge_meta ? api.judgeCaption(run.labels.judge_meta) : null,
       badges: api.outcomeParts(run).map((b) => [b.text, b.title]), clock: run.clock.anchor, start_ms: run.start_ms,
       end_ms: run.end_ms, agent_steps: run.agents.map((a) => [a.steps, a.steps_less]), steps_text: api.stepsText(run),
-      list_text: api.listCountText(run, 1), agent_tokens: run.agents.map((a) => a.tokens_reason || null) };
+      list_text: api.listCountText(run, 1), agent_tokens: run.agents.map((a) => a.tokens_reason || null),
+      agent_costs: run.agents.map((a) => [a.cost, a.cost_source, a.cost_reason]), kind_badge: api.kindBadge(run),
+      steps_cell: api.agentStepsCell(run), agent_spans: run.agents.map((a) => api.agentMetrics(run, a).wall_ms),
+      agent_shares: run.agents.map((a) => api.agentMetrics(run, a).comm_share) };
   } catch (error) { return { label: c.label, error: error.message }; }
 });
 process.stdout.write(JSON.stringify(out));
@@ -310,6 +319,48 @@ def pilot_sample():
         return export.build_trajectory(pair, NO_DATASET)
 
 
+def costed_sample():
+    """The fixture as the session driver records cost: agent1's priced by
+    Claude Code, agent2's output counts not final, so it has no cost and
+    only cost_lower_bound."""
+    with tempfile.TemporaryDirectory() as root:
+        pair = Path(root) / "pair"
+        shutil.copytree(FIXTURE, pair)
+        result = json.loads((pair / "result.json").read_text())
+        result["agents"]["agent1"]["cost_source"] = "claude code"
+        result["agents"]["agent2"].update({"cost": None, "cost_source": None, "cost_lower_bound": 0.04})
+        (pair / "result.json").write_text(json.dumps(result))
+        return export.build_trajectory(pair, NO_DATASET)
+
+
+UNRESOLVED_EVAL = {"merge": {"status": "conflicts", "strategy": "naive", "diff": ""}, "both_passed": False,
+                   "cascade": {"verdict_paper_era": False, "route": "none", "lower_bound": True,
+                               "has_naive_merge_conflict": True,
+                               "llm": {"ran": False, "needed": True, "reason": "no resolver endpoint"}}}
+
+
+def unresolved_sample():
+    """The fixture scored as check/e2egit was: the naive merge conflicted,
+    the lead's patch alone failed (63b9d44 leaves the strategy naive), and
+    the paper-era cascade failed naive and union and needed the learned
+    resolver, which did not run."""
+    with tempfile.TemporaryDirectory() as root:
+        pair = Path(root) / "pair"
+        shutil.copytree(FIXTURE, pair)
+        evaluation = json.loads((pair / "eval.json").read_text())
+        evaluation.update({"merge": UNRESOLVED_EVAL["merge"], "both_passed": False})
+        evaluation["cascade"].update(UNRESOLVED_EVAL["cascade"])
+        (pair / "eval.json").write_text(json.dumps(evaluation))
+        return export.build_trajectory(pair, NO_DATASET)
+
+
+def unresolved_files_sample():
+    files = stepless_sample()["coordbench_pair_files"]
+    files["evaluation"].update({"merge": UNRESOLVED_EVAL["merge"], "both_passed": False})
+    files["evaluation"]["cascade"].update(UNRESOLVED_EVAL["cascade"])
+    return {"coordbench_pair_files": files}
+
+
 def legacy_event(agent, n, seconds, **fields):
     moment = datetime(2025, 10, 20, 14, 0, 0) + timedelta(seconds=seconds)
     return {"id": n, "timestamp": moment.isoformat(timespec="microseconds"), "agentId": agent, "source": "agent", **fields}
@@ -323,6 +374,13 @@ def short_log_sample():
     events = [legacy_event("agent_2", i, i * 60, **run) for i in range(21)]
     events += [legacy_event("agent_1", 0, 1000, **run), legacy_event("agent_1", 1, 1007, **run)]
     return events
+
+
+def finished_short_sample():
+    """short_log_sample with agent_1's few seconds ending in its finish:
+    it was done early while agent_2 kept working, and its log is whole."""
+    finish = {"action": "finish", "tool_call_metadata": {"function_name": "finish"}, "args": {"final_thought": "done"}}
+    return short_log_sample() + [legacy_event("agent_1", 2, 1009, **finish)]
 
 
 def apart_sample(short):
@@ -360,7 +418,10 @@ class Normaliser(unittest.TestCase):
                  {"label": "partial", "data": partial_sample()}, {"label": "unfinished", "data": unfinished_sample()},
                  {"label": "pilot", "data": pilot_sample()}, {"label": "short", "data": short_log_sample()},
                  {"label": "stepless-pilot", "data": stepless_pilot_sample()},
-                 {"label": "apart", "data": apart_sample(False)}, {"label": "apart-short", "data": apart_sample(True)}]
+                 {"label": "apart", "data": apart_sample(False)}, {"label": "apart-short", "data": apart_sample(True)},
+                 {"label": "finished-short", "data": finished_short_sample()}, {"label": "costed", "data": costed_sample()},
+                 {"label": "unresolved", "data": unresolved_sample()},
+                 {"label": "unresolved-files", "data": unresolved_files_sample()}]
         done = subprocess.run([NODE, "-e", HARNESS, str(PAGE)], input=json.dumps(cases), capture_output=True,
                               text=True, timeout=60)
         if done.returncode != 0:
@@ -374,7 +435,9 @@ class Normaliser(unittest.TestCase):
                                   "unknown": None, "unpublished": "legacy-openhands", "judged": "coordbench",
                                   "silent": "coordbench", "partial": "coordbench", "unfinished": "coordbench",
                                   "pilot": "coordbench", "short": "legacy-openhands", "apart": "legacy-openhands",
-                                  "apart-short": "legacy-openhands", "stepless-pilot": "coordbench-stepless"})
+                                  "apart-short": "legacy-openhands", "stepless-pilot": "coordbench-stepless",
+                                  "finished-short": "legacy-openhands", "costed": "coordbench", "unresolved": "coordbench",
+                                  "unresolved-files": "coordbench-stepless"})
         self.assertIn("not a trajectory", self.runs["unknown"]["error"])
 
     def test_the_coordbench_export_reads_whole(self):
@@ -506,6 +569,71 @@ class Normaliser(unittest.TestCase):
         self.assertEqual(self.runs["sdk"]["flags"]["truncated"], [])
         self.assertEqual(self.runs["pilot"]["flags"]["truncated"], [])
 
+    def test_a_short_log_that_ends_with_its_finish_is_not_flagged(self):
+        """An agent done early while its partner kept working has a whole
+        log; only a short log with no finish at its end may have lost the
+        rest."""
+        self.assertEqual(self.runs["finished-short"]["flags"]["truncated"], [])
+        self.assertEqual(len(self.runs["short"]["flags"]["truncated"]), 1)
+
+    def test_a_run_with_only_the_hub_s_calls_marks_its_steps_and_measures_no_rate(self):
+        """A run with no transcript has only its coordination calls for
+        steps: the counts are floors, the rates and shares over them are
+        not measured, and the badge says why."""
+        for label in ("pilot", "stepless"):
+            run = self.runs[label]
+            speed = run["speed"]
+            self.assertEqual(run["kind"], "hub-events")
+            self.assertIn("hub's record", speed["bounds"]["steps"])
+            for key in ("steps_per_min", "time_per_step_ms", "comm_share", "longest_idle_ms"):
+                self.assertIsNone(speed[key], key)
+                self.assertIn("no transcript", speed["unmeasured"][key])
+            self.assertIsNotNone(speed["first_message_ms"])
+            self.assertIn("&gt;= ", run["steps_cell"])
+            self.assertIn("hub calls only", run["steps_cell"])
+            self.assertIn('title="no transcript', run["kind_badge"])
+            self.assertEqual(run["agent_shares"], [None, None])
+        self.assertEqual(self.runs["pilot"]["steps_text"], str(self.runs["pilot"]["speed"]["steps"]) + " hub calls, no transcript")
+        self.assertIn("hub calls shown", self.runs["pilot"]["list_text"])
+        fixture = self.runs["coordbench"]
+        self.assertEqual(fixture["speed"]["unmeasured"], {})
+        self.assertNotIn("steps", fixture["speed"]["bounds"])
+        self.assertNotIn("hub calls", fixture["steps_cell"])
+        self.assertIn('title="step times are the log', fixture["kind_badge"])
+
+    def test_a_pilot_s_agents_span_from_the_pair_s_start_as_its_wall_time_does(self):
+        for label in ("pilot", "stepless-pilot"):
+            speed = self.runs[label]["speed"]
+            self.assertEqual(speed["active_ms"], speed["wall_ms"], label)
+            self.assertEqual(max(self.runs[label]["agent_spans"]), speed["wall_ms"], label)
+
+    def test_a_cost_says_where_it_came_from_and_a_floor_is_marked(self):
+        run = self.runs["costed"]
+        self.assertEqual(run["agent_costs"], [[0.1234, "claude code", None], [0.04, "estimated from tokens",
+            "estimated from tokens whose output counts may not be final (result.json cost_lower_bound)"]])
+        self.assertAlmostEqual(run["speed"]["cost"], 0.1634)
+        self.assertIn("may not be final", run["speed"]["bounds"]["cost"])
+        self.assertEqual(run["speed"]["cost_sources"], ["claude code", "estimated from tokens"])
+        fixture = self.runs["coordbench"]
+        self.assertIsNone(fixture["speed"]["bounds"]["cost"])
+        self.assertEqual([source for _, source, _ in fixture["agent_costs"]], ["result.json", "result.json"])
+
+    def test_a_paper_era_fail_that_needed_the_resolver_is_undecided(self):
+        """Naive and union failed and the learned resolver was needed but
+        not run: the paper-era verdict is undecided, not a fail, and the
+        63b9d44 strategy says no merge passed rather than naming the naive
+        merge, which was never tested."""
+        strategy = "63b9d44 strategy: none (naive conflicted, lead's patch alone failed)"
+        for label in ("unresolved", "unresolved-files"):
+            badges = dict(self.runs[label]["badges"])
+            self.assertEqual(list(badges), ["63b9d44 fail", strategy, "naive conflict", "paper-era undecided",
+                                            "paper-era route: learned resolver not run"], label)
+            self.assertIn("no resolver endpoint", badges["paper-era undecided"])
+            self.assertIn("merge.status conflicts", badges[strategy])
+            self.assertTrue(self.runs[label]["outcome"]["paper_undecided"])
+        self.assertFalse(self.runs["coordbench"]["outcome"]["paper_undecided"])
+        self.assertIn("decision 7", dict(self.runs["coordbench"]["badges"])["paper-era pass"])
+
     def test_a_missing_index_row_is_not_published_never_a_fail(self):
         run = self.runs["unpublished"]
         self.assertIsNone(run["outcome"]["passed"])
@@ -532,9 +660,10 @@ process.stdout.write(JSON.stringify(sandbox.__checks()));
 PAGE_CHECKS = r"""() => {
   const metric = (key) => SPEED_METRICS.find((m) => m.key === key);
   const run = (label, speed, kind) => ({ label, speed, timestamps_kind: kind || "real" });
-  const a = run("a", { wall_ms: 1000, first_message_ms: 250, steps_per_min: 6, tokens: 100, tokens_partial: false });
-  const b = run("b", { wall_ms: 4000, first_message_ms: 2000, steps_per_min: 3, tokens: 50, tokens_partial: true });
-  const c = run("c", { wall_ms: 500, first_message_ms: null, steps_per_min: 12, tokens: null }, "interpolated");
+  const a = run("a", { wall_ms: 1000, first_message_ms: 250, steps_per_min: 6, tokens: 100, cost: 2, steps: 40, bounds: {} });
+  const b = run("b", { wall_ms: 4000, first_message_ms: 2000, steps_per_min: 3, tokens: 50, cost: 1, steps: 12,
+    bounds: { tokens: "a count was not measured", cost: "an agent's cost was not measured", steps: "hub calls only" } });
+  const c = run("c", { wall_ms: 500, first_message_ms: null, steps_per_min: 12, tokens: null, bounds: {} }, "interpolated");
   const plain = { relative: false, ownScale: false }, relative = { relative: true, ownScale: false };
   const own = { relative: false, ownScale: true }, both = { relative: true, ownScale: true };
   const values = (m, options, base) => [a, b, c].map((r) => metricValue(r, metric(m), options, base));
@@ -548,6 +677,16 @@ PAGE_CHECKS = r"""() => {
     rank_rate: ranks("steps_per_min", plain, a, true), rank_relative: ranks("wall_ms", relative, b, true),
     lower_bound: [lowerBound(b, metric("tokens"), plain, a), lowerBound(b, metric("tokens"), relative, a),
                   lowerBound(b, metric("tokens"), relative, b), lowerBound(a, metric("tokens"), plain, a)],
+    other_bounds: [boundReason(b, metric("cost"), plain, a), boundReason(b, metric("steps"), plain, a),
+                   boundReason(b, metric("wall_ms"), plain, a), boundReason(c, metric("tokens"), plain, a)],
+    bar_html: [barHtml(a, 0), barHtml(a, 25), barHtml(c, 25)],
+    block_ends: [blockEnd({ timestamps_kind: "hub-events" }, [{ t_ms: 0, end_ms: 5 }, { t_ms: 100 }], 0),
+                 blockEnd({ timestamps_kind: "real" }, [{ t_ms: 0, end_ms: 5 }, { t_ms: 100 }], 0),
+                 blockEnd({ timestamps_kind: "hub-events" }, [{ t_ms: 0 }], 0)],
+    stock_duration: [stockDurationText(492900), stockDurationText(603999)],
+    csv: speedCsv([{ label: "pilot", shape: "coordbench", timestamps_kind: "hub-events", clock: { anchor: "pair start" },
+      lanes: [], flags: { truncated: [] }, speed: { steps: 29, cost: 0.5, cost_sources: ["claude code", "estimated from tokens"],
+        bounds: { steps: "hub", steps_less: "hub", cost: "floor", tokens: null }, unmeasured: { comm_share: "no transcript" } } }]),
   };
   page.runs = ["r0", "r1", "r2", "r3"].map((label, index) => ({ label, index }));
   page.baseline = 2;
@@ -605,6 +744,31 @@ class PageFunctions(unittest.TestCase):
 
     def test_a_partial_token_total_is_marked_unless_its_baseline_is_partial_too(self):
         self.assertEqual(self.out["lower_bound"], [True, True, False, False])
+
+    def test_a_cost_and_a_hub_only_step_count_are_lower_bounds_with_their_reasons(self):
+        self.assertEqual(self.out["other_bounds"], ["an agent's cost was not measured", "hub calls only", None, None])
+
+    def test_a_bar_of_zero_width_is_no_bar_at_all(self):
+        """A "-" and a 0.0 s leave the track empty: a stub, or a hatched
+        bar's border, would read as a small value."""
+        none, plain, hatched = self.out["bar_html"]
+        self.assertEqual(none, "")
+        self.assertEqual(plain, '<div class="bar" style="width:25.00%"></div>')
+        self.assertIn("unreliable", hatched)
+
+    def test_a_hub_call_is_drawn_as_long_as_it_took_and_a_logged_step_until_the_next(self):
+        self.assertEqual(self.out["block_ends"], [5, 100, 0])
+
+    def test_the_speed_csv_keeps_the_lower_bounds_the_gaps_and_the_cost_sources(self):
+        head, row = [line.split(",") for line in self.out["csv"].splitlines()]
+        fields = dict(zip(head, row))
+        self.assertEqual(fields["lower_bounds"], "steps steps_without_observations_and_receipts cost")
+        self.assertEqual(fields["not_measured"], "comm_share")
+        self.assertEqual(fields["cost_sources"], "claude code; estimated from tokens")
+        self.assertEqual((fields["steps"], fields["comm_share"]), ("29", ""))
+
+    def test_the_stats_bar_s_duration_is_printed_as_the_stock_viewer_prints_it(self):
+        self.assertEqual(self.out["stock_duration"], ["8m 12s", "10m 3s"])
 
     def test_removing_a_run_keeps_the_chosen_baseline(self):
         self.assertEqual(self.out["after_removing_before"], [None, 1, "r2"])
@@ -665,10 +829,15 @@ const { chromium } = require("playwright");
   const facts = await page.evaluate(() => {
     const heights = (selector) => Array.from(document.querySelectorAll(selector)).map((e) => e.getBoundingClientRect().height);
     const track = document.querySelector(".timeline .track");
+    const hint = document.querySelector(".timeline .scroll-hint");
+    const before = { text: hint.textContent, shown: hint.getBoundingClientRect().height > 0, classes: track.className };
+    track.scrollLeft = track.scrollWidth;
+    track.dispatchEvent(new Event("scroll"));
     return { lane: Math.min(...heights(".timeline .lane-label")), axis: Math.min(...heights(".timeline .axis")),
       page_width: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth,
       svg: document.querySelector(".timeline svg").getBoundingClientRect().width, track: track.clientWidth,
-      track_scrolls: track.scrollWidth > track.clientWidth };
+      track_scrolls: track.scrollWidth > track.clientWidth, hint_before: before,
+      hint_after: { text: hint.textContent, classes: track.className } };
   });
   await browser.close();
   process.stdout.write(JSON.stringify(Object.assign(facts, { problems })));
@@ -707,6 +876,20 @@ class PhoneLayout(unittest.TestCase):
         self.assertTrue(self.facts["track_scrolls"])
         self.assertEqual(self.facts["svg"], 560)
         self.assertLessEqual(self.facts["page_width"], self.facts["viewport"])
+
+    def test_a_timeline_wider_than_its_box_says_what_is_in_view(self):
+        """A phone hides its scroll bars, so a timeline that scrolls fades
+        at the edge it scrolls toward and its hint names the stretch of
+        the axis in view, up to the axis's end once scrolled there."""
+        before, after = self.facts["hint_before"], self.facts["hint_after"]
+        self.assertTrue(before["shown"])
+        self.assertRegex(before["text"], r"^In view: 0\.0 s to .+ of .+; scroll sideways for the rest\.$")
+        self.assertIn("more-right", before["classes"])
+        self.assertNotIn("more-left", before["classes"])
+        self.assertIn("more-left", after["classes"])
+        self.assertNotIn("more-right", after["classes"])
+        end = before["text"].split(" of ")[1].split(";")[0]
+        self.assertIn(" to " + end + " of " + end + ";", after["text"])
 
 
 if __name__ == "__main__":

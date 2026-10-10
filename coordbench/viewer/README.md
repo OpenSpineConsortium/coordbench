@@ -38,9 +38,11 @@ fetches before anything else and without which it loads no run.
 ## What it shows
 
 The runs table, whose outcome keeps each scoring rule under its own name:
-63b9d44's verdict with the merge strategy that decided it, the paper-era
-cascade's verdict with its route, or, for a published run, the website
-index's own verdict; relative speed (wall time, active span, steps, steps
+63b9d44's verdict with the merge strategy that decided it ("none" where
+the naive merge conflicted and the lead's patch alone failed), the
+paper-era cascade's verdict with its route ("undecided" where naive and
+union failed and the learned resolver, which coordbench does not run,
+was needed), or, for a published run, the website index's own verdict; relative speed (wall time, active span, steps, steps
 per minute, time per step, tokens, cost, time to the first message, edit
 and test run and to submit, the longest idle gap, the communication share
 of tool calls, and for coordbench runs the time blocked on peers and the
@@ -54,7 +56,7 @@ in red and green and the coordination behaviours (role division,
 resource division, negotiation), which are not failures, in their own
 colour; aligned timelines with a lane per agent, message arrows and hub
 events, which keep their text size on a phone and scroll in their own
-box; two or three step lists side by side with the stock viewer's
+box, saying which stretch of the axis is in view; two or three step lists side by side with the stock viewer's
 filters; the messages; and, when the runs share a pair, its feature
 titles and the coordbench runs' patches and merged diffs.
 
@@ -64,13 +66,24 @@ The one other count, the page's own step cards without the message
 receipts, is labelled "steps without observations and receipts" wherever it
 shows. Each run's clock starts at its first agent's own start when one
 is known, else, for a coordbench run with no run_started event (the
-session-driver pilots), at result.json's started_at, else at the file's
-first event, and the runs table and the timelines say which. A token
-total is marked as a lower bound (">=", its reason in the title) when it
-leaves out a count nobody measured, or when an agent's output counts
-were summed from a transcript whose messages lack the line holding the
-final count. Runs whose step times are interpolated (the SDK files) or
-come only from the hub's record are hatched and left out of speed ranks
-unless included; a run whose agent logs do not overlap, or one with an
-agent whose own log covers under a tenth of the run, is flagged beside
-its times, the second as possibly truncated.
+session-driver pilots), at result.json's started_at, where its agents'
+spans then start too, else at the file's first event, and the runs table
+and the timelines say which; the wall time's title gives the stock
+viewer's stats-bar duration where the two differ. A token total is marked
+as a lower bound (">=", its reason in the title) when it leaves out a
+count nobody measured, or when an agent's output counts were summed from
+a transcript whose messages lack the line holding the final count; a
+cost is marked the same way when it leaves an agent's out or holds the
+session driver's cost_lower_bound, and says where it came from (Claude
+Code's own total, the estimate from tokens, OpenHands' accumulated_cost,
+the website file's metadata). Runs whose step times are interpolated
+(the SDK files) or come only from the hub's record are hatched and left
+out of speed ranks unless included. A run with no transcript has only
+the hub's record of its coordination calls: its step counts are floors
+("hub calls only"), its steps per minute, time per step, communication
+share, idle gap and times to the first edit and test run are not
+measured, and its timeline draws each hub call as long as it took over a
+dashed band for the agent's unrecorded span. A run whose agent logs do
+not overlap, or one with an agent whose own log covers under a tenth of
+the run and does not end with its finish step, is flagged beside its
+times, the second as possibly truncated.

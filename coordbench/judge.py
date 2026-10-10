@@ -1545,30 +1545,55 @@ COMMENT = re.compile(r"^\+\s*(#|//|/\*|\*|--|<!--|;)")
 # App D's insertion marker (L1567): "// [handleSubmit:onFinally] other agent
 # inserts", a comment marking where another agent will put its code. A
 # comment that merely names an agent ("# agent1 was here", "# added by
-# agent2") marks no insertion, so a marker needs the insertion itself: an
-# agent that inserts, adds or puts code, or whose code goes here, a place
-# reserved for an agent, or App D's bracketed anchor with an agent or an
-# insertion beside it. The verb follows the agent directly (a modal like
-# "will" between), so "# the partner API adds a header" is no marker.
-OTHER_AGENT = (r"(?:(?:the\s+)?(?:other|another|second|partner'?s?)\s+agent'?s?|agent[ _-]?\d+'?s?"
-               r"|agent_[a-z0-9]+'?s?|teammate'?s?|partner'?s?)")
-INSERTS = r"(?:inserts?|adds?|puts?|places?|appends?|plugs?\s+in|hooks?\s+in|fills?\s+in)\b"
-GOES_HERE = r"(?:\w+\W+){0,2}?(?:goes|go)\s+(?:here|below|above)\b"
-AGENT_INSERTS = re.compile(r"\b" + OTHER_AGENT + r"\W+(?:(?:(?:will|should|can|must|to|then)\W+)?" + INSERTS
-                           + r"|" + GOES_HERE + r")", re.IGNORECASE)
-RESERVED_FOR_AGENT = re.compile(r"\b(?:reserved|room|space|slot|left|placeholder)\s+for\s+" + OTHER_AGENT + r"(?!\w)",
+# agent2", "# Agent 1 put this in") or says what an agent's code does
+# ("# Our partner adds a fee") marks no insertion, so a marker needs the
+# insertion itself, said of a party that is not the comment's writer:
+# another agent, a numbered agent (agent2, agent_2, agent 2, never an
+# identifier such as agent_config), a teammate or partner, or for a place
+# reserved, an insertion point or code that goes here, a feature by
+# number ("# Feature 2 code goes here"). Then:
+# - the party inserts (or plugs, hooks, fills in), as App D's example;
+# - the party adds, puts, places or appends, with a modal before the verb
+#   ("will add") or a place after it ("here", "below", "above"), since
+#   the bare present tense describes code rather than marking a place;
+# - code goes here (or below, above) with a party named anywhere in it;
+# - a place reserved, left or kept for a party;
+# - an insertion point named with a party, or inside App D's brackets
+#   ("[Conditional filters overlay insertion point]", App H's placeholder
+#   misuse example);
+# - App D's bracketed anchor with a party or an insertion beside it.
+NUMBERED_AGENT = r"agent[ _-]?\d+'?s?"
+OTHER_AGENT = (r"(?:(?:the\s+)?(?:other|another|second|partner'?s?)\s+agent'?s?|" + NUMBERED_AGENT
+               + r"|teammate'?s?|partner'?s?)")
+PARTY = r"(?:" + OTHER_AGENT + r"|feature\s*#?\d+'?s?)"
+MODAL = r"(?:will|should|can|could|may|must|to|then)"
+INSERTS = r"(?:inserts?|plugs?\s+in|hooks?\s+in|fills?\s+in)\b"
+ADDS = r"(?:adds?|puts?|places?|appends?)\b"
+PLACE = r"\b(?:here|below|above|after\s+this|before\s+this|at\s+this\s+(?:point|line|spot))\b"
+GOES_HERE = r"\b(?:goes|go)\s+(?:here|below|above)\b"
+AGENT_INSERTS = re.compile(r"\b" + OTHER_AGENT + r"\W+(?:" + MODAL + r"\W+)?" + INSERTS, re.IGNORECASE)
+AGENT_WILL_ADD = re.compile(r"\b" + OTHER_AGENT + r"\W+" + MODAL + r"\W+" + ADDS, re.IGNORECASE)
+AGENT_ADDS_HERE = re.compile(r"\b" + OTHER_AGENT + r"\W+" + ADDS + r".*" + PLACE, re.IGNORECASE)
+CODE_GOES_HERE = re.compile(GOES_HERE, re.IGNORECASE)
+RESERVED_FOR_PARTY = re.compile(r"\b(?:reserved|room|space|slot|left|kept|placeholder)\s+for\s+" + PARTY + r"(?!\w)",
                                 re.IGNORECASE)
+INSERTION_POINT = re.compile(r"\binsert(?:ion)?\s+(?:point|here|spot|location)\b", re.IGNORECASE)
+BRACKETED_INSERTION_POINT = re.compile(r"\[[^\]]*\binsertion\s+point\b[^\]]*\]", re.IGNORECASE)
 ANCHOR_TAG = re.compile(r"\[[A-Za-z_][\w.]*:[A-Za-z_][\w.]*\]")
-NAMES_AGENT = re.compile(r"\b" + OTHER_AGENT + r"(?!\w)", re.IGNORECASE)
-NAMES_INSERTION = re.compile(r"\b" + INSERTS + r"|\binsert(?:ion)?\s+(?:point|here)\b|\bgoes\s+here\b", re.IGNORECASE)
+NAMES_PARTY = re.compile(r"\b" + PARTY + r"(?!\w)", re.IGNORECASE)
+NAMES_INSERTION = re.compile(r"\b" + INSERTS + r"|" + INSERTION_POINT.pattern + r"|" + GOES_HERE, re.IGNORECASE)
 
 
 def is_insertion_marker(comment):
     """Whether an added comment marks where another agent inserts code, as
     App D's forbidden marker does."""
-    if AGENT_INSERTS.search(comment) or RESERVED_FOR_AGENT.search(comment):
+    if any(rule.search(comment) for rule in (AGENT_INSERTS, AGENT_WILL_ADD, AGENT_ADDS_HERE, RESERVED_FOR_PARTY,
+                                             BRACKETED_INSERTION_POINT)):
         return True
-    return bool(ANCHOR_TAG.search(comment)) and bool(NAMES_AGENT.search(comment) or NAMES_INSERTION.search(comment))
+    names_party = bool(NAMES_PARTY.search(comment))
+    if names_party and (CODE_GOES_HERE.search(comment) or INSERTION_POINT.search(comment)):
+        return True
+    return bool(ANCHOR_TAG.search(comment)) and (names_party or bool(NAMES_INSERTION.search(comment)))
 
 
 def insertion_markers(patches):

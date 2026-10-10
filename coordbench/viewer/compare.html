@@ -80,7 +80,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   margin: 2px 0; }
 .bar-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-track { height: 12px; background: var(--badge); border-radius: 3px; position: relative; }
-.bar { height: 12px; background: var(--accent); border-radius: 3px; min-width: 1px; }
+.bar { height: 12px; background: var(--accent); border-radius: 3px; }
 .bar.unreliable { background: repeating-linear-gradient(45deg, var(--accent), var(--accent) 3px, transparent 3px, transparent 6px);
   border: 1px solid var(--accent); }
 .bar-row .value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -96,6 +96,18 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 th.kind-behaviour { color: var(--behaviour); }
 .timeline { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; margin: 8px 0; padding: 6px; }
 .timeline .track { overflow-x: auto; max-width: 100%; }
+/* A timeline wider than its box fades at the edge it scrolls toward, and
+   its hint says which stretch of the axis is in view: a phone's overlay
+   scroll bars show nothing until the user touches the timeline. */
+.timeline .track.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.timeline .track.more-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); }
+.timeline .track.more-left.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+.timeline .scroll-hint { font-size: 12px; color: var(--muted); }
+.timeline .unrecorded { fill: var(--badge); stroke: var(--border); stroke-dasharray: 3 3; }
 .timeline svg { display: block; max-width: none; }
 .timeline .lane-label { font-size: 12px; fill: var(--muted); }
 .timeline .axis { font-size: 11px; fill: var(--muted); }
@@ -178,8 +190,12 @@ mark { background: var(--hi); color: inherit; outline: 1px solid var(--hi-border
       <label><input id="include-unreliable" type="checkbox"> rank interpolated and hub-event runs</label>
       <button id="speed-csv" type="button">Speed CSV</button>
     </div>
-    <div class="muted">Hatched bars are runs whose step times are interpolated or come only from the hub's
-      record; they are left out of the ranks unless included.</div>
+    <div class="muted">Hatched bars are runs whose times are not a full log's own. The OpenHands SDK files' step
+      times are interpolated (spaced evenly over each agent's phase). A run with no transcript (the session driver's
+      pilots) has only the hub's record of its coordination calls: its steps count those calls alone and are marked
+      "&gt;=", and its steps per minute, time per step, communication share, longest idle gap and times to the first
+      edit and test run are not measured. Hatched runs are left out of the ranks unless included. "&gt;=" marks a lower
+      bound, with its reason in the value's title.</div>
     <div id="speed"></div>
     <details><summary>Per agent</summary><div class="scroll"><table id="agents-table"></table></div></details>
   </section>
@@ -294,19 +310,23 @@ function stockToolType(step) {
 /* The stock viewer's step count: every entry of the file but those its
    isSystemPrompt drops (viewer.astro:513-522, on the first non-empty of
    content, text and message), per lane. It is the page's "steps"; any
-   other count says what it leaves out. */
+   other count says what it leaves out. The same entries' first and last
+   times are its stats bar's duration (1068-1075), which the runs table
+   shows beside the page's own wall time. */
 function stockDrops(entry) {
   const text = entry && (entry.content || entry.text || entry.message || "");
   return typeof text === "string" && SCHEMA.stock_viewer_filters.some((f) => text.includes(f));
 }
 
 function stockCounts(entries, laneOf) {
-  const counts = { total: 0, by_lane: {} };
+  const counts = { total: 0, by_lane: {}, first_ms: null, last_ms: null };
   entries.forEach((entry) => {
     if (stockDrops(entry)) return;
     const lane = laneOf(entry);
     counts.total += 1;
     counts.by_lane[lane] = (counts.by_lane[lane] || 0) + 1;
+    const t = timeMs(entry.timestamp || entry.timestampMs);
+    if (t != null) { counts.first_ms = earliest([counts.first_ms, t]); counts.last_ms = latest([counts.last_ms, t]); }
   });
   return counts;
 }
@@ -404,8 +424,9 @@ function fromLegacy(events, meta) {
     const model = info.model || (info.metrics && info.metrics.model !== "default" ? info.metrics.model : null);
     return { lane, name: lane, model,
       tokens: info.metrics ? (usage.prompt_tokens || 0) + (usage.completion_tokens || 0) : null,
-      cost: info.metrics ? numberOrNull(info.metrics.accumulated_cost) : null, first_ms: info.first, last_ms: info.last,
-      log_first_ms: info.first, log_last_ms: info.last };
+      cost: info.metrics ? numberOrNull(info.metrics.accumulated_cost) : null,
+      cost_source: info.metrics && numberOrNull(info.metrics.accumulated_cost) != null ? "openhands accumulated_cost" : null,
+      first_ms: info.first, last_ms: info.last, log_first_ms: info.first, log_last_ms: info.last };
   });
   matchLegacyReceipts(run);
   run.flags.non_overlapping = !agentsOverlap(run.agents);
@@ -493,8 +514,9 @@ function fromWebsiteSteps(data, meta, shape) {
   run.agents = run.lanes.map((lane, i) => {
     const block = m["agent_" + (i + 1)] || {};
     const steps = run.steps.filter((s) => s.lane === lane && !s.hidden);
-    return { lane, name: lane, model: block.model || null, tokens: null,
-      cost: trusted ? numberOrNull(block.cost) : null, first_ms: firstTime(steps), last_ms: lastTime(steps) };
+    const cost = trusted ? numberOrNull(block.cost) : null;
+    return { lane, name: lane, model: block.model || null, tokens: null, cost,
+      cost_source: cost != null ? "website metadata" : null, first_ms: firstTime(steps), last_ms: lastTime(steps) };
   });
   if (!trusted) run.warnings.push("per-agent cost and steps in this file's metadata come from the website's " +
     "feature-number lookup, which is right only for feature1_feature2; left out");
@@ -567,12 +589,12 @@ function fromCoordbench(data, meta) {
     const steps = run.steps.filter((s) => s.lane === a.lane && !s.hidden);
     const tokens = a.tokens ? TOKEN_KEYS.reduce((sum, k) => sum + (a.tokens[k] || 0), 0) : null;
     const reason = a.tokens ? tokenShortfall(a) : null;
-    return { lane: a.lane, name: a.id, model: a.model, tokens, tokens_partial: !!reason, tokens_reason: reason,
-      cost: numberOrNull(a.cost), started_ms: timeMs(a.started_at),
-      first_ms: earliest([timeMs(a.started_at), firstTime(steps)]), last_ms: latest([timeMs(a.ended_at), lastTime(steps)]),
-      status: a.status, role: a.role };
+    return Object.assign({ lane: a.lane, name: a.id, model: a.model, tokens, tokens_partial: !!reason, tokens_reason: reason,
+      started_ms: timeMs(a.started_at), first_ms: earliest([timeMs(a.started_at), firstTime(steps)]),
+      last_ms: latest([timeMs(a.ended_at), lastTime(steps)]), status: a.status, role: a.role }, recordedCost(a));
   });
   run.clock = coordbenchClock(run.agents, c.anchor, timeMs(m.started_at));
+  startAgentsAtPair(run);
   run.messages = (c.messages || []).map((msg) => ({ id: msg.id, from: byId[msg.from] || msg.from,
     to: msg.to === "broadcast" ? "broadcast" : byId[msg.to] || msg.to, t_ms: timeMs(msg.sent_at),
     content: msg.content, read_ms: (msg.read_at || []).map(timeMs).filter((t) => t != null)[0] || null }));
@@ -585,6 +607,38 @@ function fromCoordbench(data, meta) {
   if (c.stock_viewer_note) run.warnings.push(c.stock_viewer_note);
   if (c.messages_recorded === false) run.warnings.push("message text was not recorded in this run");
   return run;
+}
+
+/* An agent's cost and where it came from (result.json's cost_source, which
+   export.py passes on): Claude Code's own total_cost_usd, or an estimate
+   from the transcript's tokens (PARITY.md decision 6). A session-driver
+   agent whose output counts may not be final has no cost, only
+   cost_lower_bound, the estimate from the counts as they stand: it is
+   shown as that bound and marked. */
+const COST_SOURCES = {
+  "claude code": "Claude Code's own total_cost_usd",
+  "estimated from tokens": "estimated from the transcript's tokens at CooperBench's prices (PARITY.md decision 6)",
+  "openhands accumulated_cost": "OpenHands' llm_metrics.accumulated_cost",
+  "website metadata": "the website file's metadata (agent_<n>.cost)",
+  "result.json": "result.json's cost, its source not recorded",
+};
+const COST_FLOOR_TEXT = "estimated from tokens whose output counts may not be final (result.json cost_lower_bound)";
+
+function recordedCost(record) {
+  const cost = numberOrNull(record.cost);
+  if (cost != null) return { cost, cost_source: record.cost_source || "result.json", cost_partial: false, cost_reason: null };
+  const floor = numberOrNull(record.cost_lower_bound);
+  if (floor != null) return { cost: floor, cost_source: "estimated from tokens", cost_partial: true, cost_reason: COST_FLOOR_TEXT };
+  return { cost: null, cost_source: null, cost_partial: false, cost_reason: null };
+}
+
+// With no agent's own start a run's clock starts at the pair's
+// (coordbenchClock), and so does each agent's span: nothing records when
+// each agent began, and a span from its first hub call would leave out the
+// setup and the reading that the wall time holds before it.
+function startAgentsAtPair(run) {
+  if (run.clock.anchor !== "pair start") return;
+  run.agents.forEach((a) => { if (a.started_ms == null) a.first_ms = earliest([run.clock.ms, a.first_ms]); });
 }
 
 // Why an agent's token total is only a lower bound, or null when it is
@@ -607,7 +661,7 @@ function tokenShortfall(agent) {
 const CLOCK_TEXT = {
   "agents' start": "times count from the first agent's own start: its phase in result.json's timings, or its transcript's first line",
   "pair start": "times count from result.json's started_at: the run has no run_started event and no agent's own start, " +
-    "so the wall time holds the pair's setup and its first step is only its first hub call",
+    "so the wall time and each agent's span start there and hold the pair's setup, and its first step is only its first hub call",
   "first event": "times count from the earliest step or event in the file",
 };
 
@@ -618,11 +672,18 @@ function coordbenchClock(agents, hubAnchor, pairStart) {
   return { anchor: "first event", ms: null };
 }
 
+// paper_undecided: the paper-era cascade failed naive and union and
+// needed its learned resolver, which did not run (eval.json cascade.llm
+// {ran: false, needed: true}, its lower_bound), so its fail is no verdict.
 function coordbenchOutcome(run, o) {
+  const llm = o.cascade_llm && typeof o.cascade_llm === "object" ? o.cascade_llm : null;
+  const resolverMissing = o.cascade_lower_bound === true || !!(llm && llm.needed && !llm.ran);
   run.outcome = { passed: o.both_passed == null ? null : !!o.both_passed, rule: "63b9d44",
     has_conflict: o.has_naive_merge_conflict == null ? null : !!o.has_naive_merge_conflict,
-    strategy: o.merge_strategy || null, paper_passed: o.paper_both_passed == null ? null : !!o.paper_both_passed,
+    strategy: o.merge_strategy || null, merge_status: o.merge_status || null,
+    paper_passed: o.paper_both_passed == null ? null : !!o.paper_both_passed,
     route: o.cascade_route || null, paper_scored: o.cascade_route != null || o.paper_both_passed != null,
+    paper_undecided: o.paper_both_passed === false && resolverMissing, resolver_reason: llm && llm.reason || null,
     missing: o.both_passed == null };
 }
 
@@ -702,18 +763,20 @@ function fromPairFiles(data, meta) {
   run.agents = ids.map((id) => {
     const own = run.steps.filter((s) => s.lane === byId[id]);
     const phase = agentPhase(result, id, started);
-    return { lane: byId[id], name: id, model: records[id].model || result.model, tokens: null,
-      cost: numberOrNull(records[id].cost), started_ms: phase.started_ms, first_ms: earliest([phase.started_ms, firstTime(own)]),
-      last_ms: latest([phase.ended_ms, lastTime(own)]), status: records[id].status };
+    return Object.assign({ lane: byId[id], name: id, model: records[id].model || result.model, tokens: null,
+      started_ms: phase.started_ms, first_ms: earliest([phase.started_ms, firstTime(own)]),
+      last_ms: latest([phase.ended_ms, lastTime(own)]), status: records[id].status }, recordedCost(records[id]));
   });
   run.clock = coordbenchClock(run.agents, started ? "run_started" : null, resultTimeMs(result.started_at, result));
+  startAgentsAtPair(run);
   const evaluation = files.evaluation || {};
   const merge = evaluation.merge || {};
   const cascade = evaluation.cascade || {};
   coordbenchOutcome(run, { both_passed: files.evaluation ? evaluation.both_passed : null, merge_strategy: merge.strategy,
-    has_naive_merge_conflict: cascade.has_naive_merge_conflict != null ? cascade.has_naive_merge_conflict :
+    merge_status: merge.status, has_naive_merge_conflict: cascade.has_naive_merge_conflict != null ? cascade.has_naive_merge_conflict :
       (["conflicts"].includes(merge.status) ? true : merge.status === "clean" || merge.status === "identical" ? false : null),
-    paper_both_passed: cascade.verdict_paper_era, cascade_route: cascade.route });
+    paper_both_passed: cascade.verdict_paper_era, cascade_route: cascade.route, cascade_lower_bound: cascade.lower_bound,
+    cascade_llm: cascade.llm });
   coordbenchLabels(run, files.judge, null);
   run.warnings.push("no trajectory.json.gz in this directory: steps are the hub's coordination calls only " +
     "(export it with coordbench/export.py for every step)");
@@ -790,6 +853,7 @@ function finishRun(run) {
   run.start_ms = earliest(times.concat(run.agents.map((a) => a.first_ms), [run.clock.ms]));
   run.end_ms = latest(ends.concat(run.agents.map((a) => a.last_ms)));
   countSteps(run);
+  run.stock_duration_ms = run.stock_steps.first_ms != null ? run.stock_steps.last_ms - run.stock_steps.first_ms : null;
   run.repoCanonical = canonicalRepo(run.repo);
   run.labels.heuristics = heuristics(run.messages);
   run.flags.truncated = possiblyTruncated(run);
@@ -801,7 +865,7 @@ function finishRun(run) {
 // stock viewer's shape (a pair directory's hub calls) counts every step.
 function countSteps(run) {
   if (!run.stock_steps) {
-    run.stock_steps = { total: run.steps.length, by_lane: {} };
+    run.stock_steps = { total: run.steps.length, by_lane: {}, first_ms: null, last_ms: null };
     run.steps.forEach((s) => { run.stock_steps.by_lane[s.lane] = (run.stock_steps.by_lane[s.lane] || 0) + 1; });
   }
   run.agents.forEach((a) => {
@@ -814,9 +878,12 @@ function countSteps(run) {
    events over 7 s of a 20-minute run in CooperBench's gpt5 pallets_click
    2068 feature1_feature6 file, was probably cut short. The share is of the
    run's wall time, or, when the agents' logs do not overlap (so the wall
-   time spans the gap between them), of the longest agent's log. Only real
-   times are checked: interpolated times fill each agent's phase, and the
-   hub's record holds only the coordination calls. */
+   time spans the gap between them), of the longest agent's log. A log
+   that ends with the agent's finish step is complete however short it
+   is: the agent was done early and its partner kept working (most of
+   the short logs among the website's gemini_flash_miniswe and claude
+   files). Only real times are checked: interpolated times fill each
+   agent's phase, and the hub's record holds only the coordination calls. */
 const TRUNCATED_SHARE = 0.1;
 
 function possiblyTruncated(run) {
@@ -830,8 +897,15 @@ function possiblyTruncated(run) {
   const wall = run.start_ms != null && run.end_ms != null ? run.end_ms - run.start_ms : null;
   const reference = run.flags.non_overlapping ? Math.max(...spans.map((x) => x.span_ms || 0)) : wall;
   if (!reference) return [];
-  return spans.filter((x) => x.span_ms != null && x.span_ms < TRUNCATED_SHARE * reference)
+  return spans.filter((x) => x.span_ms != null && x.span_ms < TRUNCATED_SHARE * reference && !endsWithFinish(run, x.lane))
     .map((x) => Object.assign(x, { of_ms: reference, of: run.flags.non_overlapping ? "the longest agent log" : "the wall time" }));
+}
+
+// Whether the last of an agent's own steps (receipts aside, since a
+// partner's message can land in a log after its finish) is its finish.
+function endsWithFinish(run, lane) {
+  const own = run.steps.filter((s) => s.lane === lane && !s.hidden && s.t_ms != null);
+  return own.length > 0 && own[own.length - 1].type === "submit";
 }
 
 /* Heuristics, computed here from the messages: free, and never a label. */
@@ -876,7 +950,25 @@ function heuristics(messages) {
   return result;
 }
 
-/* Speed: per run and per agent, from the steps' own times. */
+/* Speed: per run and per agent, from the steps' own times. A run with no
+   transcript (hubOnly) has only the hub's record of its coordination
+   calls for steps: its step counts are floors on the agents' steps, and
+   the measures worked out from every step are not measured, each with
+   why; the times to the first message and to submit stay, since the
+   sends are hub calls and the finish is the session's own end. bounds
+   holds each lower bound's reason, unmeasured each missing value's. */
+const HUB_ONLY_FLOOR = "the steps are only the hub's record of the coordination calls (the run has no transcript), " +
+  "so the agents' own Bash, Read and Edit calls are missing";
+const HUB_ONLY_UNMEASURED = "not measured: the run has no transcript, and the hub's record holds only the coordination " +
+  "calls, not the agents' own Bash, Read and Edit calls this measure needs";
+const HUB_ONLY_FLOOR_KEYS = ["steps", "steps_less"];
+const HUB_ONLY_UNMEASURED_KEYS = ["steps_per_min", "time_per_step_ms", "comm_share", "longest_idle_ms", "first_edit_ms",
+  "first_test_ms"];
+
+function hubOnly(run) {
+  return run.timestamps_kind === "hub-events";
+}
+
 function speedMetrics(run) {
   const visible = run.steps.filter((s) => !s.hidden && s.t_ms != null);
   const start = run.start_ms;
@@ -886,33 +978,44 @@ function speedMetrics(run) {
   const wall = run.start_ms != null && run.end_ms != null ? run.end_ms - run.start_ms : null;
   const steps = run.stock_steps.total;
   const tokens = run.agents.some((a) => a.tokens != null) ? run.agents.reduce((sum, a) => sum + (a.tokens || 0), 0) : null;
-  const tokensReason = tokens == null ? null : runTokenShortfall(run.agents);
+  const tokensReason = tokens == null ? null : runShortfall(run.agents, "tokens", "tokens_reason");
   const cost = run.agents.some((a) => a.cost != null) ? run.agents.reduce((sum, a) => sum + (a.cost || 0), 0) : null;
+  const costReason = cost == null ? null : runShortfall(run.agents, "cost", "cost_reason");
   const submits = visible.filter((s) => s.type === "submit");
   const metrics = {
     wall_ms: wall, active_ms: activeSpan(run.agents), steps, steps_less: run.steps.filter((s) => !s.hidden).length,
     steps_per_min: wall ? steps / (wall / 60000) : null, time_per_step_ms: wall != null && steps ? wall / steps : null,
     tokens, tokens_partial: !!tokensReason, tokens_reason: tokensReason, cost,
+    cost_sources: Array.from(new Set(run.agents.map((a) => a.cost_source).filter(Boolean))),
     first_message_ms: since(sends[0]), first_edit_ms: since(visible.find((s) => s.type === "edit" || s.type === "create")),
     first_test_ms: since(visible.find((s) => (s.type === "bash" || s.type === "find_grep") && TEST_COMMAND.test(s.args.command || ""))),
     submit_ms: submits.length ? since(submits[submits.length - 1]) : null,
     longest_idle_ms: longestIdle(run), comm_share: calls.length ? sends.length / calls.length : null,
-    blocked_ms: null, hub_ms: null,
+    blocked_ms: null, hub_ms: null, bounds: { tokens: tokensReason, cost: costReason }, unmeasured: {},
   };
   const dones = run.hub.filter((e) => e.kind === "tool_done");
   if (dones.length) {
     metrics.blocked_ms = dones.reduce((sum, e) => sum + (e.blocked_ms || 0), 0);
     metrics.hub_ms = dones.reduce((sum, e) => sum + Math.max((e.duration_ms || 0) - (e.blocked_ms || 0), 0), 0);
   }
+  if (hubOnly(run)) markHubOnly(metrics);
   return metrics;
 }
 
-// Why a run's token total is a lower bound: an agent with no count at
-// all, or an agent's own shortfall (tokenShortfall).
-function runTokenShortfall(agents) {
+function markHubOnly(metrics) {
+  HUB_ONLY_FLOOR_KEYS.forEach((key) => { metrics.bounds[key] = HUB_ONLY_FLOOR; });
+  HUB_ONLY_UNMEASURED_KEYS.forEach((key) => { metrics[key] = null; metrics.unmeasured[key] = HUB_ONLY_UNMEASURED; });
+}
+
+// Why a run's token or cost total is a lower bound: an agent with no
+// value at all beside one that has it, or an agent's own shortfall
+// (tokenShortfall, recordedCost).
+const NOT_MEASURED_TEXT = { tokens: "an agent's tokens were not measured", cost: "an agent's cost was not measured" };
+
+function runShortfall(agents, key, reasonKey) {
   const reasons = [];
-  if (agents.some((a) => a.tokens == null)) reasons.push("an agent's tokens were not measured");
-  agents.forEach((a) => { if (a.tokens_reason && !reasons.includes(a.tokens_reason)) reasons.push(a.tokens_reason); });
+  if (agents.some((a) => a[key] == null)) reasons.push(NOT_MEASURED_TEXT[key]);
+  agents.forEach((a) => { if (a[reasonKey] && !reasons.includes(a[reasonKey])) reasons.push(a[reasonKey]); });
   return reasons.length ? reasons.join("; ") : null;
 }
 
@@ -944,7 +1047,7 @@ function agentMetrics(run, agent) {
   const calls = own.filter((s) => !NON_CALL_TYPES.includes(s.type));
   return { wall_ms: agent.first_ms != null && agent.last_ms != null ? agent.last_ms - agent.first_ms : null,
     steps: agent.steps, steps_less: agent.steps_less, first_message_ms: sends.length && start != null ? sends[0].t_ms - start : null,
-    comm_share: calls.length ? sends.length / calls.length : null, tokens: agent.tokens, cost: agent.cost };
+    comm_share: calls.length && !hubOnly(run) ? sends.length / calls.length : null, tokens: agent.tokens, cost: agent.cost };
 }
 
 /* The failure-mode presence matrix: one cell per column per run. Each
@@ -1122,12 +1225,15 @@ function csvLine(values) {
   }).join(",");
 }
 
+// lower_bounds names the metrics whose value is a floor, not_measured
+// those left out (a run with no transcript), so a sheet keeps the marks.
 function speedCsv(runs) {
   const head = ["label", "shape", "timestamps", "clock"].concat(SPEED_METRICS.map((m) => m.csv || m.key),
-    ["tokens_lower_bound", "possibly_truncated"]);
+    ["lower_bounds", "not_measured", "cost_sources", "possibly_truncated"]);
+  const marked = (map) => SPEED_METRICS.filter((m) => map[m.key]).map((m) => m.csv || m.key).join(" ");
   return [csvLine(head)].concat(runs.map((r) => csvLine([r.label, r.shape, r.timestamps_kind, r.clock.anchor]
-    .concat(SPEED_METRICS.map((m) => r.speed[m.key]), [!!r.speed.tokens_partial,
-      r.flags.truncated.map((x) => laneLetter(r, x.lane)).join(" ")])))).join("\n") + "\n";
+    .concat(SPEED_METRICS.map((m) => r.speed[m.key]), [marked(r.speed.bounds), marked(r.speed.unmeasured),
+      r.speed.cost_sources.join("; "), r.flags.truncated.map((x) => laneLetter(r, x.lane)).join(" ")])))).join("\n") + "\n";
 }
 
 function matrixCsv(runs) {
@@ -1186,6 +1292,7 @@ function addRun(data, meta) {
 
 function stepsText(run) {
   const less = run.speed.steps_less;
+  if (hubOnly(run)) return run.speed.steps + " hub calls, no transcript";
   return run.speed.steps + " steps" + (less !== run.speed.steps ? ", " + less + " " + LESS_TEXT : "");
 }
 
@@ -1358,7 +1465,10 @@ function laneLetter(run, lane) {
    decision 1): 63b9d44's verdict with the merge strategy that decided it
    (eval.json both_passed and merge.strategy), the paper-era cascade's
    verdict with its route (eval.json's cascade block), and for a published
-   run the website index's own verdict, which is neither of coordbench's. */
+   run the website index's own verdict, which is neither of coordbench's.
+   A paper-era fail that needed the learned resolver coordbench does not
+   run (decision 7) is shown as undecided, never as the full cascade's
+   fail beside a published verdict that ran it. */
 const VERDICT_NAMES = { "63b9d44": "63b9d44 verdict", index: "website index verdict" };
 const VERDICT_TITLES = {
   "63b9d44": "CooperBench 63b9d44's verdict (eval.json both_passed): both feature suites pass on the naive merge, or, " +
@@ -1367,7 +1477,19 @@ const VERDICT_TITLES = {
     "both_passed for the Gemini runs (PARITY.md row 110)",
 };
 const STRATEGY_NAMES = { naive: "naive merge", "skip-merge-identical": "identical patches", "solo-agent1": "lead's patch alone" };
+// 63b9d44's sandbox.py (220-273) leaves the strategy "naive" when no solo
+// patch wins: after a conflict, or a patch that did not apply, that means
+// no merged tree was tested and the lead's patch alone did not pass.
+const UNMERGED_STRATEGY = {
+  conflicts: ["none (naive conflicted, lead's patch alone failed)", "the naive merge conflicted, so no merged tree was " +
+    "tested, and the lead's patch alone did not pass both suites"],
+  missing_input: ["none (a patch did not apply, lead's patch alone did not pass)", "a patch did not apply, so no merged " +
+    "tree was tested, and the lead's patch alone did not pass both suites or did not apply either"],
+};
 const ROUTE_NAMES = { naive: "naive", union: "union", llm: "learned resolver", none: "none passed" };
+const PAPER_TITLE = "the paper-era cascade's verdict (eval.json cascade.verdict_paper_era): the naive merge, then union " +
+  "when naive conflicts, then the paper's learned resolver when union fails a suite; coordbench runs that last step " +
+  "only with a resolver endpoint (PARITY.md decision 7)";
 
 function badge(text, cls, title) {
   return { text, cls: cls || "", title: title || "" };
@@ -1380,15 +1502,33 @@ function outcomeParts(run) {
   else if (o.missing) parts.push(badge("not published", "", "the website's index has no merge report for this run"));
   else if (o.passed != null) parts.push(badge((o.rule || "verdict") + " " + (o.passed ? "pass" : "fail"), o.passed ? "pass" : "fail",
     VERDICT_TITLES[o.rule]));
-  if (o.strategy) parts.push(badge("63b9d44 strategy: " + (STRATEGY_NAMES[o.strategy] || o.strategy), "",
-    "CooperBench 63b9d44's merge strategy (eval.json merge.strategy): " + o.strategy));
+  if (o.strategy) parts.push(strategyBadge(o));
   if (o.has_conflict) parts.push(badge("naive conflict", "warn", "the naive merge of the two patches conflicted, under either rule"));
-  if (o.paper_passed != null) parts.push(badge("paper-era " + (o.paper_passed ? "pass" : "fail"), o.paper_passed ? "pass" : "fail",
-    "the paper-era cascade's verdict (eval.json cascade.verdict_paper_era): naive, then union, then the learned resolver"));
-  if (o.route) parts.push(badge("paper-era route: " + (ROUTE_NAMES[o.route] || o.route), "",
-    "the paper-era cascade's route (eval.json cascade.route): the merge that passed both suites"));
+  parts.push(...paperBadges(o));
   if (o.rule === "63b9d44" && !o.paper_scored && !o.missing) parts.push(badge("paper-era not scored", "",
     "eval.json has no cascade block; run.py rescore adds one from the patches"));
+  return parts;
+}
+
+function strategyBadge(o) {
+  const unmerged = o.strategy === "naive" && UNMERGED_STRATEGY[o.merge_status];
+  const text = unmerged ? unmerged[0] : STRATEGY_NAMES[o.strategy] || o.strategy;
+  return badge("63b9d44 strategy: " + text, "", "CooperBench 63b9d44's merge strategy (eval.json merge.strategy " + o.strategy +
+    (o.merge_status ? ", merge.status " + o.merge_status : "") + ")" + (unmerged ? ": " + unmerged[1] +
+    "; sandbox.py keeps the strategy naive when no solo patch wins" : ""));
+}
+
+function paperBadges(o) {
+  if (o.paper_undecided) return [badge("paper-era undecided", "warn", "the paper-era cascade is undecided: naive and union " +
+    "did not pass both suites, and its next step, the paper's learned resolver, was needed but not run (eval.json cascade.llm: " +
+    (o.resolver_reason || "ran false, needed true") + "); this is a fail of naive and union only, not the full cascade's"),
+    badge("paper-era route: learned resolver not run", "", "eval.json cascade.route " + o.route + ": neither naive nor union " +
+      "passed both suites, and the learned resolver that would come next did not run")];
+  const parts = [];
+  if (o.paper_passed != null) parts.push(badge("paper-era " + (o.paper_passed ? "pass" : "fail"), o.paper_passed ? "pass" : "fail",
+    PAPER_TITLE));
+  if (o.route) parts.push(badge("paper-era route: " + (ROUTE_NAMES[o.route] || o.route), "",
+    "the paper-era cascade's route (eval.json cascade.route): the merge that passed both suites"));
   return parts;
 }
 
@@ -1399,9 +1539,20 @@ function outcomeBadges(run) {
     (p.title ? ' title="' + escapeHtml(p.title) + '"' : "") + ">" + escapeHtml(p.text) + "</span>").join(" ");
 }
 
+const KIND_TEXT = {
+  real: "step times are the log's own: a transcript's line times, or the file's event times",
+  interpolated: "step times are interpolated: spaced evenly over each agent's phase (the website's prepare script, or " +
+    "export.py from a stream without times), so they say nothing of pace; left out of the speed ranks unless included",
+  "hub-events": "no transcript: the steps are only the hub's record of the coordination calls (send, receive, task calls) " +
+    "at their real times; the agents' own Bash, Read and Edit calls are missing, so step counts are floors, and steps " +
+    "per minute, time per step, the communication share and the idle gap are not measured; left out of the speed ranks " +
+    "unless included",
+};
+
 function kindBadge(run) {
   const text = run.timestamps_kind === "real" ? "real" : run.timestamps_kind;
-  return '<span class="badge ' + (unreliable(run) ? "warn" : "") + '">' + escapeHtml(text) + "</span>";
+  return '<span class="badge' + (unreliable(run) ? " warn" : "") + '" title="' + escapeHtml(KIND_TEXT[run.timestamps_kind] || "") +
+    '">' + escapeHtml(text) + "</span>";
 }
 
 function clockBadge(run) {
@@ -1411,9 +1562,38 @@ function clockBadge(run) {
 
 function truncatedBadges(run) {
   return run.flags.truncated.map((x) => ' <span class="badge warn" title="' + escapeHtml("this agent's own log spans " +
-    formatMs(x.span_ms) + ", under a tenth of " + x.of + " (" + formatMs(x.of_ms) + "): the file may have lost the rest of it") + '">' +
+    formatMs(x.span_ms) + ", under a tenth of " + x.of + " (" + formatMs(x.of_ms) + "), and does not end with its finish " +
+    "step: the file may have lost the rest of it") + '">' +
     escapeHtml(laneLetter(run, x.lane) + "'s log covers " + formatMs(x.span_ms) + " of " + formatMs(x.of_ms) + ": possibly truncated") +
     "</span>").join("");
+}
+
+// Each agent's steps, as floors with why when the run has only the
+// hub's record of its calls.
+function agentStepsCell(run) {
+  const floor = run.speed.bounds.steps;
+  const text = run.agents.map((a) => laneLetter(run, a.lane) + ": " + (floor ? ">= " : "") + a.steps).join(", ");
+  if (!floor) return escapeHtml(text);
+  return '<span title="' + escapeHtml("lower bounds: " + floor) + '">' + escapeHtml(text) + '</span> <span class="badge warn" ' +
+    'title="' + escapeHtml(floor) + '">hub calls only</span>';
+}
+
+// The wall time, with the stock viewer's stats-bar duration in its title
+// when the two differ by a second or more: the stats bar runs from the
+// first to the last entry its prompt filter keeps, and prints whole
+// seconds rounded down (viewer.astro formatDuration, 978-982); the page
+// runs from the run's clock.
+function stockDurationText(ms) {
+  const sec = Math.floor(ms / 1000);
+  return Math.floor(sec / 60) + "m " + (sec % 60) + "s";
+}
+
+function wallCell(run) {
+  const stock = run.stock_duration_ms;
+  const differs = stock != null && run.speed.wall_ms != null && Math.abs(run.speed.wall_ms - stock) >= 1000;
+  const title = differs ? "from the run's clock (" + run.clock.anchor + ") to its last step; the stock viewer's stats bar " +
+    "shows " + stockDurationText(stock) + ", from the first to the last step its prompt filter keeps" : "";
+  return '<td class="num"' + (title ? ' title="' + escapeHtml(title) + '"' : "") + ">" + formatMs(run.speed.wall_ms) + "</td>";
 }
 
 const RUN_COLUMNS = [
@@ -1441,8 +1621,8 @@ function renderRunsTable() {
     escapeHtml(r.warnings.join("\n")) + '">' + r.warnings.length + " note(s)</span>" : "") + "</td><td><span class=\"badge\">" +
     escapeHtml(SHAPES[r.shape]) + "</span></td><td>" + escapeHtml(r.model || "-") + "</td><td>" + escapeHtml(r.arm || "-") +
     "</td><td>" + escapeHtml(r.driver || "-") + "</td><td>" + outcomeBadges(r) + '</td><td class="num">' + r.lanes.length +
-    "</td><td>" + r.agents.map((a) => escapeHtml(laneLetter(r, a.lane)) + ": " + a.steps).join(", ") + '</td><td class="num">' +
-    r.messages.length + '</td><td class="num">' + formatMs(r.speed.wall_ms) + "</td><td>" + kindBadge(r) + " " + clockBadge(r) +
+    "</td><td>" + agentStepsCell(r) + '</td><td class="num">' + r.messages.length + "</td>" + wallCell(r) + "<td>" +
+    kindBadge(r) + " " + clockBadge(r) +
     (r.flags.non_overlapping ? ' <span class="badge warn">agent logs do not overlap</span>' : "") + truncatedBadges(r) +
     '</td><td><button type="button" data-remove="' + r.index + '" aria-label="Remove ' + escapeHtml(r.label) + '">Remove</button></td></tr>').join("");
   table.innerHTML = head + "<tbody>" + body + "</tbody>";
@@ -1466,12 +1646,30 @@ function metricValue(run, metric, options, base) {
   return value;
 }
 
-// A token total that leaves out a count nobody measured is a lower bound,
-// and so is its ratio to a complete baseline; a ratio whose baseline is
-// itself partial has no direction, and is shown without the mark.
+// Why a value is a lower bound, or null: a token or cost total that
+// leaves out what nobody measured, or a step count of a run that has only
+// the hub's calls (speed.bounds). Its ratio to a complete baseline is a
+// lower bound too; a ratio whose baseline is itself a floor has no
+// direction, and is shown without the mark.
+function boundReason(run, metric, options, base) {
+  const reason = run.speed.bounds && run.speed.bounds[metric.key];
+  if (!reason || run.speed[metric.key] == null) return null;
+  return options.relative && base && base.speed.bounds && base.speed.bounds[metric.key] ? null : reason;
+}
+
 function lowerBound(run, metric, options, base) {
-  if (metric.key !== "tokens" || run.speed.tokens == null || !run.speed.tokens_partial) return false;
-  return !(options.relative && base && base.speed.tokens_partial);
+  return boundReason(run, metric, options, base) != null;
+}
+
+// A value's title: why it is a floor, why it is missing, and for a cost
+// where it came from.
+function valueTitle(run, metric, value, bound) {
+  const notes = [];
+  if (bound) notes.push("a lower bound: " + bound);
+  if (value == null && run.speed.unmeasured && run.speed.unmeasured[metric.key]) notes.push(run.speed.unmeasured[metric.key]);
+  if (metric.kind === "cost" && run.speed.cost_sources && run.speed.cost_sources.length) notes.push("cost from " +
+    run.speed.cost_sources.map((source) => COST_SOURCES[source] || source).join("; "));
+  return notes.join("; ");
 }
 
 // The runs in rank order for a metric, fastest first: the lowest value,
@@ -1497,11 +1695,18 @@ function shownNumber(metric, value, options) {
 
 // The bars' widths in percent: each shown value over the largest. When
 // every shown value is 0 (a lone 0.04 s prints as 0.0 s) no bar is drawn,
-// where scaling by the largest raw value would draw a full one.
+// where scaling by the largest raw value would draw a full one; a width
+// of 0 draws no bar element at all, so a 0 and a "-" leave the track
+// empty rather than a stub that reads as a small value.
 function barWidths(metric, values, options) {
   const shown = values.map((v) => shownNumber(metric, v, options));
   const max = Math.max(0, ...shown.filter((v) => v != null));
   return shown.map((v) => v == null || max <= 0 ? 0 : Math.max(v > 0 ? 0.5 : 0, (v / max) * 100));
+}
+
+function barHtml(run, width) {
+  if (!(width > 0)) return "";
+  return '<div class="bar' + (unreliable(run) ? " unreliable" : "") + '" style="width:' + width.toFixed(2) + '%"></div>';
 }
 
 function renderSpeed() {
@@ -1517,13 +1722,13 @@ function renderSpeed() {
     const rows = page.runs.map((r, i) => {
       const v = values[i];
       const rank = ranked.findIndex((x) => x.r === r);
-      const bound = lowerBound(r, metric, options, base);
+      const bound = boundReason(r, metric, options, base);
       const shown = (bound ? ">= " : "") + (v == null ? "-" : options.relative ? "x" + v.toFixed(2) :
         options.ownScale && metric.kind === "time" ? (v * 100).toFixed(1) + "% of wall" : formatValue(metric, v));
+      const title = valueTitle(r, metric, v, bound);
       return '<div class="bar-row"><div class="name" title="' + escapeHtml(r.label) + '">' + (rank >= 0 ? "#" + (rank + 1) + " " : "") +
-        escapeHtml(r.label) + '</div><div class="bar-track"><div class="bar' + (unreliable(r) ? " unreliable" : "") +
-        '" style="width:' + widths[i].toFixed(2) + '%"></div></div><div class="value"' +
-        (bound ? ' title="' + escapeHtml("a lower bound: " + r.speed.tokens_reason) + '"' : "") + ">" + escapeHtml(shown) + "</div></div>";
+        escapeHtml(r.label) + '</div><div class="bar-track">' + barHtml(r, widths[i]) + '</div><div class="value"' +
+        (title ? ' title="' + escapeHtml(title) + '"' : "") + ">" + escapeHtml(shown) + "</div></div>";
     }).join("");
     return '<div class="metric"><h3><span>' + escapeHtml(metric.label) + "</span>" + (options.relative ? '<span class="muted">' +
       "baseline " + escapeHtml(base.label) + "</span>" : "") + "</h3>" + rows + "</div>";
@@ -1531,16 +1736,27 @@ function renderSpeed() {
   renderAgentsTable();
 }
 
+// A number cell, with ">=" and the reason in its title when the value is
+// a floor, and a title of its own (a missing value's reason, a cost's
+// source) otherwise.
+function numberTd(text, floor, title) {
+  const notes = [floor ? "a lower bound: " + floor : "", title || ""].filter(Boolean).join("; ");
+  return '<td class="num"' + (notes ? ' title="' + escapeHtml(notes) + '"' : "") + ">" + (floor && text !== "-" ? "&gt;= " : "") +
+    escapeHtml(text) + "</td>";
+}
+
 function renderAgentsTable() {
   const rows = [];
   page.runs.forEach((r) => r.agents.forEach((a) => {
     const m = agentMetrics(r, a);
+    const steps = r.speed.bounds.steps;
     rows.push("<tr><td>" + escapeHtml(r.label) + "</td><td>" + escapeHtml(laneLetter(r, a.lane) + " " + (a.name || "")) + "</td><td>" +
-      escapeHtml(a.model || "-") + '</td><td class="num">' + formatMs(m.wall_ms) + '</td><td class="num">' + m.steps +
-      '</td><td class="num">' + m.steps_less + '</td><td class="num">' + formatMs(m.first_message_ms) + '</td><td class="num">' +
-      (m.comm_share == null ? "-" : (m.comm_share * 100).toFixed(1) + "%") + '</td><td class="num"' +
-      (a.tokens_partial ? ' title="' + escapeHtml("a lower bound: " + a.tokens_reason) + '">&gt;= ' : ">") + formatNumber(m.tokens) +
-      '</td><td class="num">' + (m.cost == null ? "-" : "$" + m.cost.toFixed(4)) + "</td></tr>");
+      escapeHtml(a.model || "-") + '</td><td class="num">' + formatMs(m.wall_ms) + "</td>" + numberTd(String(m.steps), steps) +
+      numberTd(String(m.steps_less), steps) + '<td class="num">' + formatMs(m.first_message_ms) + "</td>" +
+      numberTd(m.comm_share == null ? "-" : (m.comm_share * 100).toFixed(1) + "%", null, r.speed.unmeasured.comm_share) +
+      numberTd(formatNumber(m.tokens), a.tokens_partial ? a.tokens_reason : null) +
+      numberTd(m.cost == null ? "-" : "$" + m.cost.toFixed(4), a.cost_partial ? a.cost_reason : null,
+        a.cost_source ? "cost from " + (COST_SOURCES[a.cost_source] || a.cost_source) : "") + "</tr>");
   }));
   el("agents-table").innerHTML = "<thead><tr><th>Run</th><th>Agent</th><th>Model</th><th class=\"num\">Span</th>" +
     "<th class=\"num\">Steps</th><th class=\"num\">Steps " + escapeHtml(LESS_TEXT) + "</th><th class=\"num\">First message</th>" +
@@ -1590,7 +1806,9 @@ function matrixTd(r, key, caption) {
 
 function renderLegend() {
   el("legend").innerHTML = SCHEMA.tool_types.map((t) => '<span><span class="swatch tt-' + t + '"></span>' + escapeHtml(t) + "</span>").join("") +
-    '<span>arrows: messages (dashed when never read)</span><span>marks: hub events; red: blocked waits</span>';
+    '<span>arrows: messages (dashed when never read)</span><span>marks: hub events; red: blocked waits</span>' +
+    (page.runs.some(hubOnly) ? "<span>dashed grey band: an agent's span in a run with no transcript, whose own calls " +
+      "between its hub calls were not recorded; each hub call is drawn only as long as it took</span>" : "");
 }
 
 const HUB_MARK_KINDS = ["task_claim", "claim", "pr_opened", "ready", "merge", "merge_refused", "merge_attempt", "request", "response"];
@@ -1616,7 +1834,30 @@ function renderTimelines() {
   const width = timelineWidth(container.clientWidth);
   page.timelineWidth = width;
   container.innerHTML = "";
-  page.runs.forEach((run) => container.appendChild(timelineFor(run, percent, longest, width)));
+  page.runs.forEach((run) => {
+    const box = timelineFor(run, percent, longest, width);
+    container.appendChild(box);
+    box._showInView();
+  });
+}
+
+/* A timeline wider than its box says which stretch of its axis is in
+   view, and fades at each edge it can scroll toward, since a phone hides
+   its scroll bars until the timeline is touched. */
+function watchTimelineScroll(box, axisLabel, W, LEFT) {
+  const track = box.querySelector(".track");
+  const hint = box.querySelector(".scroll-hint");
+  const at = (px) => Math.min(Math.max((px - LEFT) / (W - LEFT - 6), 0), 1);
+  const show = () => {
+    const wider = track.scrollWidth > track.clientWidth + 1;
+    hint.classList.toggle("hidden", !wider);
+    track.classList.toggle("more-left", wider && track.scrollLeft > 1);
+    track.classList.toggle("more-right", wider && track.scrollLeft + track.clientWidth < track.scrollWidth - 1);
+    if (wider) hint.textContent = "In view: " + axisLabel(at(track.scrollLeft)) + " to " +
+      axisLabel(at(track.scrollLeft + track.clientWidth)) + " of " + axisLabel(1) + "; scroll sideways for the rest.";
+  };
+  track.addEventListener("scroll", show, { passive: true });
+  box._showInView = show;
 }
 
 // The timelines are drawn to their box's width, so they are drawn again
@@ -1627,6 +1868,24 @@ function watchTimelineWidth() {
   const check = () => { if (page.runs.length && timelineWidth(container.clientWidth) !== page.timelineWidth) renderTimelines(); };
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => window.requestAnimationFrame(check)).observe(container);
   else window.addEventListener("resize", () => window.requestAnimationFrame(check));
+}
+
+/* Where a step's block ends. A full log's step lasts until the agent's
+   next one, as the stock timeline draws it. A run with no transcript has
+   only its hub calls, and the time between two of them holds the agent's
+   own calls, which nothing recorded: each call is drawn only as long as
+   it took, over a band that marks the agent's unrecorded span. */
+function blockEnd(run, own, i) {
+  const s = own[i];
+  if (hubOnly(run)) return s.end_ms != null ? s.end_ms : s.t_ms;
+  return i + 1 < own.length ? own[i + 1].t_ms : (s.end_ms || s.t_ms);
+}
+
+function unrecordedBands(run, x, laneY, laneH) {
+  return run.agents.filter((a) => a.first_ms != null && a.last_ms != null).map((a) => '<rect class="unrecorded" x="' +
+    x(a.first_ms).toFixed(1) + '" y="' + (laneY(a.lane) + 2) + '" width="' + Math.max(x(a.last_ms) - x(a.first_ms), 1).toFixed(1) +
+    '" height="' + (laneH - 6) + '"><title>' + escapeHtml(laneLetter(run, a.lane) + "'s span, " + formatMs(a.last_ms - a.first_ms) +
+    ": no transcript, so its own calls between its hub calls were not recorded") + "</title></rect>");
 }
 
 function timelineFor(run, percent, longest, width) {
@@ -1641,11 +1900,11 @@ function timelineFor(run, percent, longest, width) {
   run.lanes.forEach((lane) => parts.push('<text class="lane-label" x="2" y="' + (laneY(lane) + 14) + '">' + escapeHtml(laneLetter(run, lane)) + "</text>"));
   if (run.start_ms == null) parts.push('<text class="axis" x="' + LEFT + '" y="20">no step times</text>');
   else {
+    if (hubOnly(run)) parts.push(...unrecordedBands(run, x, laneY, laneH));
     run.lanes.forEach((lane) => {
       const own = run.steps.filter((s) => s.lane === lane && !s.hidden && s.t_ms != null);
       own.forEach((s, i) => {
-        const next = i + 1 < own.length ? own[i + 1].t_ms : (s.end_ms || s.t_ms);
-        const w = Math.max(x(next) - x(s.t_ms), 1.5);
+        const w = Math.max(x(blockEnd(run, own, i)) - x(s.t_ms), hubOnly(run) ? 2 : 1.5);
         parts.push('<rect class="block tt-' + escapeHtml(s.type) + '" tabindex="0" data-run="' + run.index + '" data-uid="' + escapeHtml(s.uid) +
           '" x="' + x(s.t_ms).toFixed(1) + '" y="' + (laneY(lane) + 2) + '" width="' + w.toFixed(1) + '" height="' + (laneH - 6) +
           '"><title>' + escapeHtml(formatMs(s.t_ms - run.start_ms) + " " + s.type + " " + s.name) + "</title></rect>");
@@ -1683,7 +1942,8 @@ function timelineFor(run, percent, longest, width) {
   parts.push('<defs><marker id="arrowhead" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="5" markerHeight="5" orient="auto">' +
     '<path d="M0 0 L6 3 L0 6 z" fill="currentColor"/></marker></defs></svg>');
   box.innerHTML = '<div class="muted">' + escapeHtml(run.label) + " " + kindBadge(run) + " " + clockBadge(run) + "</div>" +
-    '<div class="track">' + parts.join("") + "</div>";
+    '<div class="track">' + parts.join("") + '</div><div class="scroll-hint hidden"></div>';
+  watchTimelineScroll(box, (f) => percent ? Math.round(f * 100) + "%" : formatMs(f * span), W, LEFT);
   return box;
 }
 
@@ -1804,6 +2064,7 @@ function renderColumns() {
 // stock viewer's steps (an OpenHands event list, whose observations sit in
 // their actions' cards) the count says so.
 function listCountText(run, shown) {
+  if (hubOnly(run)) return shown + " of " + run.steps.length + " hub calls shown (no transcript: the agents' own calls are missing)";
   if (run.steps.length === run.stock_steps.total) return shown + " of " + run.steps.length + " steps shown";
   return shown + " of " + run.steps.length + " step cards shown (" + run.stock_steps.total + " steps; a card holds an " +
     "action with its observation)";

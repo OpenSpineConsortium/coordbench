@@ -688,17 +688,23 @@ class OutcomeHeuristicsTest(unittest.TestCase):
                          [("src/click/termui.py", "# agent2 inserts the priority handling here")])
 
     def test_an_insertion_marker_marks_where_another_agent_inserts_code(self):
-        """App D's own example and the comments that do what it does count;
-        a comment that only names an agent, or a placeholder of the code's
-        own, does not."""
+        """App D's own example and the comments that do what it does count,
+        App H's bracketed insertion point among them; a comment that only
+        names an agent, says what an agent's code does, names an
+        identifier that starts with agent_, or is a placeholder of the
+        code's own, does not."""
         markers = ["// [handleSubmit:onFinally] other agent inserts", "# agent2 inserts the priority handling here",
                    "# agent 2 will add the validation below", "# The other agent's code goes here",
                    "# reserved for agent2", "// [handleSubmit:onFinally] insert here",
-                   "# agent2: add priority handling below", "# agent2's implementation will go below"]
+                   "# agent2: add priority handling below", "# agent2's implementation will go below",
+                   "# insertion point for agent2", "# Feature 2 code goes here (other agent)",
+                   "// [Conditional filters overlay insertion point]", "# agent_2 to add the validation"]
         not_markers = ["# agent1 was here", "# Added by agent2", "# placeholder value for the default",
                        "# Partner API client", "// [handleSubmit:onFinally]", "# TODO: ask agent_2 about this",
                        "# we add a cache here", "# This handles another agent request type",
-                       "# The partner API adds a header"]
+                       "# The partner API adds a header", "# Agent 1 put this in", "# agent_config adds defaults",
+                       "# Our partner adds a fee", "# teammate puts the files on disk",
+                       "# insertion point for new handlers", "# config goes here"]
         for comment in markers:
             self.assertTrue(judge.is_insertion_marker(comment), comment)
         for comment in not_markers:
