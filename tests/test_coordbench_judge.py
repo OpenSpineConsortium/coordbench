@@ -687,6 +687,27 @@ class OutcomeHeuristicsTest(unittest.TestCase):
         self.assertEqual([(f["file"], f["line"]) for f in found],
                          [("src/click/termui.py", "# agent2 inserts the priority handling here")])
 
+    def test_an_insertion_marker_marks_where_another_agent_inserts_code(self):
+        """App D's own example and the comments that do what it does count;
+        a comment that only names an agent, or a placeholder of the code's
+        own, does not."""
+        markers = ["// [handleSubmit:onFinally] other agent inserts", "# agent2 inserts the priority handling here",
+                   "# agent 2 will add the validation below", "# The other agent's code goes here",
+                   "# reserved for agent2", "// [handleSubmit:onFinally] insert here",
+                   "# agent2: add priority handling below", "# agent2's implementation will go below"]
+        not_markers = ["# agent1 was here", "# Added by agent2", "# placeholder value for the default",
+                       "# Partner API client", "// [handleSubmit:onFinally]", "# TODO: ask agent_2 about this",
+                       "# we add a cache here", "# This handles another agent request type",
+                       "# The partner API adds a header"]
+        for comment in markers:
+            self.assertTrue(judge.is_insertion_marker(comment), comment)
+        for comment in not_markers:
+            self.assertFalse(judge.is_insertion_marker(comment), comment)
+        lines = "".join(f"+{comment}\n" for comment in markers[:2] + not_markers[:2])
+        patch = f"diff --git a/src/app.js b/src/app.js\n--- a/src/app.js\n+++ b/src/app.js\n@@ -1,1 +1,5 @@\n{lines}"
+        found = judge.insertion_markers({"agent1": patch})
+        self.assertEqual([f["line"] for f in found], markers[:2])
+
     def test_unanswered_requests_and_a_clean_merge_that_fails(self):
         events = [{"seq": 4, "kind": "request", "request_id": "a"}, {"seq": 5, "kind": "request", "request_id": "b"},
                   {"seq": 6, "kind": "response", "request_id": "a"}]

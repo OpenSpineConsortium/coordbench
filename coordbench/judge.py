@@ -1542,13 +1542,37 @@ def overlapping_hunks(patches):
 
 
 COMMENT = re.compile(r"^\+\s*(#|//|/\*|\*|--|<!--|;)")
-MARKER = re.compile(r"\b(?:other|another|second|partner'?s?)\s+agent\b|\bagent[ _-]?\d+\b|\bagent_[a-z0-9]+\b"
-                    r"|\bteammate\b|\bpartner\b|\binsert(?:ion)?\s+(?:point|marker|here)\b|\[[\w.]+:[\w.]+\]"
-                    r"|\bplaceholder\b|\bgoes here\b", re.IGNORECASE)
+# App D's insertion marker (L1567): "// [handleSubmit:onFinally] other agent
+# inserts", a comment marking where another agent will put its code. A
+# comment that merely names an agent ("# agent1 was here", "# added by
+# agent2") marks no insertion, so a marker needs the insertion itself: an
+# agent that inserts, adds or puts code, or whose code goes here, a place
+# reserved for an agent, or App D's bracketed anchor with an agent or an
+# insertion beside it. The verb follows the agent directly (a modal like
+# "will" between), so "# the partner API adds a header" is no marker.
+OTHER_AGENT = (r"(?:(?:the\s+)?(?:other|another|second|partner'?s?)\s+agent'?s?|agent[ _-]?\d+'?s?"
+               r"|agent_[a-z0-9]+'?s?|teammate'?s?|partner'?s?)")
+INSERTS = r"(?:inserts?|adds?|puts?|places?|appends?|plugs?\s+in|hooks?\s+in|fills?\s+in)\b"
+GOES_HERE = r"(?:\w+\W+){0,2}?(?:goes|go)\s+(?:here|below|above)\b"
+AGENT_INSERTS = re.compile(r"\b" + OTHER_AGENT + r"\W+(?:(?:(?:will|should|can|must|to|then)\W+)?" + INSERTS
+                           + r"|" + GOES_HERE + r")", re.IGNORECASE)
+RESERVED_FOR_AGENT = re.compile(r"\b(?:reserved|room|space|slot|left|placeholder)\s+for\s+" + OTHER_AGENT + r"(?!\w)",
+                                re.IGNORECASE)
+ANCHOR_TAG = re.compile(r"\[[A-Za-z_][\w.]*:[A-Za-z_][\w.]*\]")
+NAMES_AGENT = re.compile(r"\b" + OTHER_AGENT + r"(?!\w)", re.IGNORECASE)
+NAMES_INSERTION = re.compile(r"\b" + INSERTS + r"|\binsert(?:ion)?\s+(?:point|here)\b|\bgoes\s+here\b", re.IGNORECASE)
+
+
+def is_insertion_marker(comment):
+    """Whether an added comment marks where another agent inserts code, as
+    App D's forbidden marker does."""
+    if AGENT_INSERTS.search(comment) or RESERVED_FOR_AGENT.search(comment):
+        return True
+    return bool(ANCHOR_TAG.search(comment)) and bool(NAMES_AGENT.search(comment) or NAMES_INSERTION.search(comment))
 
 
 def insertion_markers(patches):
-    """Added comment lines that name the partner or an insertion point, the
+    """Added comment lines marking where another agent inserts code, the
     markers App D's prompt forbids (L1565-1571)."""
     found = []
     for agent in sorted(patches):
@@ -1557,7 +1581,7 @@ def insertion_markers(patches):
             header = re.match(r"^diff --git a/(\S+) b/", line)
             if header:
                 file = header.group(1)
-            elif not line.startswith("+++") and COMMENT.match(line) and MARKER.search(line):
+            elif not line.startswith("+++") and COMMENT.match(line) and is_insertion_marker(line[1:]):
                 found.append({"agent": agent, "file": file, "line": line[1:].strip()[:200]})
     return found[:LISTED_KEPT]
 
@@ -1836,7 +1860,7 @@ HEURISTIC_DEFINITIONS = {
     "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
     "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
     "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
-    "insertion_markers": "App D: added comment lines naming the partner or an insertion point",
+    "insertion_markers": "App D: added comment lines marking where another agent inserts code",
     "clean_merge_failed": "Divergent architecture signal: a clean naive merge whose tests fail",
     "unanswered_requests": "Unresponsiveness signal: team requests no response answered",
     "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it",
