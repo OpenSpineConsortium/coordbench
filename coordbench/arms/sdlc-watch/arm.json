@@ -1,0 +1,10 @@
+{
+  "entry": "arm.py:SdlcWatchArm",
+  "name": "sdlc-watch",
+  "description": "The sdlc arm with each agent watching its peers' open pull requests while it works: early drafts, frequent pushes, and a tool that sets every peer's branch beside the agent's own, so overlap and duplicated work show up before the merge gate.",
+  "needs": [
+    "git_remote"
+  ],
+  "plugins": [],
+  "mcp_servers": {}
+}

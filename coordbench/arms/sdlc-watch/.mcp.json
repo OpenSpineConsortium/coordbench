@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "coordbench": {
+      "type": "http",
+      "url": "${COORD_MCP_URL}",
+      "timeout": 330000,
+      "headers": {"Authorization": "Bearer ${COORD_AGENT_TOKEN:-}"}
+    }
+  }
+}

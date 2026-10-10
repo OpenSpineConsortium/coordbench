@@ -114,7 +114,7 @@ COMPACT = (",", ":")
 
 # The arms whose agents share a git remote, which the website files under
 # coop_git and the stock viewer opens with setting=coopGit.
-GIT_ARMS = ("coop-git", "sdlc")
+GIT_ARMS = ("coop-git", "sdlc", "sdlc-watch")
 SETTING_DIRS = ("coop", "coop_git")
 # The dataset renamed typst to typst_task after 59bbf65; the website keeps
 # the paper models' rows under the old name and the Gemini rows under the
@@ -141,7 +141,8 @@ TEST_COMMAND = re.compile(r"\b(pytest|go test|cargo test|npm test|jest|vitest)\b
 SEND_TOOLS = ("send_message", "broadcast")
 RECEIVE_TOOLS = ("receive_messages", "wait_for_message")
 TEAM_TASK_TOOLS = ("task_create", "task_claim", "task_update", "task_list")
-SDLC_TOOLS = ("board", "claim_issue", "open_pull_request", "mark_ready", "pull_request_status")
+SDLC_TOOLS = ("board", "claim_issue", "open_pull_request", "mark_ready", "pull_request_status",
+              "peer_pull_requests")
 COORDINATION_TOOLS = (SEND_TOOLS + RECEIVE_TOOLS + ("peek_messages", "list_agents") + TEAM_TASK_TOOLS
                       + ("request", "respond", "pending") + SDLC_TOOLS)
 # The shell commands, as cli.py installs them and CooperBench's coop_msg.py
@@ -152,7 +153,7 @@ ALIASES = {
     "coop-task-claim": "task_claim", "coop-task-update": "task_update", "coop-task-list": "task_list",
     "coop-request": "request", "coop-respond": "respond", "coop-pending": "pending",
     "sdlc-board": "board", "sdlc-claim": "claim_issue", "sdlc-pr": "open_pull_request",
-    "sdlc-ready": "mark_ready", "sdlc-status": "pull_request_status",
+    "sdlc-ready": "mark_ready", "sdlc-status": "pull_request_status", "sdlc-peers": "peer_pull_requests",
 }
 MCP_TOOL = re.compile(r"^mcp__(.+)__(\w+)$")
 COORDINATION_SERVER = re.compile(r"coordbench|cooperbench", re.IGNORECASE)

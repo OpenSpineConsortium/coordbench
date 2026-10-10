@@ -37,6 +37,7 @@ Three things plug in:
 | coop-git | coop plus a shared git remote they push to and merge from | git_remote |
 | team | a lead and members, a shared task list, typed requests, a scratchpad; its wait_for_message works, where CooperBench's did not (see below) | shared_volume |
 | sdlc | sdlc-template's claim protocol: issues, exclusive claims, pull requests, a merge gate that answers "main moved" | git_remote |
+| sdlc-watch | sdlc plus watching the peers' pull requests while working: early drafts, frequent pushes, and a tool that sets each peer's branch beside one's own (shared files, whether the two merge cleanly, lines both added) | git_remote |
 
 solo, coop, coop-git, coop-nocomm and team are CooperBench's own arms
 (cooperbench/CooperBench at 63b9d44, MIT licence) re-made as plug-ins:
@@ -136,6 +137,27 @@ scripts/check.sh fails on a copy that differs from its record.
 coordbench/vendor/README.md says how the copy is refreshed, and
 tests/test_coordbench_vendor.py holds it to the record and, on CI, which
 clones sdlc-protocol, to the library's own files.
+
+The sdlc-watch arm is the sdlc arm, loaded from its directory as coop-git
+loads coop, plus one tool and one section of the prompt. The sdlc arm's
+board sets each branch beside main only, so two drafts that change the
+same lines, or each write the same helper, find out at the merge gate
+after both are done. sdlc-watch adds peer_pull_requests (sdlc-peers),
+which reads the shared remote and sets every peer's pull request beside
+the caller's branch: the files each changes, the files both change and
+the lines each touched there, whether the two branches merge cleanly as
+they stand (git merge-tree), the lines both added, and whether the peer
+pushed since the caller last looked. Each side's change is read from
+where it left main and the other branch, so an agent that took its
+peer's work by merging the peer's branch is not told that what it took
+overlaps. The prompt asks for the habits that make the tool worth
+calling: open the draft at the first commit, push after each step that
+works, look after every push and before marking ready, and settle
+overlap while both pull requests are drafts. Every look is a peer_check
+event, and the metrics add how often each agent looked, when overlap
+and a conflict were first seen, the most lines both added, and when
+each draft was opened, beside the sdlc arm's merge_conflicts, so a run
+says whether a conflict was seen before the gate met it.
 
 ## An arm is a Claude Code plugin
 
