@@ -327,6 +327,23 @@ def write_multi_pair(pair_dir, model, arm, outcome):
     write_json(pair_dir / "eval.json", evaluation)
 
 
+class HeuristicsAlone(unittest.TestCase):
+    """judge.py heuristics calls no model and writes calls {}: the report
+    shows its cross-checks and names no judge."""
+
+    def test_a_judge_json_of_heuristics_alone_names_no_judge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pair = Path(tmp) / "coop-h" / "coop" / KEYS[0]
+            write_multi_pair(pair, "m1", "coop", ({"status": "clean", "strategy": "naive"}, True))
+            write_json(pair / "judge.json", {"format": "coordbench-judge/1", "calls": {},
+                                             "heuristics": {"overlapping_hunks": [{"file": "a.py"}]}})
+            text = render(Path(tmp), [("coop", "coop-h")])
+        failures = text.split("## Failure modes")[1].split("\n## ")[0]
+        self.assertIn("none called, the free heuristics only", failures)
+        self.assertNotIn("- / - / -", failures)
+        self.assertIn("overlapping_hunks", failures)
+
+
 class ExperimentTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

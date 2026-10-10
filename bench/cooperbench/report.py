@@ -74,12 +74,20 @@ import os
 import random
 import re
 import statistics
+import sys
 from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
 
-import dataset_stats
-import difficulty
+# The two modules beside this one, found from here and not from the
+# caller's path, so the report also runs as `python3 -I report.py`, the
+# safe way to run it over logs from elsewhere.
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import dataset_stats  # noqa: E402
+import difficulty  # noqa: E402
 
 ARMS = ("solo", "coop", "coop-git", "team")
 # The authors' flash results with codex and gpt-5.5, one seed, unreviewed
@@ -1462,7 +1470,8 @@ def judge_provenance(groups):
     """Who judged, as backend / model / prompt variant: per section from
     judge.json's calls, where judge.py records every call it made, since
     its top-level fields name only the latest; the top level for a
-    judge.json without calls."""
+    judge.json without calls. A judge.json of the free heuristics alone
+    names no judge, since no model was called."""
     seen = set()
     for pair in (p for g in groups for p in g.pairs):
         judge = pair_judge(pair)
@@ -1471,7 +1480,7 @@ def judge_provenance(groups):
         calls = judge.get("calls")
         if isinstance(calls, dict) and any(isinstance(c, dict) for c in calls.values()):
             seen.update(f"{name}: {judged_by(call)}" for name, call in calls.items() if isinstance(call, dict))
-        else:
+        elif judge.get("backend") or judge.get("model"):
             seen.add(judged_by(judge))
     return sorted(seen)
 
@@ -1578,11 +1587,12 @@ def emergent_rows(groups):
 
 
 def failure_section(groups):
-    provenance = judge_provenance(groups)
-    if not provenance:
+    if not any(pair_judge(p) for g in groups for p in g.pairs):
         return section("Failure modes", [f"{NOT_RECORDED}: no judge.json in these runs (coordbench/judge.py "
                                          "writes one per pair; no model is called here)."])
-    body = ["Judge (backend / model / prompt variant): " + "; ".join(provenance) + "."]
+    provenance = judge_provenance(groups)
+    body = ["Judge (backend / model / prompt variant): "
+            + ("; ".join(provenance) if provenance else "none called, the free heuristics only") + "."]
     errors, codes = error_rows(groups)
     if errors:
         body += ["", "Communication errors, one label per conversation, accepted only with two verified quotes; "

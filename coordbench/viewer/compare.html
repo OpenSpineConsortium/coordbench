@@ -544,7 +544,8 @@ function coordbenchOutcome(run, o) {
 
 function coordbenchLabels(run, judge, cause) {
   if (judge && typeof judge === "object") {
-    run.labels.judge_meta = { backend: judge.backend, model: judge.model, prompt_variant: judge.prompt_variant };
+    run.labels.judge_meta = { backend: judge.backend, model: judge.model, prompt_variant: judge.prompt_variant,
+      calls: judge.calls && typeof judge.calls === "object" ? judge.calls : null };
     const ce = judge.commerrors || judge.communication_errors;
     if (ce) {
       const issue = ce.issue || null;
@@ -1262,13 +1263,28 @@ function renderAgentsTable() {
     "<th class=\"num\">Cost</th></tr></thead><tbody>" + rows.join("") + "</tbody>";
 }
 
+// Who judged a run: judge.json's top level names only the latest call,
+// so each judge's backend and model with every prompt variant it ran,
+// from judge.json's calls when it has them.
+function judgeCaption(meta) {
+  const calls = meta.calls ? Object.values(meta.calls).filter((c) => c && typeof c === "object") : [];
+  if (!calls.length) return [meta.backend, meta.model, meta.prompt_variant].filter(Boolean).join(", ");
+  const byJudge = new Map();
+  for (const call of calls) {
+    const who = [call.backend, call.model].filter(Boolean).join(", ");
+    if (!byJudge.has(who)) byJudge.set(who, []);
+    if (call.prompt_variant && !byJudge.get(who).includes(call.prompt_variant)) byJudge.get(who).push(call.prompt_variant);
+  }
+  return Array.from(byJudge, ([who, variants]) => who + (variants.length ? ": " + variants.join(", ") : "")).join("; ");
+}
+
 function renderMatrix() {
   const table = el("matrix-table");
   if (!page.runs.length) { table.innerHTML = '<tr><td class="empty">No runs loaded yet.</td></tr>'; return; }
   const head = "<thead><tr><th>Run</th>" + MATRIX_COLUMNS.map(([, label]) => "<th scope=\"col\">" + escapeHtml(label) + "</th>").join("") +
     "</tr></thead>";
   const body = page.runs.map((r) => "<tr><td>" + escapeHtml(r.label) + (r.labels.judge_meta ? '<div class="muted">judge ' +
-    escapeHtml([r.labels.judge_meta.backend, r.labels.judge_meta.model, r.labels.judge_meta.prompt_variant].filter(Boolean).join(", ")) +
+    escapeHtml(judgeCaption(r.labels.judge_meta)) +
     "</div>" : "") + "</td>" + MATRIX_COLUMNS.map(([key]) => {
     const c = matrixCell(r, key);
     const title = c.source === "judge" && r.labels.judge_meta ? "judge: " + (r.labels.judge_meta.model || "") : c.source || "";

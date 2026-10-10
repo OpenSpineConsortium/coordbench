@@ -16,6 +16,10 @@ CooperBench's own evaluation, and the agents are Claude Code.
   that bring CooperBench up in a Claude Code cloud session, prepare a task
   image and run CooperBench's own four arms, and report.py, which sets
   the arms side by side.
+- coordbench/README.md's "After a run" names what reads a run's files
+  afterwards: the merge cascade in eval.json, the export for
+  CooperBench's viewer and the comparison page (coordbench/viewer/), and
+  the failure-mode judge, which calls a model only when the owner runs it.
 - docs/research.md is the research the design rests on, and
   docs/mcp-timeout.md why every arm's .mcp.json sets a timeout.
 

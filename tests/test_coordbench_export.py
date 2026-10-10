@@ -565,6 +565,14 @@ class Site(unittest.TestCase):
         self.assertEqual(block["cause"], {"cause": "commitment", "note": "said it would, did not"})
 
 
+class DriverNames(unittest.TestCase):
+
+    def test_a_driver_of_ones_own_is_named_by_its_class(self):
+        self.assertEqual(export.driver_of({"driver": "/home/me/drivers/fake.py:FakeDriver"}), "FakeDriver")
+        self.assertEqual(export.driver_of({"driver": "claude-cli"}), "claude-cli")
+        self.assertEqual(export.driver_of({"agent_framework": "claude_code"}), "claude_code")
+
+
 def generate_coop_index_passed(item):
     """The cascade generate_coop_index.py's parse_aggregated_results runs
     over a detailed_results entry (website scripts, lines 38-65)."""

@@ -1543,7 +1543,13 @@ def arm_of(result):
 
 
 def driver_of(result):
-    return result.get("driver") or result.get("agent_framework")
+    """The driver's name: a built-in one as run.py records it, and one of
+    the owner's own (path/to/driver.py:Class) by its class, so the
+    viewer's model key does not carry a host's directories."""
+    driver = result.get("driver") or result.get("agent_framework")
+    if isinstance(driver, str) and ".py:" in driver:
+        return driver.rpartition(":")[2]
+    return driver
 
 
 # The dataset beside the run: feature titles by the website's own rule,

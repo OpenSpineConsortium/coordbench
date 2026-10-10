@@ -163,7 +163,7 @@ const sandbox = { console, URLSearchParams, TextDecoder, Date, JSON, Math, Set, 
   window: { COORDBENCH_COMPARE_NO_START: true, location: { search: "" } },
   document: { getElementById: (id) => ({ textContent: id === "coordbench-schema" ? schema : "null" }) } };
 vm.createContext(sandbox);
-vm.runInContext(main + "\n;globalThis.__api = { detectShape, normalise, matrixCell, MATRIX_COLUMNS };", sandbox);
+vm.runInContext(main + "\n;globalThis.__api = { detectShape, normalise, matrixCell, MATRIX_COLUMNS, judgeCaption };", sandbox);
 const api = sandbox.__api;
 const cases = JSON.parse(fs.readFileSync(0, "utf8"));
 const out = cases.map((c) => {
@@ -173,7 +173,8 @@ const out = cases.map((c) => {
     api.MATRIX_COLUMNS.forEach(([key]) => { const cell = api.matrixCell(run, key); cells[key] = [cell.state, cell.source]; });
     return { label: c.label, shape: run.shape, steps: run.steps.length, hidden: run.steps.filter((s) => s.hidden).length,
       lanes: run.lanes, messages: run.messages.map((m) => [m.from, m.to, m.read_ms != null]), kind: run.timestamps_kind,
-      speed: run.speed, outcome: run.outcome, cells, flags: run.flags, warnings: run.warnings.length };
+      speed: run.speed, outcome: run.outcome, cells, flags: run.flags, warnings: run.warnings.length,
+      judge: run.labels.judge_meta ? api.judgeCaption(run.labels.judge_meta) : null };
   } catch (error) { return { label: c.label, error: error.message }; }
 });
 process.stdout.write(JSON.stringify(out));
@@ -224,6 +225,17 @@ def stepless_sample():
                                       "conversation": None, "judge": json.loads((FIXTURE / "judge.json").read_text())}}
 
 
+def judged_sample():
+    """The fixture's export with judge.json's calls, as judge.py writes
+    them: one entry per section, each naming its own judge."""
+    data = export.build_trajectory(FIXTURE, NO_DATASET)
+    data["metadata"]["coordbench"]["failure_modes"]["calls"] = {
+        "commerrors": {"backend": "claude-cli", "model": "m1", "prompt_variant": "appF-7"},
+        "symptoms": {"backend": "claude-cli", "model": "m1", "prompt_variant": "symptoms-r1"},
+        "speech_acts": {"backend": "openai-compatible", "model": "gpt-5", "prompt_variant": "speechacts-v1"}}
+    return data
+
+
 @unittest.skipUnless(NODE, "node is not on PATH")
 class Normaliser(unittest.TestCase):
     """The page's own normaliser, run by node over one sample per shape."""
@@ -235,7 +247,8 @@ class Normaliser(unittest.TestCase):
                  {"label": "sdk", "data": website_steps(True)}, {"label": "miniswe", "data": website_steps(False)},
                  {"label": "seven", "data": seven_key_sample()}, {"label": "stepless", "data": stepless_sample()},
                  {"label": "unknown", "data": {"hello": 1}},
-                 {"label": "unpublished", "data": legacy_sample(), "extras": {"index_missing": True}}]
+                 {"label": "unpublished", "data": legacy_sample(), "extras": {"index_missing": True}},
+                 {"label": "judged", "data": judged_sample()}]
         done = subprocess.run([NODE, "-e", HARNESS, str(PAGE)], input=json.dumps(cases), capture_output=True,
                               text=True, timeout=60)
         if done.returncode != 0:
@@ -246,7 +259,7 @@ class Normaliser(unittest.TestCase):
         shapes = {label: run.get("shape") for label, run in self.runs.items()}
         self.assertEqual(shapes, {"coordbench": "coordbench", "legacy": "legacy-openhands", "sdk": "openhands-sdk",
                                   "miniswe": "mini-swe", "seven": "seven-key", "stepless": "coordbench-stepless",
-                                  "unknown": None, "unpublished": "legacy-openhands"})
+                                  "unknown": None, "unpublished": "legacy-openhands", "judged": "coordbench"})
         self.assertIn("not a trajectory", self.runs["unknown"]["error"])
 
     def test_the_coordbench_export_reads_whole(self):
@@ -284,6 +297,11 @@ class Normaliser(unittest.TestCase):
         self.assertEqual(run["kind"], "hub-events")
         self.assertEqual(run["steps"], 10)
         self.assertEqual(run["cells"]["unresponsiveness"], ["present", "judge"])
+
+    def test_the_judge_caption_names_every_section_s_judge(self):
+        self.assertEqual(self.runs["judged"]["judge"],
+                         "claude-cli, m1: appF-7, symptoms-r1; openai-compatible, gpt-5: speechacts-v1")
+        self.assertNotIn(";", self.runs["coordbench"]["judge"] or "")
 
     def test_a_missing_index_row_is_not_published_never_a_fail(self):
         run = self.runs["unpublished"]

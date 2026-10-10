@@ -428,8 +428,12 @@ benchmarked as coordination:
 
 ## Drivers
 
-- `claude-cli`: headless Claude Code in each agent's container, the arm
-  loaded with --plugin-dir, as CooperBench's claude_code adapter runs it.
+- `claude-cli`: headless Claude Code in each agent's container, as
+  CooperBench's claude_code adapter runs it, the arm loaded with
+  --plugin-dir on the default tool surface; `--option tool_surface=bash`
+  loads no plugin and, for team, hands over only the cooperbench-team
+  server through --mcp-config (Claude Code expands ${COORD_MCP_URL} and
+  ${COORD_AGENT_TOKEN:-} there as in a plugin's .mcp.json).
   It needs CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in the
   runner's environment, or COORDBENCH_CLAUDE_TOKEN in a cloud environment,
   which withholds the first name and which run.py copies to it; the token reaches the container by name only and is
@@ -651,6 +655,47 @@ load trace.py from beside themselves when the directory was copied whole,
 never the standard library's module of that name, and a process that
 already imported coordbench's trace shares it; a copy of cli.py or
 bridge.py alone records nothing and works as before.
+
+## After a run
+
+What a pair leaves is read by four tools, none of which calls a model
+unless the owner asks it to:
+
+- The merge cascade, coordbench/cascade.py, runs as part of scoring, for
+  every merged pair CooperBench could evaluate, and adds a "cascade"
+  block to eval.json beside CooperBench's own keys, which it never
+  changes: the paper's naive, union and learned-resolver merges, each
+  agent's patch alone against both suites, and both verdicts, 63b9d44's
+  (verdict_63b9d44, CooperBench's both_passed) and the paper era's
+  (verdict_paper_era), never mixed. It runs in a sandbox of its own
+  through CooperBench's backend and merge helpers, from the dataset the
+  scorer was handed, and writes merge_naive.diff, merge_union.diff and
+  merge_llm.diff beside eval.json. The learned resolver runs only when
+  COORDBENCH_RESOLVER_URL names an OpenAI-compatible API base
+  (COORDBENCH_RESOLVER_MODEL picks the model, COORDBENCH_RESOLVER_KEY the
+  key, which no file holds); otherwise the block says it did not run. It
+  costs a sandbox and at least four test runs per pair.
+- export.py writes the pair's trajectory.json.gz once the pair is
+  scored, and `python3 coordbench/export.py <pair or run dir>... --site
+  OUT` lays runs out as CooperBench's website does, so its own viewer
+  opens them; `python3 coordbench/compare.py <pair dir or .json.gz>...
+  -o report.html` puts runs and CooperBench's published trajectories side
+  by side in one offline page (coordbench/viewer/README.md).
+- judge.py labels failure modes as the paper does, run on purpose:
+  `heuristics` (free, no model), `commerrors` (App F), `symptoms`,
+  `speechacts` and `emergent`, with `--backend claude-cli` (the default,
+  the owner's subscription through COORDBENCH_CLAUDE_TOKEN or
+  CLAUDE_CODE_OAUTH_TOKEN, never ANTHROPIC_API_KEY) or
+  `--backend openai-compatible` (COORDBENCH_JUDGE_URL and
+  COORDBENCH_JUDGE_KEY); --dry-run says what would be sent. Each pair
+  gets a judge.json recording, per section, the backend, model and
+  prompt variant; the prompts are under coordbench/prompts/.
+  annotate.py draws the seeded sample of failed pairs for the human
+  cause labels (`causes`), tallies them and writes each into judge.json
+  (`tally --apply`), and measures the symptom judge against human labels
+  (`validate`, `agreement`).
+- bench/cooperbench/report.py reads all of it, old runs included, where a
+  file a run did not write reads "not recorded".
 
 ## The hub, for other harnesses
 
