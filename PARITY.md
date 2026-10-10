@@ -35,10 +35,12 @@ Status:
 - not measured: not computed yet, for the reason given.
 
 Rows 0 to 135 are the rows of the gap matrix this work was planned from,
-in its order. A review of the matrix corrected 22 of them, marked
-"(corrected)" here with the correction applied, and added 13, numbered M1
-to M13. Each row sits in the matrix's category; the review's additions
-are placed where they belong.
+in its order. A review of the matrix made 22 corrections, applied here in
+23 rows (one correction covers both rows 110 and 121), each marked
+"(corrected)" after its title, and added 13 rows, numbered M1 to M13. Row
+71's "(corrected)" is no such mark: "C3b Incorrect claim (corrected)" is
+App F's own name for the category. Each row sits in the matrix's
+category; the review's additions are placed where they belong.
 
 ## Contents
 
@@ -277,8 +279,10 @@ Status: same.
   figure.
 - coordbench: bench/cooperbench/report.py conflict_section and
   conflict_rows: per arm and model, the share of scored pairs whose
-  naive-merge result is known (the cascade's naive.conflict, else
-  eval.json merge.status; missing_input is unknown), with Wilson
+  naive-merge result is known (a finished cascade's
+  has_naive_merge_conflict, else eval.json merge.status; a patch that did
+  not apply, or missing_input, is unknown with or without a cascade, as
+  export.py naive_conflict reads it too), with Wilson
   intervals, and conflict_comparison_rows: exact McNemar between arms of
   one model (coop against coop-nocomm is Fig 5(b)). The exact references
   are REFERENCES["conflict"].
@@ -323,7 +327,12 @@ bound until a resolver runs.
 - coordbench: bench/cooperbench/report.py cascade_section and cascade_rows:
   per arm and model the cumulative Naive, +Union and +LLM shares, both
   verdict rules apart, coop beside coop-nocomm (comm_effect_lines), and
-  the reason the LLM step did not run (llm_reason).
+  the reason the LLM step did not run (llm_reason). The shares are over
+  the pairs whose cascade finished (cascade_finished: ran, no error, its
+  naive step there); a cascade that errored or did not run is counted in
+  its own columns and in no share, since 59bbf65's aggregation never
+  counted a harness failure as a merge failure, and the 63b9d44 column is
+  eval.json's both_passed over the same pairs.
 
 **60. Lead-alone fallback (strategy solo-agent1).** Status: same.
 - CooperBench: 63b9d44 only (eval/sandbox.py 248-269); the paper fails both
@@ -526,7 +535,18 @@ different.
 - coordbench: coordbench/run.py PHASES, record_timing and timed (hub,
   run_create, git_remote, shared_volume, provision, agent, close, score,
   cascade, teardown) into result.json timings; coordbench/timeline.py.
-- Why: coordbench's own diagnostics of what the harness costs.
+  result.json's started_at and ended_at are naive local times, as
+  CooperBench's runner writes them, and so are the timings; the host's
+  offset from UTC goes beside them as utc_offset_seconds, and export.py
+  (host_zone) reads every naive time in that zone, so a run exported or
+  compared on a host in another zone reads the same. A run from before the
+  field has its offset recovered from run_started's epoch against the
+  run_create phase's naive times; one with neither (the session-driver
+  pilots, CooperBench's own runs) is read in the reader's zone, and
+  metadata.coordbench.time_zone says which it was.
+- Why: coordbench's own diagnostics of what the harness costs; the offset,
+  because a naive time read on another host is hours off the transcripts'
+  UTC times.
 
 **35. Absolute timestamps for events and steps.** Status: equivalent.
 - CooperBench: the claude_code parser sorts the session by timestamp and
@@ -601,8 +621,12 @@ Status: same.
 **29. Cost and tokens per run in reports.** Status: same.
 - CooperBench: docs/BENCHMARK_RESULTS.md's cost per framework; the ablation
   CSV's total_cost.
-- coordbench: bench/cooperbench/report.py cost_section: tokens per pair,
-  the cost summed over the pairs that have one, and the cost sources.
+- coordbench: bench/cooperbench/report.py cost_section: tokens per pair
+  over the pairs whose every count is known, the pairs with some count
+  null (the session driver's output count without its final figure) apart
+  as a lower bound with output_tokens_lower_bound, the cost summed over the
+  pairs that have one, and the cost sources. compare.html marks a token
+  total that leaves a count out as a lower bound (">=") in the same way.
 
 ## Communication
 
@@ -660,7 +684,10 @@ Status: same as 63b9d44.
   read_at). is_read comes from the message_ids that coordbench/kit.py's
   receive, wait_for_message and put_back (receive_lost) name.
 - What differs: it is derived from the run's events, not exported from a
-  database; the fields are the export's.
+  database; the fields are the export's, export_timestamp included in its
+  format (59bbf65 openhands_coop.py's time.strftime("%Y-%m-%d %H:%M:%S"),
+  local time to the second with a space, as all 37 of the website's
+  exports have it), while the rows' timestamps are ISO as theirs are.
 
 **40. Message delivery model (push into the next step, or pull)
 (corrected).** Status: different from the paper, same as 63b9d44.
@@ -733,7 +760,13 @@ equivalent.
 - CooperBench: paper Fig 6(a) (claude 14.5 ... qwen coder 1.1); "turn"
   undefined.
 - coordbench: bench/cooperbench/report.py conversation_rows: one turn per
-  send call (a broadcast is one), and speaker runs as a variant.
+  send call (a broadcast is one, a team's request and its response one
+  each), and speaker runs as a variant. The turns are the messages of the
+  conversation coordbench/judge.py labels (pair_sends through
+  judge.conversation_of), each under the id the judge keys its labels by
+  (the delivery's message_id, a team request's or response's seq, a
+  paper-era store's row id, a position in CooperBench's conversation.json),
+  so every speech-act label of rows 42 to 44 finds its message.
 - What differs: the paper does not define a turn, so both readings are
   given, one turn per send call first.
 
@@ -837,7 +870,7 @@ Unresponsiveness, Hallucination).** Status: equivalent.
   naming an identifier or file the sender's patch lacks).
 - Why: kept as printed, C3a and C4a could not be told apart in the output.
 
-**71. C3b Incorrect claim (corrected).** Status: equivalent.
+**71. C3b "Incorrect claim (corrected)", App F's name.** Status: equivalent.
 - CooperBench: App F; Fig 6(d) "Hallucination (corrected)".
 - coordbench: the judge's label only.
 - What differs: the judge model, as row 66.
@@ -1112,7 +1145,13 @@ Status: same.
   subagent open its first reply with a run token (run_token,
   SESSION_PREFACE); SessionDriver.take_transcript finds the transcript that
   carries it under Claude Code's projects directory (find_transcripts,
-  carries_token), waits for it to settle and copies it.
+  carries_token), waits for it to settle and copies it. The token counts in
+  a reply's text or in the prompt (every user line before the first reply,
+  since a Workflow subagent gets the harness's request before its task),
+  never in a tool call's input, and a transcript that names another agent's
+  token of the same run is an orchestrator's and nobody's; a transcript
+  whose reply carries the token is preferred over a newer one whose prompt
+  alone does.
 
 **101. Solo result.json shape and file names.** Status: same.
 - CooperBench: solo.py (119-129): one "agent" block, agent_id "solo", so
@@ -1121,7 +1160,10 @@ Status: same.
   singular "agent" block with CooperBench's keys first; agent_file_id names
   the files solo_*, whatever the arm calls its agent on the hub (agent1).
   Every reader takes both shapes: report.py pair_agents, timeline.py
-  agent_records, runconfig.py result_agents, run.py result_agents.
+  agent_records, runconfig.py result_agents, run.py result_agents; and the
+  readers of the agent's files take the solo_ stem in the solo setting
+  while keeping agent1 as the id the timings and events use (export.py
+  file_stem, judge.py agent_tool_uses).
 
 **102. setting value and directory for team runs.** Status: same.
 - CooperBench: team.py (91, 303): setting team under team/; coop and coop
@@ -1164,11 +1206,16 @@ after CooperBench's.
 Status: different.
 - CooperBench: the volume cb-team-<run_id> is never harvested into the logs
   and never removed, so what the agents wrote there stays in docker.
-- coordbench: coordbench/run.py teardown removes the volume, and nothing
-  copies it first; the task list itself survives as tasks.json (row 48).
-- Left undone: copying /workspace/shared to <pair_dir>/shared/ before
-  teardown. Free; it can only be done while the run is live, so it should
-  come before team runs that matter.
+- coordbench: coordbench/run.py copy_shared_volume copies the volume's last
+  state into <pair_dir>/shared/ (docker cp from an agent's container,
+  which mounts it) at the start of teardown, before the containers and the
+  volume are removed, and with --keep too; then teardown removes the
+  volume. The task list also survives as tasks.json (row 48).
+- Why: better; the agents' plan and handoff patches are in no transcript,
+  and the logs keep them without docker. They sit in a directory of their
+  own so an agent's <agent>.patch never meets the runner's. What the
+  volume held between the copy's moments (a handoff overwritten later) is
+  not kept, as in CooperBench.
 
 **108. Paper-era files (execution and planning trajectories, plans).**
 Status: different.
@@ -1207,9 +1254,15 @@ Status: same.
   rows merged by (repo, taskId, features) with the alias {typst:
   typst_task} (REPO_ALIASES), stats total over every attempted pair,
   passed, rate rounded to one decimal as write_index rounds it, merging
-  twice changing nothing. report.py published_outcomes and the comparison
-  viewer use only the rows with results; a missing row reads "not
-  published", never a fail.
+  twice changing nothing. A typst pair has two rows on the website, so its
+  result joins one of them (row_for: the row under the pair's own repo
+  name, else the first), never both, which would count it twice, and the
+  viewer URL names that row (row_repo); a lookup of a model's result
+  searches both rows for the one that holds it (export.py index_result,
+  compare.py, compare.html indexResult), so neither a Gemini result in the
+  typst_task row nor coordbench's own reads "not published".
+  report.py published_outcomes and the comparison viewer use only the rows
+  with results; a missing row reads "not published", never a fail.
 
 **111. Website tasks.json.** Status: equivalent.
 - CooperBench: the website's scripts/generate_tasks_json.py, from the
@@ -1228,7 +1281,11 @@ Status: same.
   failure, project, id, trajectory_url, step_count}; 7-key steps.
 - coordbench: coordbench/export.py --causes: load_causes, cause_entry,
   merge_causes, write_cause and seven_key_steps, for the pairs a human
-  labelled, with ordinal agent ids.
+  labelled, with ordinal agent ids. A site tree without a causes/index.json
+  gets an empty one (ensure_cause_index), since viewer.astro's
+  initCauseIndex (717-738) fetches it before it reads its URL and loads no
+  trajectory when that fails; so --site works on a fresh directory served
+  as the viewer's public root as well as on the website's public/ tree.
 
 **113. Agent lanes.** Status: different.
 - CooperBench: viewer.astro (597-611): agent_1 is lane A and every other step
@@ -1246,7 +1303,10 @@ Status: same.
   trajectories/<model>/<repo>_<task>_<features>.json.gz.
 - coordbench: coordbench/export.py write_site, setting_dir (coop_git for
   coop-git and sdlc, coop otherwise), model_key ('<model>_<arm>_<driver>'
-  slugged, or --model-key), trajectory_file_name and viewer_url.
+  slugged, or --model-key), trajectory_file_name and viewer_url. A second
+  run of the same key over a pair in one export call goes under the key
+  with its run name added, with a warning (unclaimed_key), so neither run
+  silently replaces the other.
 
 **115. Tool-type classification.** Status: same.
 - CooperBench: viewer.astro getToolType (854-888); a precomputed toolType
@@ -1299,8 +1359,12 @@ different.
   fail (leaderboard.astro 792-858).
 - coordbench: compare.html's runs table and failure-mode presence matrix
   show the outcome, the conflict, the route (N, U, L, lead-alone) and the
-  failure modes per run, each cell marked by its source (judge, human,
-  heuristic); timeline.py's header prints the verdict.
+  failure modes per run, each cell marked by its source (judge, rule,
+  human, heuristic, data): a symptom level judge.json says App G's rule
+  decided (decided_by "rule", a failed pair with no message, where no
+  model was called) or set over the judge's (coerced) reads "rule", and
+  the judge caption shows only when judge.json names a judge;
+  timeline.py's header prints the verdict.
 - Why: better; the stock viewer cannot show why a run failed.
 
 **121. Leaderboard and its 95% intervals (corrected).** Status:
@@ -1310,8 +1374,16 @@ different.
   of row 110; its panel reads index.json (744-858).
 - coordbench: bench/cooperbench/report.py computes every rate's Wilson
   interval and a bootstrap over task sets, and names the rule behind each
-  rate; the exported index.json puts coordbench runs in the website's
-  panel.
+  rate. export.py merges coordbench's rows into index.json in the
+  website's shape (row 110), but the leaderboard does not show them: it
+  draws its rows from its typed-in leaderboardData and opens the panel
+  only for those fixed model keys (renderLeaderboard 677-741, its
+  listener 735-739, openModelPanel 744), never walking index.json's
+  models, so a coordbench key gets no row until leaderboard.astro lists
+  it. (--model-key with a paper model's key would fold coordbench's
+  results into that model's rows and restate its stats over the mix,
+  which is no comparison.) The way in is the viewer URL export.py prints
+  for each pair (/viewer?model=...).
 - Why: computed intervals rather than typed ones, and one rule per column.
 
 **122. Front-page emergent mini-viewer and git-failure components.**
@@ -1369,8 +1441,16 @@ Status: not measured.
 - coordbench: coordbench/run.py pair_finished, the same rule over both
   shapes, which also reruns a pair whose result.json has a top-level error
   (a harness failure); run_one scores again, without its agents, a
-  finished pair that lacks eval.json.
-- What differs: the harness-error rerun, a coordbench addition.
+  finished pair that lacks eval.json. A pair run again in the same
+  directory has the earlier attempt's files packed into
+  previous-<time>.tar.gz first (run.py set_aside_earlier_attempt), and
+  run.py rescore scores pairs from their patches without ever starting
+  their agents, as `cooperbench eval` does.
+- What differs: the harness-error rerun, a coordbench addition; and the
+  packing, since CooperBench's runner reuses the directory with
+  mkdir(exist_ok=True) and leaves what the new attempt does not rewrite,
+  which for coordbench (a judge.json, an agent's _sent.jsonl, a session
+  transcript) the post-hoc tools would read as the new attempt's.
 
 **51. team_features switches, lead_agent, team_role and the ablation
 sweep.** Status: different.
@@ -1709,8 +1789,9 @@ different.
 
 ### Where the review and the matrix disagreed
 
-The review's corrections are applied in rows 2, 6, 15, 17, 18, 19, 21, 23,
-40, 54, 55, 62, 72, 88, 91, 92, 110, 121, 124, 127, 128, 131 and 132, and
+The review's 22 corrections are applied in 23 rows, 2, 6, 15, 17, 18, 19,
+21, 23, 40, 54, 55, 62, 72, 88, 91, 92, 110, 121, 124, 127, 128, 131 and
+132 (one correction is rows 110 and 121 together), and
 its additions are rows M1 to M13. Each was checked against the source where
 it could be: the gold-conflict summary (499 of 652, 76.5%), the two 3-agent
 subsets and their keys, the missing_input precedence in eval/sandbox.py
@@ -1744,8 +1825,6 @@ concerns other repositories.
 Each item is in its row with its reason; here they are in one place, the
 ones a live run would lose first.
 
-- Copying /workspace/shared before teardown (row 107): free, and only
-  possible while a run is live.
 - The n-feature scorer for the 3-agent sets (row 15): free, and possible
   afterwards from the patches a run keeps.
 - The learned resolver's step (row 58): needs a model server.
@@ -1759,9 +1838,12 @@ ones a live run would lose first.
   the LimitsExceeded share (row 129).
 - The coord-<tool> wrappers on the bash surface (row 131), and restricting
   a session subagent's tools to its workspace (row 132).
-- Exported trajectories are keyed by model, arm and driver, so two runs of
-  the same arm over one pair overwrite each other in a site tree unless
-  --model-key tells them apart.
+- Exported trajectories are keyed by model, arm and driver. Within one
+  export call a second run of the same key over a pair goes under the key
+  with its run name added, with a warning; across calls, a pair exported
+  again under the same key replaces the earlier export, which is how a
+  re-export updates a site, so two runs meant to stand side by side are
+  exported with their own --model-key.
 
 What has not been exercised for real, since each would spend tokens or
 needs a service that is not here: a real Claude Code agent under the new
@@ -1827,9 +1909,10 @@ the unit tests only.
 
 A run captures everything that can only be captured live: the message
 text and its read receipts (events.jsonl and the conversation files), the
-transcripts and streams, the team's task log and final list, the shared
-remote's history with its reflog, each agent's model, Claude Code version
-and tools, the provenance and the image, the timings and the patches.
+transcripts and streams, the team's task log and final list and its
+scratchpad volume's last state, the shared remote's history with its
+reflog, each agent's model, Claude Code version and tools, the provenance
+and the image, the timings with the host's UTC offset and the patches.
 Everything else is computed afterwards from those files, and only the
 judge's model-judged sections, a cause draft and the resolver call a model.
 
@@ -1842,18 +1925,18 @@ judge's model-judged sections, a cause draft and the resolver call a model.
 | Cross-play or per-agent models | add `--agent-model agent2=MODEL` | as a run |
 | A session-driver run | `python3 coordbench/run.py prepare --arm ARM --repo R --task T --features A,B` (the session driver is prepare's default), one subagent per printed prompt, then `python3 coordbench/run.py finish --run-dir DIR` | the subagents', on the orchestrating session |
 | CooperBench's own runner on the same pairs | `bash bench/cooperbench/run_arms.sh REPO TASK [solo coop coop-git team coop-nocomm]` | the agents' own |
-| Rescoring old pairs (adds the cascade) | move a pair's eval.json aside and run the same `run.py run` command: a finished pair without eval.json is scored again without its agents (it rewrites the run's config.json and summary.json) | none |
-| The learned resolver's step | set COORDBENCH_RESOLVER_URL (and COORDBENCH_RESOLVER_MODEL, COORDBENCH_RESOLVER_KEY) before the run or the rescoring | one per conflict region, on that endpoint |
+| Rescoring old pairs (adds the cascade) | `python3 coordbench/run.py rescore --run-dir RUN_DIR [--force] [--cooperbench-dir DIR] [--dataset-dir DIR]`, coordbench's `cooperbench eval`: every pair below RUN_DIR without eval.json, or whose merged eval.json has no cascade (every pair with --force), is scored from its patches and plan.json; it starts no hub, container or agent whatever state a pair is in (`run.py run` would run an unfinished pair's agents again), and leaves config.json, result.json and summary.json as the run wrote them | none, but the resolver's when its endpoint is set |
+| The learned resolver's step | set COORDBENCH_RESOLVER_URL (and COORDBENCH_RESOLVER_MODEL, COORDBENCH_RESOLVER_KEY) before the run or the rescoring | up to four per conflict region (three retries, as 59bbf65's litellm num_retries=3), on that endpoint |
 | Rates, gaps, git ablation, pass routes, conflicts, cascade table, agent alone, communication, references, speech-act ratios, failure-mode rates, difficulty, dataset splits, against the published runs | `python3 bench/cooperbench/report.py --run LABEL=RUN ... [--published WEBSITE/public/static/data/coop/index.json] [--difficulty-out difficulty.json]` | none |
 | Difficulty alone | `python3 bench/cooperbench/difficulty.py --solo RUN [--solo RUN2] --arm coop=RUN ... --out difficulty.json` | none |
 | Dataset composition, complexity, gold conflicts, version, audit, gradeability | `python3 bench/cooperbench/dataset_stats.py [--cooperbench-dir DIR] [--json out.json]`; gradeability reports from `bash bench/cooperbench/survey.sh` or `prepare_task.sh` | none (Docker compute for gradeability) |
 | Free cross-checks (heuristics, git-setting detectors, App D checks) | `python3 coordbench/judge.py heuristics RUN_DIR` | none |
 | Communication errors (Fig 6) | `python3 coordbench/judge.py commerrors RUN_DIR [--variant appF-8] [--model M]`, or with `--backend openai-compatible --model gpt-5` and COORDBENCH_JUDGE_URL and COORDBENCH_JUDGE_KEY set, for the paper's annotator model | one per conversation with a message, two when a reply is not JSON |
 | Symptoms (Table 1) | `python3 coordbench/judge.py symptoms RUN_DIR [--variant symptoms-r1-tree]` | one per failed multi-agent pair, two at most |
-| Speech acts (Fig 5c) | `python3 coordbench/judge.py speechacts RUN_DIR` | one per conversation with a message |
-| Emergent tags, blame and sagas | `python3 coordbench/judge.py emergent RUN_DIR` | one per conversation with a message |
+| Speech acts (Fig 5c) | `python3 coordbench/judge.py speechacts RUN_DIR` | one per conversation with a message, two when a reply is not JSON |
+| Emergent tags, blame and sagas | `python3 coordbench/judge.py emergent RUN_DIR` | one per conversation with a message, two when a reply is not JSON |
 | What a judge would be sent | add `--dry-run` to any of the four, or `judge.py render SECTION PAIR_DIR` | none |
-| Causes (Table 2) | `python3 coordbench/annotate.py causes RUN_DIR --out DIR --sample 50 --seed N`, a person fills DIR/labels.json, then `annotate.py tally DIR/labels.json --apply` | none; `--draft` calls one per drawn pair |
+| Causes (Table 2) | `python3 coordbench/annotate.py causes RUN_DIR --out DIR --sample 50 --seed N`, a person fills DIR/labels.json, then `annotate.py tally DIR/labels.json --apply` | none; `--draft` calls one per drawn pair, two when a reply is not JSON |
 | The symptom judge against people (App G) | `python3 coordbench/annotate.py validate RUN_DIR --out DIR`, a person fills DIR/sheet.json, then `annotate.py agreement DIR/sheet.json [OTHER/sheet.json]` | none |
 | CooperBench's viewer over coordbench runs | `python3 coordbench/export.py RUN_DIR --site OUT [--causes DIR/labels.json] [--model-key KEY] [--cooperbench-dir DIR]` | none |
 | Runs side by side in one offline page | `python3 coordbench/compare.py PAIR_DIR_OR_JSON_GZ ... -o report.html [--label L ...] [--baseline N]` | none |

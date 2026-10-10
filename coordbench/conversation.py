@@ -183,13 +183,20 @@ def store_row(number, deliveries, agents, tools, reads):
             "sent_at": first.get("timestamp"), "read_at": read_at}
 
 
+# The store's export_timestamp as the paper era wrote it
+# (openhands_coop.py: time.strftime("%Y-%m-%d %H:%M:%S")), local time to
+# the second with a space; the rows' own timestamps are ISO.
+EXPORT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
 def export_time(events):
-    """When the record ends, in the store's naive ISO form: the run's last
-    event, as coop_msg.py's datetime.now() would have read it then."""
+    """When the record ends, in the store's export_timestamp form: the
+    run's last event in local time, as time.strftime would have read it
+    then."""
     started = run_started(events)
     if started is None or not events:
         return None
-    return datetime.fromtimestamp(epoch_of(events[-1], started)).isoformat()
+    return datetime.fromtimestamp(epoch_of(events[-1], started)).strftime(EXPORT_TIME_FORMAT)
 
 
 def store(events, exported_at=None):

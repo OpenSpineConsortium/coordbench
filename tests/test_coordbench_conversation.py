@@ -129,7 +129,11 @@ class StoreTest(unittest.TestCase):
     def test_the_document_has_the_authors_three_keys(self):
         self.assertEqual(list(self.store), ["messages", "export_timestamp", "total_messages"])
         self.assertEqual(self.store["total_messages"], 3)
-        datetime.fromisoformat(self.store["export_timestamp"])
+        # The paper era's time.strftime("%Y-%m-%d %H:%M:%S"): to the
+        # second, a space between date and time, as the website's exports.
+        stamp = self.store["export_timestamp"]
+        self.assertRegex(stamp, r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+        self.assertEqual(datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S"), datetime.fromisoformat(stamp))
 
     def test_a_row_is_one_send_with_the_authors_keys_first_and_coordbenchs_after(self):
         rows = self.store["messages"]

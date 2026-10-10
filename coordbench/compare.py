@@ -89,9 +89,7 @@ def site_extras(path):
     extras = {"model": model, "setting": setting, "repo": repo, "task": task, "features": features}
     index = export.read_json(data / setting / "index.json")
     if isinstance(index, dict):
-        row = next((t for t in index.get("tasks", []) if export.canonical_repo(t.get("repo")) == export.canonical_repo(repo)
-                    and t.get("taskId") == task and t.get("features") == features), None)
-        result = ((row or {}).get("results") or {}).get(model)
+        result, _ = export.index_result(index, repo, task, features, model)
         extras.update({"index_result": result} if result else {"index_missing": True})
     causes = export.read_json(data / "causes" / "index.json")
     if isinstance(causes, dict):

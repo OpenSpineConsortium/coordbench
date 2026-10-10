@@ -29,7 +29,11 @@ anywhere, offline, and nothing it shows may leave the machine.
 
 `python3 coordbench/export.py <pair_dir>... --site <out>` writes
 coordbench runs into the website's layout, so the same URLs, and
-CooperBench's stock viewer, open them beside the published ones.
+CooperBench's stock viewer, open them beside the published ones. `<out>`
+may be the website's public/ tree, whose index files the export merges
+into, or a fresh directory served as the viewer's public root: the
+export then writes an empty causes/index.json, which the stock viewer
+fetches before anything else and without which it loads no run.
 
 ## What it shows
 
@@ -37,9 +41,13 @@ The runs table; relative speed (wall time, active span, steps, steps per
 minute, time per step, tokens, cost, time to the first message, edit and
 test run and to submit, the longest idle gap, the communication share of
 tool calls, and for coordbench runs the time blocked on peers and the
-hub's own time), each as a value or a ratio to a chosen baseline; the
-failure-mode presence matrix, each cell marked by its source (judge.json,
-human cause labels, a heuristic computed in the page, or the outcome);
+hub's own time), each as a value or a ratio to a chosen baseline, which stays the run
+chosen when another run is removed; the
+failure-mode presence matrix, each cell marked by its source (judge.json's
+model labels, App G's rule where judge.json says it decided a symptom
+level with no model or over the judge's, human cause labels, a heuristic
+computed in the page, or the outcome); a token total that leaves out a
+count nobody measured is marked as a lower bound (">=");
 aligned timelines with a lane per agent, message arrows and hub events;
 two or three step lists side by side with the stock viewer's filters; the
 messages; and, when the runs share a pair, its feature titles and the

@@ -38,10 +38,11 @@ output and here:
   both given),
   concrete line and file references (Sec 5), and, once judge.json holds
   speech acts, their split, the Plan:Question ratio and first-turn
-  planning against conflicts. Message text comes from
-  conversation_store.json, events.jsonl or CooperBench's
-  conversation.json; a run from before the text was logged says "not
-  recorded".
+  planning against conflicts. The messages are the conversation
+  coordbench/judge.py labels (its conversation_of: events.jsonl, with a
+  team's requests and responses, else conversation_store.json, else
+  CooperBench's conversation.json), under the ids its labels are keyed
+  by; a run from before the text was logged says "not recorded".
 - Failure modes from judge.json (coordbench/judge.py): the three
   communication-error groups over both denominators, the symptoms with
   the implementation share and the failure families, the free
@@ -79,15 +80,19 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
 
-# The two modules beside this one, found from here and not from the
-# caller's path, so the report also runs as `python3 -I report.py`, the
-# safe way to run it over logs from elsewhere.
+# The two modules beside this one, and coordbench's judge.py, whose
+# conversation the speech acts are labelled on, found from here and not
+# from the caller's path, so the report also runs as `python3 -I
+# report.py`, the safe way to run it over logs from elsewhere.
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+COORDBENCH = HERE.parent.parent / "coordbench"
+for directory in (HERE, COORDBENCH):
+    if str(directory) not in sys.path:
+        sys.path.insert(0, str(directory))
 
 import dataset_stats  # noqa: E402
 import difficulty  # noqa: E402
+import judge  # noqa: E402
 
 ARMS = ("solo", "coop", "coop-git", "team")
 # The authors' flash results with codex and gpt-5.5, one seed, unreviewed
@@ -199,10 +204,28 @@ def pair_agents(result):
 
 
 def pair_tokens(agents):
-    """The pair's token total, or None when no count is known. A driver
-    that cannot measure usage writes null for the counts (coordbench's
-    run.py), so a null is unknown and a measured zero is a zero."""
-    known = [a.get(k) for a in agents.values() for k in TOKEN_FIELDS if a.get(k) is not None]
+    """The pair's token total, or None unless every count of every agent
+    is known. A driver that cannot measure a count writes null for it
+    (coordbench's run.py: the session driver's output count whenever the
+    transcript lacks the final one), so a null is unknown, a measured zero
+    is a zero, and a sum that leaves a count out is no total. A count a
+    runner never writes (a key that is not there) is not one of its
+    counts."""
+    counts = [a[k] for a in agents.values() if isinstance(a, dict) for k in TOKEN_FIELDS if k in a]
+    return sum(counts) if counts and all(c is not None for c in counts) else None
+
+
+def pair_tokens_lower_bound(agents):
+    """For a pair with some counts known and some not: the known ones,
+    with output_tokens_lower_bound standing in for a null output count,
+    which is as low as the total can be; None for a complete pair or one
+    with nothing known."""
+    if pair_tokens(agents) is not None:
+        return None
+    agents = [a for a in agents.values() if isinstance(a, dict)]
+    known = [a[k] for a in agents for k in TOKEN_FIELDS if a.get(k) is not None]
+    known += [a["output_tokens_lower_bound"] for a in agents
+              if a.get("output_tokens") is None and isinstance(a.get("output_tokens_lower_bound"), (int, float))]
     return sum(known) if known else None
 
 
@@ -277,6 +300,10 @@ class Pair:
     @property
     def tokens(self):
         return pair_tokens(self.agents)
+
+    @property
+    def tokens_lower_bound(self):
+        return pair_tokens_lower_bound(self.agents)
 
     @property
     def cost(self):
@@ -621,12 +648,14 @@ def cost_rows(groups):
     rows = []
     for group in groups:
         tokens = [p.tokens for p in group.pairs if p.tokens is not None]
+        partial = [p.tokens_lower_bound for p in group.pairs if p.tokens_lower_bound is not None]
         costs = [p.cost for p in group.pairs if p.cost is not None]
         seconds = [p.seconds for p in group.pairs if p.seconds]
         sources = sorted({a.get("cost_source") for p in group.pairs for a in p.agents.values()
                           if isinstance(a, dict) and a.get("cost_source")})
         rows.append([group.label, model_name(group.model), len(group.pairs),
                      f"{sum(tokens) / len(tokens):,.0f}" if tokens else "-",
+                     f"{len(partial)}, >= {sum(partial) / len(partial):,.0f}" if partial else "-",
                      f"{sum(costs):.2f}" if costs else "-", ", ".join(sources) or "-",
                      minutes(sum(seconds) / len(seconds) if seconds else None),
                      minutes(statistics.median(seconds) if seconds else None)])
@@ -634,12 +663,16 @@ def cost_rows(groups):
 
 
 def cost_section(groups):
-    header = ["Arm", "Model", "Pairs", "Tokens per pair", "Cost (USD, sum)", "Cost source",
-              "Minutes per pair (mean)", "Minutes per pair (median)"]
+    header = ["Arm", "Model", "Pairs", "Tokens per pair", "Partly counted pairs, tokens per pair", "Cost (USD, sum)",
+              "Cost source", "Minutes per pair (mean)", "Minutes per pair (median)"]
     return section("Cost and time", table(header, cost_rows(groups)) + [
-        "", "A pair whose token counts are all null (a driver that could not measure usage) is left out of "
-        "the tokens, and '-' means no pair was measured. Cost is result.json's total_cost summed over the "
-        "pairs that have one; the median is CooperBench's ablation page's."])
+        "", "Tokens per pair is over the pairs whose four counts are all known for every agent. A pair with "
+        "some counts null (the session driver's output count when the transcript lacks the final one) is no "
+        "total: it is counted apart, with the known counts and output_tokens_lower_bound for the missing "
+        "output as a lower bound, so drivers are never compared on different bases. A pair whose counts "
+        "are all null (a driver that could not measure usage) is in neither, and '-' means no pair. Cost "
+        "is result.json's total_cost summed over the pairs that have one; the median is CooperBench's "
+        "ablation page's."])
 
 
 # Paired comparisons and the coordination gap.
@@ -756,14 +789,25 @@ def git_section(groups, roles):
 
 # Merges.
 
+def cascade_finished(cascade):
+    """Whether a cascade block ran to its end: not skipped (ran false),
+    not cut short by an error in its sandbox or before it (run.py's bare
+    {"error"}), and with its naive step there. A block that did not finish
+    says nothing about the merge, which its nulls would read as failing."""
+    return isinstance(cascade, dict) and cascade.get("ran") is not False and not cascade.get("error") \
+        and isinstance(cascade.get("naive"), dict)
+
+
 def naive_conflict(pair):
-    """Whether the two patches conflict on the naive merge: the cascade's
-    own merge when eval.json has one, else 63b9d44's merge.status (an
-    identical pair merges cleanly; missing_input says nothing); None when
-    unknown or for a single agent."""
-    naive = (pair.cascade or {}).get("naive")
-    if isinstance(naive, dict) and naive.get("conflict") is not None:
-        return bool(naive["conflict"])
+    """Whether the two patches conflict on the naive merge: a finished
+    cascade's has_naive_merge_conflict, which is null when a patch failed
+    to apply (its naive merge then merges an empty branch, so it is no
+    merge of the agents' work), else 63b9d44's merge.status (an identical
+    pair merges cleanly; missing_input says nothing); None when unknown or
+    for a single agent."""
+    if cascade_finished(pair.cascade) and "has_naive_merge_conflict" in pair.cascade:
+        value = pair.cascade["has_naive_merge_conflict"]
+        return None if value is None else bool(value)
     status = pair.merge.get("status")
     if status == "conflicts":
         return True
@@ -776,7 +820,7 @@ def clean_merge_failed(pair):
     or identical merge; None when the merge was not clean."""
     if naive_conflict(pair) is not False or not pair.scored:
         return None
-    naive = (pair.cascade or {}).get("naive")
+    naive = pair.cascade.get("naive") if cascade_finished(pair.cascade) else None
     if isinstance(naive, dict) and naive.get("f1") is not None:
         return not (passed_value(naive.get("f1")) and passed_value(naive.get("f2")))
     return not pair.passed
@@ -865,8 +909,9 @@ def conflict_section(groups):
     header = ["Arm", "Model", "Pairs with a known merge", "Conflicts", "Conflict rate", "95% Wilson",
               "Clean merges", "Clean but tests fail", "Semantic failure rate"]
     body = table(header, conflict_rows(groups)) + [
-        "", "The denominator is the scored pairs whose naive-merge result is known (cascade.naive.conflict, "
-        "else eval.json merge.status; missing_input is unknown), as the website's rates use the rows with a "
+        "", "The denominator is the scored pairs whose naive-merge result is known (a finished cascade's "
+        "has_naive_merge_conflict, else eval.json merge.status; a patch that failed to apply, or "
+        "missing_input, is unknown with or without a cascade), as the website's rates use the rows with a "
         "merge report. The semantic failure rate, the share of clean merges whose tests fail, is "
         "coordbench's own proxy for Sec 5's semantic coordination gap; the paper gives no rate.", "",
         REFERENCES["conflict"]]
@@ -898,18 +943,25 @@ def verdict_value(verdict):
 
 
 def cascade_row(group):
+    """Table 6's row over the pairs whose cascade finished; a cascade that
+    errored (a docker timeout in its own sandbox is no merge failure) or
+    was skipped is counted apart. The 63b9d44 column is eval.json's
+    both_passed over the same pairs, so it is CooperBench's verdict
+    whatever the block holds."""
     with_cascade = [p for p in group.pairs if p.cascade]
     if not with_cascade:
         return None
-    n, steps = len(with_cascade), [cascade_steps(p.cascade) for p in with_cascade]
-    naive = sum(s[0] for s in steps)
-    union = sum(s[0] or s[1] for s in steps)
+    finished = [p for p in with_cascade if cascade_finished(p.cascade)]
+    errored = sum(1 for p in with_cascade if p.cascade.get("error"))
+    skipped = len(with_cascade) - len(finished) - errored
+    n, steps = len(finished), [cascade_steps(p.cascade) for p in finished]
+    rate = (lambda count: 100 * count / n) if n else (lambda count: None)
     llm_ran = any(s[3] for s in steps)
-    llm = sum(s[0] or s[1] or s[2] for s in steps)
-    paper = sum(bool(verdict_value(p.cascade.get("verdict_paper_era"))) for p in with_cascade)
-    code = sum(bool(verdict_value(p.cascade.get("verdict_63b9d44"))) for p in with_cascade)
-    return {"n": n, "naive": 100 * naive / n, "union": 100 * union / n, "llm": 100 * llm / n if llm_ran else None,
-            "paper": 100 * paper / n, "code": 100 * code / n, "llm_reason": llm_reason(with_cascade)}
+    paper = sum(bool(verdict_value(p.cascade.get("verdict_paper_era"))) for p in finished)
+    return {"n": n, "naive": rate(sum(s[0] for s in steps)), "union": rate(sum(s[0] or s[1] for s in steps)),
+            "llm": rate(sum(s[0] or s[1] or s[2] for s in steps)) if llm_ran else None, "paper": rate(paper),
+            "code": rate(sum(p.passed for p in finished)), "errored": errored, "skipped": skipped,
+            "llm_reason": llm_reason(finished)}
 
 
 def llm_reason(pairs):
@@ -925,11 +977,17 @@ def cascade_rows(groups):
         if row is None:
             continue
         found[(group.label, group.model)] = row
-        llm = "not run" if row["llm"] is None else f"{row['llm']:.2f} ({row['llm'] - row['union']:+.1f})"
-        rows.append([group.label, model_name(group.model), row["n"], f"{row['naive']:.2f}",
-                     f"{row['union']:.2f} ({row['union'] - row['naive']:+.1f})", llm,
-                     f"{row['paper']:.2f}", f"{row['code']:.2f}"])
+        rows.append([group.label, model_name(group.model), row["n"], row["errored"], row["skipped"]]
+                    + cascade_cells(row))
     return rows, found
+
+
+def cascade_cells(row):
+    if not row["n"]:
+        return ["-"] * 5
+    llm = "not run" if row["llm"] is None else f"{row['llm']:.2f} ({row['llm'] - row['union']:+.1f})"
+    return [f"{row['naive']:.2f}", f"{row['union']:.2f} ({row['union'] - row['naive']:+.1f})", llm,
+            f"{row['paper']:.2f}", f"{row['code']:.2f}"]
 
 
 def comm_effect_lines(found, roles):
@@ -938,6 +996,8 @@ def comm_effect_lines(found, roles):
         if label != roles["coop"] or (roles["coop-nocomm"], model) not in found:
             continue
         other = found[(roles["coop-nocomm"], model)]
+        if not (row["n"] and other["n"]):
+            continue
         final = row["llm"] if row["llm"] is not None else row["union"]
         final_other = other["llm"] if other["llm"] is not None else other["union"]
         lines.append(f"Communication effect, {model_name(model)}: {final - final_other:+.2f} points "
@@ -961,14 +1021,16 @@ def cascade_section(groups, roles):
         return section("Merge cascade (Table 6)", [
             f"{NOT_RECORDED}: no eval.json here has a cascade block (cascade.py adds it when it scores)."])
     reasons = sorted({row["llm_reason"] for row in found.values() if row["llm_reason"]})
-    header = ["Arm", "Model", "Pairs with a cascade", "Naive %", "+Union % (cumulative)", "+LLM % (cumulative)",
-              "Paper-era verdict %", "63b9d44 verdict %"]
+    header = ["Arm", "Model", "Pairs with a finished cascade", "Cascade errors", "Cascades not run", "Naive %",
+              "+Union % (cumulative)", "+LLM % (cumulative)", "Paper-era verdict %", "63b9d44 verdict %"]
     effects = comm_effect_lines(found, roles)
     body = table(header, rows) + ([""] + effects if effects else []) + [
         "", "naive_ok, union_ok and llm_ok are exclusive and the percentages cumulative, as the legacy "
-        "aggregation computes them, over the pairs with a cascade (the paper's are over all 652). The two "
-        "verdicts are the paper era's rule (naive, union, resolver; no lead-alone fallback) and 63b9d44's, "
-        "never mixed."]
+        "aggregation computes them, over the pairs whose cascade finished (the paper's are over all 652). A "
+        "cascade that errored (its own sandbox failed, or it was cut short) or did not run (the pair or "
+        "CooperBench's evaluation ended in error) is counted apart and in no percentage: it says nothing "
+        "about the merge. The two verdicts are the paper era's rule (naive, union, resolver; no lead-alone "
+        "fallback) and 63b9d44's, eval.json's both_passed, never mixed."]
     if reasons:
         body.append("The learned resolver did not run: " + "; ".join(reasons) + ".")
     filters = cascade_filters(groups)
@@ -1023,16 +1085,6 @@ class Send:
     message_ids: list = field(default_factory=list)
 
 
-def store_sends(pair_dir):
-    store = read_json(pair_dir / "conversation_store.json")
-    if not isinstance(store, dict) or not isinstance(store.get("messages"), list):
-        return None
-    sends = [Send(row.get("from") or row.get("sender_id"), row.get("recipients") or [row.get("to")],
-                  row.get("content"), list(row.get("message_ids") or []))
-             for row in store["messages"] if isinstance(row, dict)]
-    return sends, all(s.content is not None for s in sends)
-
-
 def event_sends(events):
     """The sends of a run's events: deliveries grouped by send_id, or, in
     a record from before send_id was logged, by adjacency (a broadcast
@@ -1061,23 +1113,6 @@ def event_sends(events):
     return sends, all(s.content is not None for s in sends)
 
 
-def cooperbench_sends(pair_dir):
-    """CooperBench's own conversation.json, one entry per delivery."""
-    entries = read_json(pair_dir / "conversation.json")
-    if not isinstance(entries, list):
-        return None
-    sends, seen = [], {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        key = (entry.get("from"), entry.get("message"), entry.get("timestamp"))
-        if key not in seen:
-            seen[key] = Send(entry.get("from"), [], entry.get("message"), [])
-            sends.append(seen[key])
-        seen[key].recipients.append(entry.get("to"))
-    return sends, all(s.content is not None for s in sends)
-
-
 def pair_events(pair):
     if "events" not in pair.cache:
         path = pair.dir / "events.jsonl"
@@ -1087,15 +1122,29 @@ def pair_events(pair):
 
 def pair_sends(pair):
     """(sends, whether their text was recorded), or None when nothing about
-    the messages was recorded."""
+    the messages was recorded. The sends are the messages of the
+    conversation judge.py labels (judge.conversation_of: the events, which
+    hold a team's requests and responses too, else the store, else
+    CooperBench's conversation.json), each with the id the judge keys its
+    speech acts by, so every label finds its message and the turns are the
+    ones it labelled. A record whose text was not logged (the pilots) has
+    no conversation there; its sends still count from its events."""
     if "sends" not in pair.cache:
-        found = store_sends(pair.dir)
+        found = judged_sends(pair)
         if found is None and pair_events(pair) is not None:
             found = event_sends(pair_events(pair))
-        if found is None:
-            found = cooperbench_sends(pair.dir)
         pair.cache["sends"] = found
     return pair.cache["sends"]
+
+
+def judged_sends(pair):
+    record = judge.Pair(pair.dir, pair.result, pair.evaluation, pair_events(pair))
+    conversation = judge.conversation_of(record)
+    if not conversation.recorded:
+        return None
+    sends = [Send(message.sender, list(message.recipients or [message.to]), message.content, [message.id])
+             for message in conversation.messages]
+    return sends, True
 
 
 def speaker_runs(sends):
@@ -1189,10 +1238,10 @@ def pair_judge(pair):
 def speech_act_sources(pair):
     """The speech-act labels judge.json holds, by source: the judge's own
     and, when it kept one, the keyword baseline among its heuristics."""
-    judge = pair_judge(pair) or {}
-    heuristics = judge.get("heuristics") if isinstance(judge.get("heuristics"), dict) else {}
+    judged = pair_judge(pair) or {}
+    heuristics = judged.get("heuristics") if isinstance(judged.get("heuristics"), dict) else {}
     found = {}
-    for source, labels in (("judge", judge.get("speech_acts")),
+    for source, labels in (("judge", judged.get("speech_acts")),
                            ("keyword baseline",
                             heuristics.get("speech_acts") or heuristics.get("speech_acts_keyword"))):
         if isinstance(labels, dict) and labels:
@@ -1244,9 +1293,10 @@ def conversation_section(groups):
               "Overhead: sends / tool calls", "Sends and receives / tool calls",
               "Sends and their results / calls and results", "Pairs with a transcript"]
     return section("Communication", table(header, conversation_rows(groups)) + [
-        "", "A turn is one sent message, one per send call (a broadcast is one turn), from "
-        "conversation_store.json, events.jsonl or CooperBench's conversation.json; speaker runs count the "
-        "changes of speaker instead. The overhead pools the pairs: the sending calls (send_message, "
+        "", "A turn is one sent message, one per send call (a broadcast is one turn; a team's request and "
+        "its response are one each, as the overhead counts them), from the conversation the judge labels "
+        "(events.jsonl, else conversation_store.json, else CooperBench's conversation.json); speaker runs "
+        "count the changes of speaker instead. The overhead pools the pairs: the sending calls (send_message, "
         "broadcast, and the team's request and respond) and the receiving ones (receive_messages, "
         "wait_for_message) as the hub counted them, each alias of a chained shell command apart, or as the "
         "transcripts show them, over every tool call of both agents' own turns (subagents left out). The "
@@ -1421,8 +1471,8 @@ def reference_section(groups):
 def judge_part(pair, *names):
     """One part of the pair's judge.json under any of its names (the
     interface's, then the detector spec's), or None."""
-    judge = pair_judge(pair) or {}
-    return next((judge[n] for n in names if isinstance(judge.get(n), dict)), None)
+    judged = pair_judge(pair) or {}
+    return next((judged[n] for n in names if isinstance(judged.get(n), dict)), None)
 
 
 def judged(group, *names):
@@ -1474,14 +1524,14 @@ def judge_provenance(groups):
     names no judge, since no model was called."""
     seen = set()
     for pair in (p for g in groups for p in g.pairs):
-        judge = pair_judge(pair)
-        if not judge:
+        judged = pair_judge(pair)
+        if not judged:
             continue
-        calls = judge.get("calls")
+        calls = judged.get("calls")
         if isinstance(calls, dict) and any(isinstance(c, dict) for c in calls.values()):
             seen.update(f"{name}: {judged_by(call)}" for name, call in calls.items() if isinstance(call, dict))
-        elif judge.get("backend") or judge.get("model"):
-            seen.add(judged_by(judge))
+        elif judged.get("backend") or judged.get("model"):
+            seen.add(judged_by(judged))
     return sorted(seen)
 
 

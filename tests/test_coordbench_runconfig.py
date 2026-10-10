@@ -191,6 +191,14 @@ class TheSummary(Case):
         self.assertEqual(runconfig.pair_report(pair, "t", "done")["entry"],
                          {"task": "t", "status": "done", "cost": 0.5, "eval": "fail"})
         self.assertTrue(runconfig.pair_report(pair, "t", "skip", eval_skipped=True)["eval_skipped"])
+        # An errored evaluation already on disk counts as an error and not
+        # as skipped, as _process_eval_result returns (0, 0, 1, 0) for it.
+        errored = self.tmp / "e"
+        self.write(errored / "result.json", json.dumps({"total_cost": 1.0}))
+        self.write(errored / "eval.json", json.dumps({"error": "sandbox died", "both_passed": False}))
+        skipped = runconfig.pair_report(errored, "t", "skip", eval_skipped=True)
+        self.assertEqual((skipped["entry"]["eval"], skipped["eval_skipped"]), ("error", False))
+        self.assertEqual(runconfig.eval_tally([skipped]), {"passed": 0, "failed": 0, "errors": 1, "skipped": 0})
         failed = self.tmp / "q"
         self.write(failed / "result.json", json.dumps({"total_cost": None, "error": "DockerError: no"}))
         self.assertEqual(runconfig.pair_report(failed, "t", "done")["entry"],

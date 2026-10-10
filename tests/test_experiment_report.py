@@ -163,7 +163,7 @@ class CooperBenchSoloShapeTest(unittest.TestCase):
         text = render(self.logs, [("solo", "flash-solo-cc")])
         self.assertIn("| solo | m | 1 | 1 | 100.0% |", text)
         self.assertIn("| 0/0 | - | - | 1 | 24/50 |", text)
-        self.assertIn("| solo | m | 1 | 365 | 0.50 |", text)
+        self.assertIn("| solo | m | 1 | 365 | - | 0.50 |", text)
         self.assertIn("pass (agent Error)", text)
 
     def test_a_result_without_either_block_has_no_agents(self):
@@ -191,12 +191,12 @@ class UnknownUsageTest(unittest.TestCase):
 
     def test_measured_zeros_stay_a_zero(self):
         self.assertEqual(self.pair("r", "team", "f1_f6", passed=True, usage=ZEROS).tokens, 0)
-        self.assertIn("| team | - | 1 | 0 | - | - | 2.0 | 2.0 |", render(self.logs, [("team", "r")]))
+        self.assertIn("| team | - | 1 | 0 | - | - | - | 2.0 | 2.0 |", render(self.logs, [("team", "r")]))
 
     def test_the_summary_shows_a_dash_when_no_pair_was_measured(self):
         write_pair(self.logs, "r", "team", "f1_f6", passed=True, usage=UNKNOWN)
         write_pair(self.logs, "r", "team", "f2_f10", passed=False, usage=UNKNOWN)
-        self.assertIn("| team | - | 2 | - | - | - | 2.0 | 2.0 |", render(self.logs, [("team", "r")]))
+        self.assertIn("| team | - | 2 | - | - | - | - | 2.0 | 2.0 |", render(self.logs, [("team", "r")]))
 
     def test_the_summary_averages_over_the_measured_pairs_only(self):
         write_pair(self.logs, "r", "team", "f1_f6", passed=True, usage=UNKNOWN)
@@ -204,11 +204,24 @@ class UnknownUsageTest(unittest.TestCase):
         write_pair(self.logs, "r", "team", "f3_f4", passed=True, usage=MEASURED)
         self.assertIn("| team | - | 3 | 205 |", render(self.logs, [("team", "r")]))
 
-    def test_one_measured_agent_makes_the_pair_known(self):
+    def test_one_measured_agent_makes_the_pair_a_lower_bound_not_a_total(self):
         pair_dir = self.logs / "r" / "team" / "pallets_click_task" / "2068" / "f1_f6"
         agents = {"agent1": {"status": "Submitted", **UNKNOWN}, "agent2": {"status": "Submitted", **MEASURED}}
         write_json(pair_dir / "result.json", {"agents": agents, "duration_seconds": 60})
-        self.assertEqual(report.read_pair(pair_dir, "team", "r").tokens, 110)
+        pair = report.read_pair(pair_dir, "team", "r")
+        self.assertEqual((pair.tokens, pair.tokens_lower_bound), (None, 110))
+
+    def test_a_session_driver_pair_without_its_final_output_count_is_set_apart(self):
+        """The session driver writes output_tokens null when the transcript
+        lacks the final count, and keeps the partial sum as a lower bound:
+        the pair is no total, so it is not averaged with complete ones."""
+        known = {"input_tokens": 100, "cache_read_tokens": 1000, "cache_write_tokens": 100}
+        write_pair(self.logs, "r", "team", "f1_f6", passed=True, usage={**known, "output_tokens": 40})
+        write_pair(self.logs, "r", "team", "f2_f10", passed=True,
+                   usage={**known, "output_tokens": None, "output_tokens_lower_bound": 30})
+        pairs = report.read_run(self.logs, "r")
+        self.assertEqual([(p.tokens, p.tokens_lower_bound) for p in pairs], [(1240, None), (None, 1230)])
+        self.assertIn("| team | - | 2 | 1,240 | 1, >= 1,230 |", render(self.logs, [("team", "r")]))
 
 
 # One experiment: two models, five pairs over two task sets, and the runs
@@ -233,14 +246,19 @@ STORE = {"messages": [
     {"id": 3, "sender_id": "agent_1", "recipient_id": "agent_2", "from": "agent1", "to": "agent2",
      "recipients": ["agent2"], "message_ids": [11], "send_id": 10, "content": "Done, updated termui.py"}],
     "export_timestamp": None, "total_messages": 3}
+# The events the store above was derived from, as conversation.py derives
+# it: the same three sends with the same ids and text.
 EVENTS = [{"seq": 0, "t": 0.0, "kind": "run_started", "agent": "hub"},
           {"seq": 4, "t": 1.0, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "mcp"},
-          {"seq": 5, "t": 1.0, "kind": "message", "agent": "agent1", "to": "agent2", "content": "x",
-           "message_id": 5, "send_id": 4},
-          {"seq": 7, "t": 2.0, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"},
-          {"seq": 8, "t": 2.0, "kind": "message", "agent": "agent2", "to": "agent1", "content": "y",
-           "message_id": 8, "send_id": 7},
-          {"seq": 9, "t": 2.5, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"}]
+          {"seq": 5, "t": 1.0, "kind": "message", "agent": "agent1", "to": "agent2",
+           "content": STORE["messages"][0]["content"], "message_id": 5, "send_id": 4},
+          {"seq": 7, "t": 2.0, "kind": "tool", "agent": "agent2", "tool": "broadcast", "via": "shell"},
+          {"seq": 8, "t": 2.0, "kind": "message", "agent": "agent2", "to": "agent1",
+           "content": STORE["messages"][1]["content"], "message_id": 8, "send_id": 7},
+          {"seq": 9, "t": 2.5, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"},
+          {"seq": 10, "t": 3.0, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "mcp"},
+          {"seq": 11, "t": 3.0, "kind": "message", "agent": "agent1", "to": "agent2",
+           "content": STORE["messages"][2]["content"], "message_id": 11, "send_id": 10}]
 STREAM = [{"type": "system", "subtype": "init"},
           {"type": "assistant", "message": {"id": "a", "content": [
               {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}},
@@ -250,6 +268,11 @@ STREAM = [{"type": "system", "subtype": "init"},
           {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2"}]}},
           {"type": "assistant", "parent_tool_use_id": "t9", "message": {"id": "c", "content": [
               {"type": "tool_use", "id": "t3", "name": "Read", "input": {}}]}}]
+# agent1's stream in the experiment, with its second send.
+FIRST_STREAM = STREAM[:5] + [
+    {"type": "assistant", "message": {"id": "f", "content": [
+        {"type": "tool_use", "id": "t4", "name": "mcp__coordbench__send_message", "input": {}}]}},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t4"}]}}] + STREAM[5:]
 CHAINED = {"command": "coop-send agent1 'y'; coop-recv"}
 SESSION = [{"type": "assistant", "isSidechain": False, "message": {"id": "d", "content": [
                {"type": "tool_use", "id": "u1", "name": "Bash", "input": CHAINED}]}},
@@ -264,7 +287,8 @@ def cascade(merge, passed):
     a conflict that union resolves into a pass, else the naive result."""
     conflict = merge["status"] == "conflicts"
     union = {"ran": conflict, "clean": True, "f1": conflict, "f2": conflict} if conflict else {"ran": False}
-    return {"naive": {"conflict": conflict, "f1": not conflict and passed, "f2": not conflict and passed,
+    return {"ran": True, "error": None, "has_naive_merge_conflict": conflict,
+            "naive": {"conflict": conflict, "f1": not conflict and passed, "f2": not conflict and passed,
                       "conflict_sections": 1 if conflict else 0},
             "union": union, "llm": {"ran": False, "reason": "no endpoint configured"},
             "agent_alone": {"agent1": {"f1": True, "f2": merge["strategy"] == "solo-agent1"},
@@ -288,7 +312,7 @@ def write_experiment(logs):
     first = logs / "coop-m1" / "coop" / KEYS[0]
     write_json(first / "conversation_store.json", STORE)
     write_lines(first / "events.jsonl", EVENTS)
-    write_lines(first / "agent1_stream.jsonl", STREAM)
+    write_lines(first / "agent1_stream.jsonl", FIRST_STREAM)
     write_lines(first / "agent2_session.jsonl", SESSION)
     write_json(first / "judge.json", {
         "backend": "fake", "model": "judge-1", "prompt_variant": "appF-7",
@@ -325,6 +349,56 @@ def write_multi_pair(pair_dir, model, arm, outcome):
     if arm == "coop":
         evaluation["cascade"] = cascade(merge, passed)
     write_json(pair_dir / "eval.json", evaluation)
+
+
+class UnfinishedCascades(unittest.TestCase):
+    """A cascade that errored or never ran says nothing about the merge:
+    Table 6 counts it apart, never as a failed merge, and a patch that
+    failed to apply leaves the naive conflict unknown with a cascade as
+    without one."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.logs = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def pair(self, name, evaluation):
+        pair_dir = self.logs / "r" / "coop" / "pallets_click_task" / "2068" / name
+        write_json(pair_dir / "result.json", {"model": "m", "setting": "coop", "arm": "coop",
+                                              "agents": {"agent1": {"status": "Submitted"}}})
+        write_json(pair_dir / "eval.json", evaluation)
+        return report.read_pair(pair_dir, "coop", "r")
+
+    def test_an_errored_or_skipped_cascade_is_counted_apart(self):
+        good = {"both_passed": True, "merge": CLEAN, "cascade": cascade(CLEAN, True)}
+        sandbox = {"both_passed": True, "merge": CLEAN, "cascade": {
+            "ran": True, "error": "DockerError: timed out", "verdict_63b9d44": True, "verdict_paper_era": None,
+            "has_naive_merge_conflict": None, "naive": None, "union": None, "llm": None}}
+        crashed = {"both_passed": True, "merge": CLEAN, "cascade": {"error": "KeyError: 'naive'"}}
+        skipped = {"both_passed": False, "merge": CLEAN, "cascade": {"ran": False, "reason": "turned off"}}
+        pairs = [self.pair(name, evaluation) for name, evaluation in
+                 (("f1_f2", good), ("f1_f3", sandbox), ("f1_f4", crashed), ("f1_f5", skipped))]
+        row = report.cascade_row(report.Group("coop", "m", pairs))
+        self.assertEqual((row["n"], row["errored"], row["skipped"]), (1, 2, 1))
+        self.assertEqual((row["naive"], row["union"], row["paper"], row["code"]), (100.0, 100.0, 100.0, 100.0))
+        # The errored cascades leave the conflict to eval.json's merge.status.
+        self.assertEqual([report.naive_conflict(p) for p in pairs], [False, False, False, False])
+
+    def test_a_failed_apply_is_unknown_with_a_cascade_as_without(self):
+        missing = {"status": "missing_input", "strategy": None}
+        block = {**cascade(CLEAN, False), "apply_status": {"agent1": "applied", "agent2": "failed"},
+                 "has_naive_merge_conflict": None}
+        with_cascade = self.pair("f1_f2", {"both_passed": False, "merge": missing, "cascade": block})
+        without = self.pair("f1_f3", {"both_passed": False, "merge": missing})
+        for pair in (with_cascade, without):
+            self.assertIsNone(report.naive_conflict(pair))
+            self.assertIsNone(report.clean_merge_failed(pair))
+
+    def test_a_finished_cascade_s_conflict_comes_before_merge_status(self):
+        lead = self.pair("f1_f2", {"both_passed": True, "merge": LEAD, "cascade": cascade(CLEAN, True)})
+        self.assertFalse(report.naive_conflict(lead))
 
 
 class HeuristicsAlone(unittest.TestCase):
@@ -391,18 +465,18 @@ class ExperimentTest(unittest.TestCase):
 
     def test_the_cascade_is_cumulative(self):
         cascade = self.sections["Merge cascade (Table 6)"]
-        self.assertIn("| coop | m1 | 4 | 25.00 | 75.00 (+50.0) | not run | 75.00 | 50.00 |", cascade)
+        self.assertIn("| coop | m1 | 4 | 0 | 0 | 25.00 | 75.00 (+50.0) | not run | 75.00 | 50.00 |", cascade)
         self.assertIn("The learned resolver did not run: no endpoint configured.", cascade)
         self.assertIn("verdict_paper_era: 59bbf65", cascade)
         self.assertIn("| coop | m1 | 4 | 1 | 0 | 4 |", cascade)
 
     def test_turns_and_the_overhead(self):
         communication = self.sections["Communication"]
-        self.assertIn("| coop | m1 | 2 | 2 | 2.0 | 2.0 | 66.7% | 100.0% | 66.7% | 1 |", communication)
+        self.assertIn("| coop | m1 | 2 | 2 | 2.0 | 2.0 | 75.0% | 100.0% | 75.0% | 1 |", communication)
 
     def test_speech_acts_and_first_turn_planning(self):
         acts = self.sections["Speech acts"]
-        self.assertIn("| coop | m1 | judge | 2 | 1 | 1 (33.3%) | 2 (33.3%) | 0 (0.0%) | 1 (33.3%) | 0 (0.0%) |", acts)
+        self.assertIn("| coop | m1 | judge | 2 | 1 | 1 (25.0%) | 2 (25.0%) | 0 (0.0%) | 1 (25.0%) | 0 (0.0%) |", acts)
         self.assertIn("| coop | m1 | judge | 1 | 1.00 | 1.00 | 1 | 0.00 | 0.00 |", acts)
         self.assertIn("| coop | m1 | judge | 2 | 0/1 (0.0%) | 1/1 (100.0%) | 1.000 |", acts)
         self.assertIn("| judge | 0.05 | 0/1 (0.0%) | 0/0 (-) | 1.000 |", acts)
@@ -468,9 +542,12 @@ class RunsTableTest(unittest.TestCase):
 
 
 class ConversationSourceTest(unittest.TestCase):
-    """The messages come from conversation_store.json, else events.jsonl
-    (by send_id, or by adjacency in a record from before it), else
-    CooperBench's conversation.json; with none, nothing is recorded."""
+    """The messages are the conversation judge.py labels: events.jsonl
+    (by send_id, with a team's requests and responses), else
+    conversation_store.json, else CooperBench's conversation.json, each
+    message under the id the judge keys its labels by; a record from
+    before the text was logged still counts its sends from its events (by
+    adjacency before send_id); with none, nothing is recorded."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -494,8 +571,40 @@ class ConversationSourceTest(unittest.TestCase):
         sends, text = self.sends()
         self.assertEqual(len(sends), 1)
         self.assertEqual(sends[0].recipients, ["agent2", "agent3"])
-        self.assertEqual(sends[0].message_ids, [2, 3])
+        self.assertEqual(sends[0].message_ids, ["2"], "a broadcast is labelled by its first delivery's id")
         self.assertTrue(text)
+
+    def labelled(self, labels):
+        write_json(self.dir / "judge.json", {"speech_acts": labels})
+        pair = report.read_pair(self.dir, "coop", "r")
+        found = report.speech_act_sources(pair)["judge"]
+        return [report.act_of(send, found) for send in report.pair_sends(pair)[0]]
+
+    def test_a_team_s_requests_and_responses_are_turns_with_their_labels(self):
+        write_lines(self.dir / "events.jsonl", [
+            {"seq": 0, "t": 0.0, "kind": "run_started", "epoch": 100.0, "agent": None},
+            {"seq": 5, "t": 1.0, "kind": "tool", "agent": "lead", "tool": "send_message"},
+            {"seq": 6, "t": 1.0, "kind": "message", "agent": "lead", "to": "member", "content": "Take parse().",
+             "message_id": 6, "send_id": 5},
+            {"seq": 42, "t": 2.0, "kind": "request", "agent": "member", "to": "lead", "content": "Which file?",
+             "request_kind": "question"},
+            {"seq": 46, "t": 3.0, "kind": "response", "agent": "lead", "to": "member", "content": "core.py",
+             "request_id": 42}])
+        write_json(self.dir / "conversation_store.json", {"messages": [
+            {"from": "lead", "recipients": ["member"], "message_ids": [6], "content": "Take parse()."}]})
+        self.assertEqual(self.labelled({"6": "Plan", "42": "Question", "46": "Answer"}), ["Plan", "Question", "Answer"])
+
+    def test_cooperbench_s_conversation_json_is_labelled_by_position(self):
+        write_json(self.dir / "conversation.json", [
+            {"from": "agent1", "to": "agent2", "message": "I take a.py", "timestamp": 1.0},
+            {"from": "agent2", "to": "agent1", "message": "Which lines?", "timestamp": 2.0}])
+        self.assertEqual(self.labelled({"1": "Plan", "2": "Question"}), ["Plan", "Question"])
+
+    def test_a_paper_era_store_is_labelled_by_its_row_ids(self):
+        write_json(self.dir / "conversation_store.json", {"messages": [
+            {"id": 7, "sender_id": "agent_1", "recipient_id": "agent_2", "content": "I take a.py"},
+            {"id": 8, "sender_id": "agent_2", "recipient_id": "agent_1", "content": "Which lines?"}]})
+        self.assertEqual(self.labelled({"7": "Plan", "8": "Question"}), ["Plan", "Question"])
 
     def test_an_old_record_groups_adjacent_deliveries_and_has_no_text(self):
         write_lines(self.dir / "events.jsonl", [

@@ -10,6 +10,8 @@
                                               task, or of the tasks --repo and --task name
     python3 run.py prepare ... --features 1,6  provision one pair for the session driver
     python3 run.py finish --run-dir DIR [--debug]  wait for it, score it, write its logs, tear it down
+    python3 run.py rescore --run-dir DIR [--force] [--cooperbench-dir DIR] [--dataset-dir DIR]
+                                              score finished pairs again from their patches
 
 For each pair the runner reads the features' specs from CooperBench's
 dataset, provisions what the arm needs (a shared git remote, a shared
@@ -126,7 +128,15 @@ A pair whose result.json shows no agent in Error is finished and
 skipped, unless --force; one that lacks only its eval.json is scored
 again without running the agents, as CooperBench's runner and evaluator
 behave. A team pair finished before the team setting had its own
-directory is found where it was, under coop/, and skipped there.
+directory is found where it was, under coop/, and skipped there. A pair
+run again in its directory has the earlier attempt's files packed into
+previous-<time>.tar.gz first (set_aside_earlier_attempt), so nothing the
+new attempt does not rewrite is read as its own. rescore is `cooperbench
+eval` for these logs: it scores the pairs under a directory from their
+patches and plan.json (those without eval.json, or whose merged eval.json
+has no cascade; every one with --force), writes eval.json and the
+trajectory export, and starts no hub, container or agent, whatever state
+a pair is in.
 
 --subset alone runs every pair of the subset, task by task as
 CooperBench's discover_tasks orders them; --repo and --task narrow it.
@@ -201,6 +211,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -231,6 +242,8 @@ GIT_IMAGE = "cooperbench-git-server:local"
 GIT_DATA_VOLUME = "coordbench-git-data"
 GIT_PORT = 9418
 SHARED_DIR = "/workspace/shared"
+# Where the shared volume's last state is kept in the pair directory.
+SHARED_COPY = "shared"
 # The run options the runner sets for each need it provisions: where the
 # thing is for the agents (git_remote, shared_dir), where it is for the
 # hub's host (git_remote_host, shared_dir_host), and the commit every agent
@@ -269,6 +282,13 @@ def say(text):
 
 def now():
     return datetime.now()
+
+
+def utc_offset_seconds():
+    """This host's offset from UTC now, in seconds. result.json's times are
+    naive local times, as CooperBench's runner writes them, so the offset
+    goes beside them for a reader on a host in another zone."""
+    return int(datetime.now().astimezone().utcoffset().total_seconds())
 
 
 # Timings: when each phase of a pair began and ended, kept on the plan
@@ -807,7 +827,8 @@ def new_plan(settings, driver, repo, task_id, features):
         "provenance": runconfig.provenance(settings["cooperbench_dir"], dataset_dir),
         "log_dir": str(settings["log_dir"]),
         "run_dir": str(pair_dir(settings["log_dir"], settings["run_name"], setting, repo, task_id, features)),
-        "hub_url": "", "hub_pid": None, "hub_run": False, "started_at": now().isoformat(), "error": None,
+        "hub_url": "", "hub_pid": None, "hub_run": False, "started_at": now().isoformat(),
+        "utc_offset_seconds": utc_offset_seconds(), "error": None,
         "plugins": [], "warnings": [], "timings": list(settings.get("timings") or []),
         "resources": {"containers": [], "volume": None, "git_repo": None, "workspaces": None},
         "agents": [{"id": a.id, "role": a.role, "features": list(a.features)} for a in layout],
@@ -1372,10 +1393,62 @@ def close_debug_sinks():
         sink.close()
 
 
+# An earlier attempt's files, packed by set_aside_earlier_attempt; the
+# directories each attempt makes again (the session driver's workspaces and
+# its wrappers, which hold the hub's token) are removed instead.
+EARLIER_ATTEMPT = re.compile(r"previous-\d{8}T\d{6}(-\d+)?\.tar\.gz")
+REMADE_DIRECTORIES = ("workspaces", "bin")
+
+
+def set_aside_earlier_attempt(run_dir):
+    """Pack an earlier attempt's files in the pair directory into
+    previous-<time>.tar.gz beside them, and return the archive, or None
+    when the directory holds none. A pair is run again in the same
+    directory (--force, an agent in Error, a second prepare), and the new
+    attempt does not rewrite every file the old one left: a judge.json, an
+    agent's _sent.jsonl when it sends nothing this time, a _session.jsonl
+    the session driver finds no new transcript for. Left in place, the
+    post-hoc tools would read them as the new attempt's; packed, nothing
+    of the old attempt is read again and nothing is lost, a judge.json
+    having been paid for."""
+    run_dir = Path(run_dir)
+    if not run_dir.is_dir():
+        return None
+    earlier = [path for path in sorted(run_dir.iterdir()) if not EARLIER_ATTEMPT.fullmatch(path.name)]
+    remade = [path for path in earlier if path.name in REMADE_DIRECTORIES and path.is_dir()]
+    packed = [path for path in earlier if path not in remade]
+    for path in remade:
+        shutil.rmtree(path, ignore_errors=True)
+    if not packed:
+        return None
+    archive = unused_archive_name(run_dir)
+    with tarfile.open(archive, "w:gz") as bundle:
+        for path in packed:
+            bundle.add(path, arcname=path.name)
+    for path in packed:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    return archive
+
+
+def unused_archive_name(run_dir):
+    stamp = now().strftime("%Y%m%dT%H%M%S")
+    archive, number = run_dir / f"previous-{stamp}.tar.gz", 1
+    while archive.exists():
+        number += 1
+        archive = run_dir / f"previous-{stamp}-{number}.tar.gz"
+    return archive
+
+
 def prepare_pair(settings, hub, driver, repo, task_id, features):
     """Provision a pair and start its agents; returns the plan and handles."""
     plan = new_plan(settings, driver, repo, task_id, features)
     plan["hub_url"] = hub.base_url
+    archive = set_aside_earlier_attempt(plan["run_dir"])
+    if archive is not None:
+        plan["warnings"].append(f"an earlier attempt's files in the pair directory were packed into {archive.name}")
     Path(plan["run_dir"]).mkdir(parents=True, exist_ok=True)
     open_debug_sink(plan["run_dir"])
     try:
@@ -1698,6 +1771,7 @@ def result_record(plan, outcomes, metrics, ended):
         "timeout_s": plan["timeout_s"], "disallowed_tools": plan.get("disallowed_tools") or [],
         "provenance": plan.get("provenance"), "image": plan.get("image_facts") or {"image": plan["image"]},
         "metrics": metrics, "timings": plan.get("timings") or [],
+        "utc_offset_seconds": plan.get("utc_offset_seconds", utc_offset_seconds()),
     })
     if plan["error"]:
         record["error"] = plan["error"]
@@ -1772,7 +1846,8 @@ def write_trajectories(plan, result):
 # refused with a warning.
 RUNNER_FILES = {"result.json", "eval.json", "metrics.json", "events.jsonl", "plan.json", "trace.jsonl",
                 "conversation.json", "conversation_store.json", "config.json", "summary.json",
-                "merge_naive.diff", "merge_union.diff", "merge_llm.diff", "trajectory.json.gz", "judge.json"}
+                "merge_naive.diff", "merge_union.diff", "merge_llm.diff", "trajectory.json.gz", "judge.json",
+                SHARED_COPY, *REMADE_DIRECTORIES}
 RUNNER_SUFFIXES = (".patch", "_stream.jsonl", "_session.jsonl", "_prompt.md", "_traj.json",
                    "_session_outcome.json", "_sent.jsonl", ".session-prompt.md")
 ARTIFACT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -1831,7 +1906,7 @@ def store_document(rows):
     if isinstance(rows, dict) and "messages" in rows:
         return rows
     rows = list(rows or [])
-    return {"messages": rows, "export_timestamp": now().isoformat(), "total_messages": len(rows)}
+    return {"messages": rows, "export_timestamp": now().strftime("%Y-%m-%d %H:%M:%S"), "total_messages": len(rows)}
 
 
 def write_conversation(plan, events):
@@ -1854,10 +1929,34 @@ def write_conversation(plan, events):
     write_json(run_dir / "conversation_store.json", store_document(module.store(events)))
 
 
+def copy_shared_volume(plan):
+    """The team scratchpad's last state into <pair_dir>/shared/, copied out
+    of an agent's container while the containers still mount it: what the
+    agents wrote there (the lead's PLAN.md, the members' handoff patches)
+    is in no transcript, and the volume goes with the teardown. It is a
+    directory of its own so an agent's <agent>.patch there never meets the
+    runner's. A copy that fails is said and costs the pair nothing."""
+    resources = plan["resources"]
+    if not resources["volume"] or not resources["containers"]:
+        return
+    destination = Path(plan["run_dir"]) / SHARED_COPY
+    shutil.rmtree(destination, ignore_errors=True)
+    destination.mkdir(parents=True)
+    try:
+        done = drivers.docker("cp", f"{resources['containers'][0]}:{SHARED_DIR}/.", str(destination), timeout=300)
+        problem = None if done.returncode == 0 else (done.stderr or done.stdout or "").strip()[:300]
+    except (OSError, subprocess.SubprocessError) as error:
+        problem = f"{type(error).__name__}: {error}"
+    if problem:
+        say(f"{plan['run_id']}: copying {SHARED_DIR} before the teardown failed: {problem}")
+
+
 def teardown(plan):
     """Remove the run's containers, volume, repository and workspaces; the
-    network and the git server are shared, as in CooperBench, and stay."""
+    network and the git server are shared, as in CooperBench, and stay.
+    The shared volume is copied into the pair directory first, kept or not."""
     resources = plan["resources"]
+    copy_shared_volume(plan)
     if plan["keep"]:
         say(f"kept for inspection: {json.dumps(resources)}")
         return
@@ -2284,6 +2383,59 @@ def command_finish(args):
     return 0 if outcome != "error" else 1
 
 
+def rescore_dirs(path):
+    """The coordbench pair directories at or below path: those with a
+    result.json and the plan.json the runner keeps beside it."""
+    path = Path(path)
+    found = [path] if (path / "result.json").is_file() else sorted(p.parent for p in path.rglob("result.json"))
+    return [found_dir for found_dir in found if (found_dir / "plan.json").is_file()]
+
+
+def needs_scoring(run_dir, plan, force):
+    """Whether rescore scores the pair: always with --force, else when it
+    has no eval.json, as `cooperbench eval` decides, or when a merged
+    pair's eval.json has no cascade block yet."""
+    evaluation = read_json(Path(run_dir) / "eval.json")
+    if force or not isinstance(evaluation, dict):
+        return True
+    return plan["setting"] != "solo" and "cascade" not in evaluation
+
+
+def rescore_pair(run_dir, overrides, force):
+    """One pair scored again from its patches; the outcome, or None when
+    it needs none. The plan comes from the pair's plan.json, with its
+    run_dir where the pair is now (logs move between hosts) and any
+    --cooperbench-dir or --dataset-dir given; no hub, container or agent
+    is started, and only eval.json and the trajectory export change."""
+    plan = load_plan(run_dir)
+    plan.update(run_dir=str(run_dir), **overrides)
+    if not needs_scoring(run_dir, plan, force):
+        return None
+    evaluation = score(plan)
+    export_pair(plan)
+    return verdict({}, evaluation)
+
+
+def command_rescore(args):
+    """CooperBench's `cooperbench eval` for coordbench's logs: score the
+    finished pairs under --run-dir again, eval.json and its cascade, and
+    start no agent, whatever state a pair is in. config.json, result.json
+    and summary.json stay the run's own."""
+    overrides = {key: str(value) for key, value in (("cooperbench_dir", args.cooperbench_dir),
+                                                     ("dataset_dir", args.dataset_dir)) if value}
+    run_dirs = rescore_dirs(args.run_dir)
+    if not run_dirs:
+        say(f"no coordbench pair (a result.json with its plan.json) at or below {args.run_dir}")
+        return 1
+    outcomes = {}
+    for run_dir in run_dirs:
+        outcome = rescore_pair(run_dir, overrides, args.force) or "skipped"
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        say(f"{run_dir}: {outcome}")
+    say("rescored: " + ", ".join(f"{count} {outcome}" for outcome, count in sorted(outcomes.items())))
+    return 1 if "error" in outcomes else 0
+
+
 def add_pair_arguments(parser, subset):
     """--repo and --task name the pair's task; with --subset (run only)
     they narrow the subset instead, and either may be left out."""
@@ -2349,6 +2501,14 @@ def parser():
     finishing.add_argument("--run-dir", required=True)
     add_debug_argument(finishing)
     finishing.set_defaults(func=command_finish)
+    rescoring = commands.add_parser("rescore", help="score finished pairs again from their patches, starting no agent")
+    rescoring.add_argument("--run-dir", required=True, help="a pair directory, or a run or setting directory above pairs")
+    rescoring.add_argument("--force", action="store_true",
+                           help="score pairs that already have an eval.json with a cascade (else only those without)")
+    rescoring.add_argument("--cooperbench-dir", help="the CooperBench checkout to score with, instead of the plan's")
+    rescoring.add_argument("--dataset-dir", help="the dataset to take the tests from, instead of the plan's")
+    add_debug_argument(rescoring)
+    rescoring.set_defaults(func=command_rescore)
     return top
 
 

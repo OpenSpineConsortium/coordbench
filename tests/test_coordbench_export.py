@@ -12,13 +12,17 @@ CooperBench's."""
 
 import ast
 import gzip
+import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "coordbench"))
@@ -414,7 +418,11 @@ class Fallbacks(unittest.TestCase):
         self.assertTrue(all(s["coordbench"]["from_hub"] for s in sends))
         receives = [s for s in steps_named(trajectory, "openhands_comm_get") if s["agentId"] == "agent_1"]
         self.assertEqual(sum(1 for s in receives if s["coordbench"].get("text_recorded") is False), 2)
-        self.assertEqual(steps_named(trajectory, "finish")[1]["timestamp"], at(22.5))
+        # A pilot records no zone (no utc_offset_seconds, no run_started), so
+        # its naive times are read in the reader's zone, all off together.
+        self.assertTrue(block["time_zone"]["source"].startswith("the reader's local zone"))
+        phase_end = next(t["ended"] for t in result["timings"] if t.get("agent") == "agent2")
+        self.assertEqual(steps_named(trajectory, "finish")[1]["timestamp"], export.utc_iso(export.parse_time(phase_end)))
 
     def test_a_cooperbench_run_takes_its_messages_from_conversation_json(self):
         with PairCopy() as pair:
@@ -429,6 +437,60 @@ class Fallbacks(unittest.TestCase):
         receive = steps_named(trajectory, "openhands_comm_get")[0]
         self.assertIn("Which lines", receive["args"]["content"])
         self.assertEqual(block["anchor"], None)
+
+
+EXPORT_IN_ZONE = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import export
+print(json.dumps(export.build_trajectory(sys.argv[2], "/nonexistent-cooperbench"), sort_keys=True))
+"""
+
+
+def shifted(value, hours):
+    moment = datetime.fromisoformat(value) + timedelta(hours=hours)
+    return moment.isoformat()
+
+
+class TimeZones(unittest.TestCase):
+    """run.py writes result.json's times naive in its host's zone, as
+    CooperBench's runner does; the export reads them in the run host's
+    zone, so a run reads the same wherever it is exported."""
+
+    def export_in(self, zone, pair=FIXTURE):
+        done = subprocess.run([sys.executable, "-c", EXPORT_IN_ZONE, str(ROOT / "coordbench"), str(pair)],
+                              capture_output=True, text=True, env={**os.environ, "TZ": zone}, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout)
+
+    def test_the_export_is_the_same_in_every_readers_zone(self):
+        exports = [self.export_in(zone) for zone in ("UTC", "America/Detroit", "Asia/Kolkata")]
+        self.assertEqual(exports[0], exports[1])
+        self.assertEqual(exports[0], exports[2])
+        agent = exports[0]["metadata"]["coordbench"]["agents"][0]
+        self.assertLess(agent["started_at"], agent["ended_at"])
+        self.assertEqual(exports[0]["metadata"]["coordbench"]["time_zone"],
+                         {"utc_offset_seconds": 0, "source": "run_started against the run_create phase"})
+
+    def test_a_run_host_east_of_utc_reads_as_the_same_moments(self):
+        """The same pair written on a host two hours east of UTC: every
+        naive time two hours later on the face of it, and the offset
+        recorded beside them, or, without it, recovered from the hub."""
+        expected = build()["steps"]
+        for recorded in (True, False):
+            with PairCopy() as pair:
+                result = json.loads((pair / "result.json").read_text())
+                for name in ("started_at", "ended_at"):
+                    result[name] = shifted(result[name], 2)
+                for record in result["timings"]:
+                    record["started"], record["ended"] = shifted(record["started"], 2), shifted(record["ended"], 2)
+                if recorded:
+                    result["utc_offset_seconds"] = 7200
+                (pair / "result.json").write_text(json.dumps(result))
+                trajectory = self.export_in("America/Detroit", pair)
+            self.assertEqual(trajectory["metadata"]["coordbench"]["time_zone"]["utc_offset_seconds"], 7200)
+            self.assertEqual(trajectory["steps"], json.loads(json.dumps(expected)), recorded)
+            self.assertEqual(trajectory["metadata"]["started_at"], at(-2.0))
 
 
 def pilot_event(event):
@@ -497,6 +559,51 @@ class Site(unittest.TestCase):
         self.assertEqual(set(merged["tasks"][0]["results"]), {"gpt5", "k"})
         self.assertEqual(merged["stats"]["gpt5"], existing["stats"]["gpt5"])
         self.assertEqual(export.row_repo(merged, row), "typst")
+
+    def test_a_typst_pair_joins_one_of_its_two_rows_and_the_url_names_that_row(self):
+        """The website keeps typst (the paper models) and typst_task (the
+        Gemini runs) as two rows of the same pairs: a result joins the row
+        under its own repo name, the URL names that row, and a lookup by
+        model finds a result in either."""
+        def published(repo, model):
+            return {"repo": repo, "taskId": "task6554", "features": "feature1_feature2", "f1": "feature1",
+                    "f2": "feature2", "results": {model: {"passed": False, "hasConflict": True}},
+                    "hasTrajectory": {model: True}}
+        existing = {"models": ["gpt5", "gemini_flash_sdk"], "tasks": [published("typst", "gpt5"),
+                                                                     published("typst_task", "gemini_flash_sdk")]}
+        for repo in ("typst_task", "typst"):
+            row = {**published(repo, "k"), "results": {"k": {"passed": True, "hasConflict": False}}}
+            merged = export.merge_index(existing, [row], "k", "K")
+            holding = [t["repo"] for t in merged["tasks"] if "k" in t["results"]]
+            self.assertEqual((holding, export.row_repo(merged, row)), ([repo], repo))
+            self.assertEqual(merged["stats"]["k"], {"total": 1, "passed": 1, "rate": 100.0})
+            for asked in ("typst", "typst_task"):
+                for model, passed in (("gemini_flash_sdk", False), ("gpt5", False), ("k", True)):
+                    result, _ = export.index_result(merged, asked, "task6554", "feature1_feature2", model)
+                    self.assertEqual(result["passed"], passed, (repo, asked, model))
+        self.assertEqual(export.index_result(existing, "typst", "task1", "feature1_feature2", "k"), (None, None))
+
+    def test_a_fresh_site_tree_gets_an_empty_cause_index_and_a_published_one_is_kept(self):
+        self.export_fixture()
+        causes = self.out / "static/data/causes/index.json"
+        self.assertEqual(json.loads(causes.read_text()), {"expectation": [], "commitment": [], "communication": []})
+        causes.write_text(json.dumps({"expectation": [{"id": "x"}], "commitment": [], "communication": []}))
+        self.export_fixture()
+        self.assertEqual(json.loads(causes.read_text())["expectation"], [{"id": "x"}])
+
+    def test_two_runs_of_one_key_over_one_pair_are_both_kept(self):
+        first, second = build(), build()
+        second["metadata"]["coordbench"]["run_name"] = "pilot 2"
+        for override in (None, "mine"):
+            out = self.out / str(override)
+            with mock.patch("sys.stderr", new=io.StringIO()) as err:
+                urls = export.write_site(out, [(FIXTURE, first, None), (FIXTURE, second, None)], override)
+            key = override or "claude_sonnet_5_5_coop_claude_cli"
+            self.assertEqual([u.split("&")[0] for u in urls], [f"/viewer?model={key}", f"/viewer?model={key}_pilot_2"])
+            self.assertIn(f"so this one goes under {key}_pilot_2", err.getvalue())
+            index = json.loads((out / "static/data/coop/index.json").read_text())
+            self.assertEqual(set(index["tasks"][0]["results"]), {key, f"{key}_pilot_2"})
+            self.assertTrue((out / "static/data/coop/trajectories" / f"{key}_pilot_2").is_dir())
 
     def test_stats_count_every_attempted_pair_and_round_as_write_index(self):
         rows = [{"repo": "r", "taskId": "task1", "features": f"feature1_feature{n}",
@@ -586,6 +693,21 @@ def generate_coop_index_passed(item):
     return passed
 
 
+def make_solo(pair):
+    """The fixture's pair as a solo pair laid out as run.py writes one:
+    result.json's singular agent block with its hub id, the files named
+    solo_*, the second agent's files gone."""
+    result = json.loads((pair / "result.json").read_text())
+    record = dict(result.pop("agents")["agent1"])
+    record.pop("feature_id")
+    result.update(setting="solo", arm="solo", agent={**record, "id": "agent1", "features": [1, 6]})
+    (pair / "result.json").write_text(json.dumps(result))
+    for suffix in ("_session.jsonl", "_stream.jsonl", "_prompt.md"):
+        (pair / f"agent1{suffix}").rename(pair / f"solo{suffix}")
+    for name in ("agent2_session.jsonl", "agent2_prompt.md", "agent6.patch"):
+        (pair / name).unlink()
+
+
 class PairFiles(unittest.TestCase):
 
     def test_write_pair_writes_the_trajectory_and_the_runner_files(self):
@@ -599,6 +721,24 @@ class PairFiles(unittest.TestCase):
         self.assertEqual(runner["messages"][0], {"role": "user", "content": json.loads(
             (FIXTURE / "agent1_session.jsonl").read_text().splitlines()[0])["message"]["content"]})
         self.assertEqual(agent6["agent_id"], "agent2")
+
+    def test_a_solo_pair_is_read_from_the_files_run_py_names_solo(self):
+        """run.py names a solo agent's files solo_* (agent_file_id) while
+        result.json's agent block, the timings and the events call it by
+        its hub id, agent1; the export reads the files by the first and
+        shows the second."""
+        with PairCopy() as pair:
+            make_solo(pair)
+            trajectory = build(pair)
+            export.write_pair(pair, NO_DATASET)
+            runner = json.loads((pair / "solo_traj.json").read_text())
+        block = trajectory["metadata"]["coordbench"]
+        self.assertEqual(block["timestamps"], "session-jsonl")
+        self.assertEqual([a["id"] for a in block["agents"]], ["agent1"])
+        self.assertIn("solo_session.jsonl", block["sources"])
+        self.assertEqual(block["prompt_files"], ["solo_prompt.md"])
+        self.assertGreater(len(trajectory["steps"]), 1)
+        self.assertEqual((runner["agent_id"], runner["features"]), ("solo", [1, 6]))
 
     def test_an_existing_runner_file_is_left_alone(self):
         with PairCopy() as pair:

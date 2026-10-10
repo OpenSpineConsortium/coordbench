@@ -1002,9 +1002,10 @@ def transcript_roots():
 
 
 def find_transcripts(token, roots, since):
-    """The subagent transcripts touched since `since` whose first prompt
-    or opening replies carry the token, newest first. Claude Code keeps a
-    subagent's transcript under <project>/<session>/subagents/."""
+    """The subagent transcripts touched since `since` that are this
+    agent's (carries_token), those whose reply carries the token first,
+    then those whose prompt alone does, each newest first. Claude Code
+    keeps a subagent's transcript under <project>/<session>/subagents/."""
     candidates = []
     for root in roots:
         for path in Path(root).rglob("*.jsonl"):
@@ -1014,32 +1015,81 @@ def find_transcripts(token, roots, since):
                 continue
             if "subagents" in path.parts and modified >= since:
                 candidates.append((modified, path))
-    return [path for _, path in sorted(candidates, reverse=True) if carries_token(path, token)]
+    found = [(carries_token(path, token), modified, path) for modified, path in candidates]
+    found = [entry for entry in found if entry[0]]
+    found.sort(key=lambda entry: (entry[0] != "reply", -entry[1]))
+    return [path for _, _, path in found]
+
+
+# A run token as run_token writes it; the agent's name ends on a letter,
+# digit, hyphen or underscore, so a full stop after it is not read as its.
+RUN_TOKEN = re.compile(r"coordbench-run-token (\S+) ([A-Za-z0-9_.-]*[A-Za-z0-9_-])")
 
 
 def carries_token(path, token):
-    """Whether the transcript's first user message or one of its first
-    replies holds the token: the prompt does when the orchestrator pasted
-    it, the reply does when the subagent did as the preface asks."""
-    seen_user = False
+    """Where the transcript carries the agent's token, "reply" or "prompt",
+    or None when it is not the agent's. The prompt is every user line
+    before the first reply (a Workflow subagent gets the harness's request
+    first and its pasted task second); a reply counts by its text blocks
+    only, never a tool call's input, where an orchestrator that launched
+    the agents would have pasted their prompts. A transcript that holds
+    another agent's token of the same run anywhere in what is read is
+    such an orchestrator's, and none of the agents'."""
+    found, replied = None, False
+    for kind, message in opening_messages(path):
+        if names_another_agent(content_blocks_to_text(message.get("content")), token):
+            return None
+        if kind == "assistant":
+            replied = True
+            found = "reply" if holds_token(reply_text(message), token) else found
+        elif kind == "user" and not replied and holds_token(content_blocks_to_text(message.get("content")), token):
+            found = found or "prompt"
+    return found
+
+
+def opening_messages(path):
+    """The (type, message) of the transcript's user and assistant lines
+    among its first TOKEN_SEARCH_LINES, where the prompt and the first
+    replies are; empty when the file cannot be read."""
+    found = []
     try:
         with open(path, encoding="utf-8", errors="replace") as stream:
             for number, line in enumerate(stream):
                 if number >= TOKEN_SEARCH_LINES:
-                    return False
+                    break
                 event = next(json_lines(line), None)
                 message = event.get("message") if isinstance(event, dict) else None
-                if not isinstance(message, dict):
-                    continue
-                kind = event.get("type")
-                if kind == "user" and seen_user:
-                    continue
-                seen_user = seen_user or kind == "user"
-                if kind in ("user", "assistant") and token in content_blocks_to_text(message.get("content")):
-                    return True
+                if isinstance(message, dict) and event.get("type") in ("user", "assistant"):
+                    found.append((event["type"], message))
     except OSError:
+        return []
+    return found
+
+
+def reply_text(message):
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return "\n".join(str(block.get("text") or "") for block in content or ()
+                     if isinstance(block, dict) and block.get("type") == "text")
+
+
+def holds_token(text, token):
+    """Whether the text holds the token itself: a run token by its run and
+    agent exactly, so agent1's is not found in agent10's; any other token
+    as it is written."""
+    wanted = RUN_TOKEN.fullmatch(token)
+    if wanted is None:
+        return token in text
+    return wanted.groups() in RUN_TOKEN.findall(text)
+
+
+def names_another_agent(text, token):
+    wanted = RUN_TOKEN.fullmatch(token)
+    if wanted is None:
         return False
-    return False
+    run, agent = wanted.groups()
+    return any(found_run == run and found_agent != agent for found_run, found_agent in RUN_TOKEN.findall(text))
 
 
 def settle(path, quiet_seconds, poll=0.5):

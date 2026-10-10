@@ -181,7 +181,8 @@ mark { background: var(--hi); color: inherit; outline: 1px solid var(--hi-border
     <h2 id="matrix-title">Failure modes</h2>
     <div class="controls"><button id="matrix-csv" type="button">Matrix CSV</button></div>
     <div class="muted">Each cell: present, absent, not labelled or not published, with its source: judge
-      (judge.json), human (cause labels), heuristic (computed here) or data (the outcome). CooperBench released no
+      (judge.json, a model's label), rule (judge.json, a symptom level App G's rule decided with no model, or set
+      over the judge's), human (cause labels), heuristic (computed here) or data (the outcome). CooperBench released no
       communication-error or symptom labels, so its runs show heuristics and the 23 cause labels only.</div>
     <div class="scroll"><table id="matrix-table"></table></div>
   </section>
@@ -245,6 +246,16 @@ function timeMs(value) {
   if (typeof value === "number") return value > 1e11 ? value : value * 1000;
   const parsed = Date.parse(value);
   return isNaN(parsed) ? null : parsed;
+}
+
+// result.json's times are naive in the run host's zone, as CooperBench's
+// runner writes them: with the offset run.py records beside them they are
+// read in that zone, else in the browser's, right only on the run's host.
+function resultTimeMs(value, result) {
+  const offset = result && typeof result.utc_offset_seconds === "number" ? result.utc_offset_seconds : null;
+  if (offset == null || typeof value !== "string" || /(Z|[+-]\d\d:?\d\d)$/.test(value)) return timeMs(value);
+  const parsed = Date.parse(value + "Z");
+  return isNaN(parsed) ? null : parsed - offset * 1000;
 }
 
 function numberOrNull(value) {
@@ -492,6 +503,10 @@ function messagesFromSteps(run, lanes) {
 }
 
 /* (4) coordbench's own export. */
+// The four token counts of an agent; a count that is null was not
+// measured, so a total over the others is a lower bound and says so.
+const TOKEN_KEYS = ["input", "output", "cache_read", "cache_write"];
+
 function fromCoordbench(data, meta) {
   const run = emptyRun(meta, "coordbench");
   const m = data.metadata || {};
@@ -516,8 +531,9 @@ function fromCoordbench(data, meta) {
   });
   run.agents = agents.map((a) => {
     const steps = run.steps.filter((s) => s.lane === a.lane && !s.hidden);
-    const tokens = a.tokens ? ["input", "output", "cache_read", "cache_write"].reduce((sum, k) => sum + (a.tokens[k] || 0), 0) : null;
-    return { lane: a.lane, name: a.id, model: a.model, steps: steps.length, tokens, cost: numberOrNull(a.cost),
+    const tokens = a.tokens ? TOKEN_KEYS.reduce((sum, k) => sum + (a.tokens[k] || 0), 0) : null;
+    const partial = !!a.tokens && TOKEN_KEYS.some((k) => a.tokens[k] == null);
+    return { lane: a.lane, name: a.id, model: a.model, steps: steps.length, tokens, tokens_partial: partial, cost: numberOrNull(a.cost),
       first_ms: earliest([timeMs(a.started_at), firstTime(steps)]), last_ms: latest([timeMs(a.ended_at), lastTime(steps)]),
       status: a.status, role: a.role };
   });
@@ -603,7 +619,7 @@ function fromPairFiles(data, meta) {
   run.lanes = ids.map((id) => byId[id]);
   const events = files.events || [];
   const started = events.find((e) => e.kind === "run_started");
-  const anchor = started ? started.epoch * 1000 : timeMs(result.started_at);
+  const anchor = started ? started.epoch * 1000 : resultTimeMs(result.started_at, result);
   events.filter((e) => e.kind === "tool").forEach((e) => {
     const type = hubToolType(e.tool);
     makeStep(run, { lane: byId[e.agent] || e.agent, t_ms: anchor + e.t * 1000, type, name: e.tool,
@@ -741,11 +757,12 @@ function speedMetrics(run) {
   const wall = run.start_ms != null && run.end_ms != null ? run.end_ms - run.start_ms : null;
   const steps = visible.filter((s) => s.type !== "message").length;
   const tokens = run.agents.some((a) => a.tokens != null) ? run.agents.reduce((sum, a) => sum + (a.tokens || 0), 0) : null;
+  const tokensPartial = tokens != null && run.agents.some((a) => a.tokens == null || a.tokens_partial);
   const cost = run.agents.some((a) => a.cost != null) ? run.agents.reduce((sum, a) => sum + (a.cost || 0), 0) : null;
   const submits = visible.filter((s) => s.type === "submit");
   const metrics = {
     wall_ms: wall, active_ms: activeSpan(run.agents), steps, steps_per_min: wall ? steps / (wall / 60000) : null,
-    time_per_step_ms: wall != null && steps ? wall / steps : null, tokens, cost,
+    time_per_step_ms: wall != null && steps ? wall / steps : null, tokens, tokens_partial: tokensPartial, cost,
     first_message_ms: since(sends[0]), first_edit_ms: since(visible.find((s) => s.type === "edit" || s.type === "create")),
     first_test_ms: since(visible.find((s) => (s.type === "bash" || s.type === "find_grep") && TEST_COMMAND.test(s.args.command || ""))),
     submit_ms: submits.length ? since(submits[submits.length - 1]) : null,
@@ -847,6 +864,14 @@ function emergentCell(run, tag, heuristic) {
   return heuristic(run);
 }
 
+// Who decided a symptoms cell: App G's rule when it set the level with no
+// model call (a failed pair with no message, decided_by "rule") or when it
+// overrode the judge's level (coerced), unless the cell shows a symptom
+// the judge named; else the judge.
+function symptomSource(s, named) {
+  return named || (s.decided_by !== "rule" && !s.coerced) ? "judge" : "rule";
+}
+
 function matrixCell(run, column) {
   const h = run.labels.heuristics;
   const s = run.labels.symptoms;
@@ -856,11 +881,12 @@ function matrixCell(run, column) {
     case "unresponsiveness": return groupCell(run, "Unresponsiveness", unresponsiveHeuristic);
     case "hallucination": return groupCell(run, "Hallucination", hallucinationHeuristic);
     case "primary":
-      if (s) return cell(s.primary ? "present" : "absent", "judge", s.primary || (s.level === "implementation" ?
-        "implementation" : ""), s.evidence || []);
+      if (s) return cell(s.primary ? "present" : "absent", symptomSource(s, !!s.primary), s.primary ||
+        (s.level === "implementation" ? "implementation" : ""), s.evidence || []);
       return cell(publishedOrUnlabelled(run), null);
     case "secondary":
-      if (s) return cell((s.secondary || []).length ? "present" : "absent", "judge", (s.secondary || []).join(", "));
+      if (s) return cell((s.secondary || []).length ? "present" : "absent", symptomSource(s, (s.secondary || []).length > 0),
+        (s.secondary || []).join(", "));
       return cell(publishedOrUnlabelled(run), null);
     case "cause":
       if (run.labels.cause) return cell("present", "human", run.labels.cause.label);
@@ -939,9 +965,9 @@ function csvLine(values) {
 }
 
 function speedCsv(runs) {
-  const head = ["label", "shape", "timestamps"].concat(SPEED_METRICS.map((m) => m.key));
+  const head = ["label", "shape", "timestamps"].concat(SPEED_METRICS.map((m) => m.key), ["tokens_lower_bound"]);
   return [csvLine(head)].concat(runs.map((r) => csvLine([r.label, r.shape, r.timestamps_kind]
-    .concat(SPEED_METRICS.map((m) => r.speed[m.key]))))).join("\n") + "\n";
+    .concat(SPEED_METRICS.map((m) => r.speed[m.key]), [!!r.speed.tokens_partial])))).join("\n") + "\n";
 }
 
 function matrixCsv(runs) {
@@ -1109,9 +1135,8 @@ async function loadSiteRun(job) {
   const data = await fetchJson(root.replace(/\/$/, "") + "/" + path);
   const extras = { model: job.model, setting: dir, repo: job.repo, task: job.task, features: job.features };
   const index = await siteFile(root, "static/data/" + dir + "/index.json");
-  const row = index && (index.tasks || []).find((t) => canonicalRepo(t.repo) === canonicalRepo(job.repo) &&
-    t.taskId === job.task && t.features === job.features);
-  if (row && row.results && row.results[job.model]) extras.index_result = row.results[job.model];
+  const result = index ? indexResult(index, job) : null;
+  if (result) extras.index_result = result;
   else if (index) extras.index_missing = true;
   const causes = await siteFile(root, "static/data/causes/index.json");
   if (causes) extras.causes = causeEntries(causes, job);
@@ -1119,6 +1144,17 @@ async function loadSiteRun(job) {
   if (Array.isArray(tasks)) extras.feature_titles = featureTitles(tasks, job);
   const label = job.label || (job.model + " " + job.repo + " " + job.task + " " + job.features);
   addRun(data, { label, source: path, extras });
+}
+
+// A model's result for a pair in a website index: the website keeps typst
+// and typst_task as two rows of the same pairs (the paper models' and the
+// Gemini runs'), so among the pair's rows the one holding the model's
+// result is taken, as export.py's index_result does.
+function indexResult(index, job) {
+  const rows = (index.tasks || []).filter((t) => canonicalRepo(t.repo) === canonicalRepo(job.repo) &&
+    t.taskId === job.task && t.features === job.features);
+  const row = rows.find((t) => t.results && t.results[job.model]) || rows.find((t) => t.repo === job.repo) || rows[0];
+  return row && row.results && row.results[job.model] ? row.results[job.model] : null;
 }
 
 function causeEntries(causes, job) {
@@ -1220,6 +1256,23 @@ function metricValue(run, metric, options, base) {
   return value;
 }
 
+// A token total that leaves out a count nobody measured is a lower bound,
+// and so is its ratio to a complete baseline; a ratio whose baseline is
+// itself partial has no direction, and is shown without the mark.
+function lowerBound(run, metric, options, base) {
+  if (metric.key !== "tokens" || run.speed.tokens == null || !run.speed.tokens_partial) return false;
+  return !(options.relative && base && base.speed.tokens_partial);
+}
+
+// The runs in rank order for a metric, fastest first: the lowest value,
+// or the highest for a rate (higherIsFaster); a run without the value,
+// and one with unreliable times unless included, takes no rank.
+function rankedRuns(metric, runs, values, include) {
+  if (metric.noRank) return [];
+  return runs.map((r, i) => ({ r, v: values[i] })).filter((x) => x.v != null && (include || !unreliable(x.r)))
+    .sort((a, b) => metric.higherIsFaster ? b.v - a.v : a.v - b.v);
+}
+
 function renderSpeed() {
   const container = el("speed");
   if (!page.runs.length) { container.innerHTML = '<div class="empty">Load runs to compare their speed.</div>'; return; }
@@ -1229,14 +1282,12 @@ function renderSpeed() {
     const values = page.runs.map((r) => metricValue(r, metric, options, base));
     if (values.every((v) => v == null)) return "";
     const max = Math.max(...values.filter((v) => v != null), 0) || 1;
-    const ranked = metric.noRank ? [] : page.runs.map((r, i) => ({ r, v: values[i] }))
-      .filter((x) => x.v != null && (options.include || !unreliable(x.r)))
-      .sort((a, b) => metric.higherIsFaster ? b.v - a.v : a.v - b.v);
+    const ranked = rankedRuns(metric, page.runs, values, options.include);
     const rows = page.runs.map((r, i) => {
       const v = values[i];
       const rank = ranked.findIndex((x) => x.r === r);
-      const shown = v == null ? "-" : options.relative ? "x" + v.toFixed(2) :
-        options.ownScale && metric.kind === "time" ? (v * 100).toFixed(1) + "% of wall" : formatValue(metric, v);
+      const shown = (lowerBound(r, metric, options, base) ? ">= " : "") + (v == null ? "-" : options.relative ? "x" + v.toFixed(2) :
+        options.ownScale && metric.kind === "time" ? (v * 100).toFixed(1) + "% of wall" : formatValue(metric, v));
       return '<div class="bar-row"><div class="name" title="' + escapeHtml(r.label) + '">' + (rank >= 0 ? "#" + (rank + 1) + " " : "") +
         escapeHtml(r.label) + '</div><div class="bar-track"><div class="bar' + (unreliable(r) ? " unreliable" : "") +
         '" style="width:' + (v == null ? 0 : Math.max(0.5, (v / max) * 100)).toFixed(2) + '%"></div></div><div class="value">' +
@@ -1255,7 +1306,8 @@ function renderAgentsTable() {
     rows.push("<tr><td>" + escapeHtml(r.label) + "</td><td>" + escapeHtml(laneLetter(r, a.lane) + " " + (a.name || "")) + "</td><td>" +
       escapeHtml(a.model || "-") + '</td><td class="num">' + formatMs(m.wall_ms) + '</td><td class="num">' + m.steps +
       '</td><td class="num">' + formatMs(m.first_message_ms) + '</td><td class="num">' +
-      (m.comm_share == null ? "-" : (m.comm_share * 100).toFixed(1) + "%") + '</td><td class="num">' + formatNumber(m.tokens) +
+      (m.comm_share == null ? "-" : (m.comm_share * 100).toFixed(1) + "%") + '</td><td class="num">' +
+      (a.tokens_partial ? ">= " : "") + formatNumber(m.tokens) +
       '</td><td class="num">' + (m.cost == null ? "-" : "$" + m.cost.toFixed(4)) + "</td></tr>");
   }));
   el("agents-table").innerHTML = "<thead><tr><th>Run</th><th>Agent</th><th>Model</th><th class=\"num\">Span</th>" +
@@ -1283,17 +1335,22 @@ function renderMatrix() {
   if (!page.runs.length) { table.innerHTML = '<tr><td class="empty">No runs loaded yet.</td></tr>'; return; }
   const head = "<thead><tr><th>Run</th>" + MATRIX_COLUMNS.map(([, label]) => "<th scope=\"col\">" + escapeHtml(label) + "</th>").join("") +
     "</tr></thead>";
-  const body = page.runs.map((r) => "<tr><td>" + escapeHtml(r.label) + (r.labels.judge_meta ? '<div class="muted">judge ' +
-    escapeHtml(judgeCaption(r.labels.judge_meta)) +
-    "</div>" : "") + "</td>" + MATRIX_COLUMNS.map(([key]) => {
-    const c = matrixCell(r, key);
-    const title = c.source === "judge" && r.labels.judge_meta ? "judge: " + (r.labels.judge_meta.model || "") : c.source || "";
-    const label = escapeHtml(STATE_TEXT[c.state] + (c.text ? ": " + c.text : ""));
-    const inner = c.evidence.length ? '<button type="button" data-evidence="' + r.index + '" data-column="' + key + '">' + label + "</button>" : label;
-    return '<td class="cell state-' + c.state + '">' + inner + (c.source ? ' <span class="badge" title="' + escapeHtml(title) + '">' +
-      escapeHtml(c.source) + "</span>" : "") + "</td>";
-  }).join("") + "</tr>").join("");
+  const body = page.runs.map((r) => {
+    const caption = r.labels.judge_meta ? judgeCaption(r.labels.judge_meta) : "";
+    return "<tr><td>" + escapeHtml(r.label) + (caption ? '<div class="muted">judge ' + escapeHtml(caption) + "</div>" : "") +
+      "</td>" + MATRIX_COLUMNS.map(([key]) => matrixTd(r, key, caption)).join("") + "</tr>";
+  }).join("");
   table.innerHTML = head + "<tbody>" + body + "</tbody>";
+}
+
+function matrixTd(r, key, caption) {
+  const c = matrixCell(r, key);
+  const title = c.source === "judge" && caption ? "judge: " + caption : c.source === "rule" ?
+    "decided by App G's rule, not by a model" : c.source || "";
+  const label = escapeHtml(STATE_TEXT[c.state] + (c.text ? ": " + c.text : ""));
+  const inner = c.evidence.length ? '<button type="button" data-evidence="' + r.index + '" data-column="' + key + '">' + label + "</button>" : label;
+  return '<td class="cell state-' + c.state + '">' + inner + (c.source ? ' <span class="badge" title="' + escapeHtml(title) + '">' +
+    escapeHtml(c.source) + "</span>" : "") + "</td>";
 }
 
 function renderLegend() {
@@ -1632,6 +1689,24 @@ function render() {
   renderMessages();
 }
 
+// Removing a run keeps the relative speeds on the baseline the user chose:
+// a baseline after the removed run moves down a place with it. When the
+// baseline itself goes, the first run takes over, and the note returned
+// says so, since every ratio then divides by another run.
+function removeRun(index) {
+  const removed = page.runs.splice(index, 1)[0];
+  page.runs.forEach((r, i) => { r.index = i; });
+  page.columns = page.columns.map((c) => Math.min(c, Math.max(page.runs.length - 1, 0)));
+  if (!removed) return null;
+  if (index < page.baseline) page.baseline -= 1;
+  else if (index === page.baseline) {
+    page.baseline = 0;
+    return page.runs.length ? "the baseline " + removed.label + " was removed; the relative speeds now divide by " +
+      page.runs[0].label : null;
+  }
+  return null;
+}
+
 function download(name, text) {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
@@ -1668,10 +1743,9 @@ function wire() {
       page.sort = { key, dir: page.sort && page.sort.key === key ? -page.sort.dir : 1 };
       renderRunsTable();
     } else if (remove) {
-      page.runs.splice(parseInt(remove.dataset.remove, 10), 1);
-      page.runs.forEach((r, i) => { r.index = i; });
-      page.columns = page.columns.map((c) => Math.min(c, Math.max(page.runs.length - 1, 0)));
+      const note = removeRun(parseInt(remove.dataset.remove, 10));
       render();
+      if (note) status(note, "note");
     }
   });
   el("matrix-table").addEventListener("click", (e) => {

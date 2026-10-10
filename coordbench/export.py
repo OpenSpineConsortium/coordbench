@@ -27,7 +27,12 @@ What it writes, and why each file has the shape it has:
   aggregated_results_<model_key>_k1.json for pairs scored through the
   cascade (the shape generate_coop_index.py reads), and, for pairs a
   human labelled (--causes), static/data/causes/index.json with
-  causes/<cause>/<id>_trajectory.json in the 7-key step shape.
+  causes/<cause>/<id>_trajectory.json in the 7-key step shape. A tree
+  with no causes/index.json gets an empty one, since the stock viewer
+  fetches it before it reads its URL and opens nothing without it; so
+  --site may be a fresh directory served as the viewer's public root, or
+  the website's own public/ tree, whose files are merged into, not
+  replaced.
 
 The trajectory object is {"metadata", "steps"}. metadata carries the
 stock viewer's keys (repo, task_id, features, agent_1 .. agent_k,
@@ -84,7 +89,7 @@ import os
 import re
 import shlex
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +106,9 @@ GIT_ARMS = ("coop-git", "sdlc")
 SETTING_DIRS = ("coop", "coop_git")
 # The dataset renamed typst to typst_task after 59bbf65; the website keeps
 # the paper models' rows under the old name and the Gemini rows under the
-# new one, so a coordbench typst pair meets both only through the alias.
+# new one, two rows for each of the same 45 pairs. The alias makes them
+# one pair: a coordbench result joins one of the two rows (row_for), and
+# a reader looks a model's result up among both (index_result).
 REPO_ALIASES = {"typst": "typst_task"}
 STOCK_VIEWER_FILTERS = ("You are OpenHands agent", "<ROLE>", "You are agent_", "**FEATURE DESCRIPTION**",
                         "Added workspace context")
@@ -201,8 +208,16 @@ def read_jsonl(path):
     return None if text is None else list(json_lines(text))
 
 
-# Times. Claude Code writes UTC with a Z; run.py writes naive local times,
-# read here as the host's local time, which is what datetime.now() gave.
+# Times. Claude Code writes UTC with a Z, and the hub's times are epochs;
+# run.py writes result.json's times naive, in its host's zone, as
+# CooperBench's runner does. load_pair gives those the run host's offset
+# (host_zone) before anything reads them, since a reader in another zone
+# would otherwise put the agents' starts hours off their transcripts.
+# A naive time that is left (a CooperBench run, whose runner records no
+# zone) is read in the reader's zone, which is right on the run's host.
+QUARTER_HOUR_SECONDS = 900
+LARGEST_OFFSET_SECONDS = 14 * 3600
+
 
 def parse_time(value):
     """An ISO 8601 text or an epoch number as an aware datetime, or None."""
@@ -217,6 +232,67 @@ def parse_time(value):
     except ValueError:
         return None
     return moment if moment.tzinfo else moment.astimezone()
+
+
+def naive_time(value):
+    """A naive ISO 8601 text as its datetime, else None."""
+    try:
+        moment = datetime.fromisoformat(value) if isinstance(value, str) and value else None
+    except ValueError:
+        return None
+    return moment if moment is not None and moment.tzinfo is None else None
+
+
+def host_zone(result, events):
+    """The zone run.py's naive times were written in, and where it came
+    from: result.json's utc_offset_seconds; for a run from before it, the
+    offset between run_started's epoch and the run_create phase's naive
+    times, which the runner took around the hub's making of the Run on
+    the same host, rounded to the quarter hour every zone's offset is a
+    multiple of; else none, and the reader's own zone stands in."""
+    offset = number(result.get("utc_offset_seconds"))
+    source = "result.json utc_offset_seconds"
+    if offset is None:
+        offset, source = recovered_offset(result, events), "run_started against the run_create phase"
+    if offset is None or abs(offset) > LARGEST_OFFSET_SECONDS:
+        return None, "the reader's local zone (assumed: the run recorded none)"
+    return timezone(timedelta(seconds=offset)), source
+
+
+def recovered_offset(result, events):
+    started = run_started(events)
+    record = phase_record(result, "run_create")
+    if not started or number(started.get("epoch")) is None or not record:
+        return None
+    begin, end = naive_time(record.get("started")), naive_time(record.get("ended"))
+    if begin is None or end is None:
+        return None
+    wall = (begin + (end - begin) / 2).replace(tzinfo=timezone.utc).timestamp()
+    return round((wall - started["epoch"]) / QUARTER_HOUR_SECONDS) * QUARTER_HOUR_SECONDS
+
+
+def in_zone(value, zone):
+    """A naive time as an aware ISO text in the zone; anything else as it is."""
+    moment = naive_time(value)
+    return value if moment is None or zone is None else moment.replace(tzinfo=zone).isoformat()
+
+
+def zoned_result(result, zone):
+    """result.json with its naive times (started_at, ended_at, the
+    timings) made aware in the run host's zone."""
+    result = dict(result)
+    for name in ("started_at", "ended_at"):
+        result[name] = in_zone(result.get(name), zone)
+    if isinstance(result.get("timings"), list):
+        result["timings"] = [{**record, "started": in_zone(record.get("started"), zone),
+                              "ended": in_zone(record.get("ended"), zone)} if isinstance(record, dict) else record
+                             for record in result["timings"]]
+    return result
+
+
+def zone_record(zone, source):
+    offset = None if zone is None else int(zone.utcoffset(None).total_seconds())
+    return {"utc_offset_seconds": offset, "source": source}
 
 
 def utc_iso(moment):
@@ -377,14 +453,23 @@ def agent_feature(record, result):
     return feature
 
 
+def file_stem(name, result):
+    """The name an agent's files carry: "solo" for the solo setting, as
+    CooperBench's solo runner and run.py's agent_file_id name them
+    whatever the agent's id (coordbench's solo arm calls it agent1 on the
+    hub, and the timings and events by that id); any other agent its id."""
+    return "solo" if result.get("setting") == "solo" else name
+
+
 def describe_agents(pair_dir, result):
     agents = []
     for index, (name, record) in enumerate(agent_entries(result), 1):
-        agents.append({"id": name, "lane": f"agent_{index}", "index": index - 1, "record": record,
+        stem = file_stem(name, result)
+        agents.append({"id": name, "file": stem, "lane": f"agent_{index}", "index": index - 1, "record": record,
                        "feature_id": agent_feature(record, result),
                        "role": record.get("role") or record.get("team_role"),
-                       "session": pair_dir / f"{name}_session.jsonl", "stream": pair_dir / f"{name}_stream.jsonl",
-                       "outcome": read_json(pair_dir / f"{name}_session_outcome.json")})
+                       "session": pair_dir / f"{stem}_session.jsonl", "stream": pair_dir / f"{stem}_stream.jsonl",
+                       "outcome": read_json(pair_dir / f"{stem}_session_outcome.json")})
     return agents
 
 
@@ -392,8 +477,8 @@ def prompt_files(pair_dir, agents):
     names = []
     for agent in agents:
         for suffix in ("_prompt.md", ".session-prompt.md"):
-            if (pair_dir / f"{agent['id']}{suffix}").is_file():
-                names.append(f"{agent['id']}{suffix}")
+            if (pair_dir / f"{agent['file']}{suffix}").is_file():
+                names.append(f"{agent['file']}{suffix}")
     return names
 
 
@@ -404,8 +489,10 @@ def load_pair(pair_dir):
     result = read_json(pair_dir / "result.json")
     if not isinstance(result, dict):
         raise FileNotFoundError(f"{pair_dir / 'result.json'} is not there to read")
-    pair = {"dir": pair_dir, "result": result, "evaluation": read_json(pair_dir / "eval.json"),
-            "events": read_jsonl(pair_dir / "events.jsonl"), "judge": judge_labels(pair_dir),
+    events = read_jsonl(pair_dir / "events.jsonl")
+    zone, zone_source = host_zone(result, events)
+    pair = {"dir": pair_dir, "result": zoned_result(result, zone), "evaluation": read_json(pair_dir / "eval.json"),
+            "events": events, "judge": judge_labels(pair_dir), "time_zone": zone_record(zone, zone_source),
             "conversation": read_json(pair_dir / "conversation.json"), "sources": []}
     pair["agents"] = describe_agents(pair_dir, result)
     for name in ("result.json", "eval.json", "events.jsonl", "conversation.json", "conversation_store.json"):
@@ -633,7 +720,7 @@ def prompt_hints(pair_dir, agent):
     if outcome.get("run_token"):
         hints.append(outcome["run_token"])
     for suffix in ("_prompt.md", ".session-prompt.md"):
-        text = read_text(pair_dir / f"{agent['id']}{suffix}")
+        text = read_text(pair_dir / f"{agent['file']}{suffix}")
         first = next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
         if first:
             hints.append(first[:200])
@@ -1507,6 +1594,7 @@ def coordbench_metadata(pair, metas, found_by_agent, steps, cooperbench_dir, cau
              "feature_ids": feature_numbers(result),
              "model": result.get("model"), "agents": metas, "outcome": outcome_of(pair["evaluation"]),
              "timestamps": timestamps_kind(found_by_agent), "anchor": pair["anchor_source"],
+             "time_zone": pair["time_zone"],
              "sources": sorted(set(pair["sources"])), "prompt_files": prompt_files(pair["dir"], pair["agents"]),
              "join_warnings": pair["warnings"], "filtered_by_stock_viewer": [s["id"] for s in steps if stock_viewer_drops(s)],
              "messages": messages, "messages_recorded": all(m["content"] is not None for m in messages),
@@ -1615,7 +1703,7 @@ def runner_trajectory_files(pair_dir, result):
     is not: run.py writes them for a new run, this fills an older one."""
     written = []
     for name, record in agent_entries(result):
-        session = read_text(pair_dir / f"{name}_session.jsonl")
+        session = read_text(pair_dir / f"{file_stem(name, result)}_session.jsonl")
         if not session:
             continue
         feature = agent_feature(record, result)
@@ -1624,7 +1712,7 @@ def runner_trajectory_files(pair_dir, result):
             continue
         body = {"repo": result.get("repo"), "task_id": result.get("task_id")}
         body.update({"features": feature} if result.get("setting") == "solo" else {"feature_id": feature})
-        body.update({"agent_id": name, "model": result.get("model"), "status": record.get("status"),
+        body.update({"agent_id": file_stem(name, result), "model": result.get("model"), "status": record.get("status"),
                      "cost": record.get("cost"), "steps": record.get("steps"),
                      "messages": parse_session_jsonl(session)})
         if record.get("team_role"):
@@ -1695,28 +1783,37 @@ def row_key(row):
     return (canonical_repo(row.get("repo")), row.get("taskId"), row.get("features"))
 
 
+def row_for(tasks, row):
+    """The index row a pair's result joins, or None: among the rows of the
+    same pair (row_key, the repo through REPO_ALIASES), the one under the
+    pair's own repo name, else the first. One row and never both of a
+    typst pair's two, since a result in both would count twice in the
+    model's stats."""
+    same = [existing for existing in tasks if row_key(existing) == row_key(row)]
+    return next((existing for existing in same if existing.get("repo") == row.get("repo")), same[0] if same else None)
+
+
 def merge_index(index, rows, key, display):
     """index.json with the rows merged in as write_index merges them: by
-    (repo, taskId, features), the repo through REPO_ALIASES so a typst
-    pair meets the paper models' typst rows. The model's stats are counted
-    from every row it has, so merging twice changes nothing; rate is
-    rounded to one decimal, as write_index rounds it."""
+    (repo, taskId, features), the repo through REPO_ALIASES, into the row
+    row_for picks. The model's stats are counted from every row it has, so
+    merging twice changes nothing; rate is rounded to one decimal, as
+    write_index rounds it."""
     index = json.loads(json.dumps(index or {}))
     models = index.setdefault("models", [])
     if key not in models:
         models.append(key)
     index.setdefault("modelDisplayNames", {})[key] = display
-    lookup = {row_key(row): row for row in index.setdefault("tasks", [])}
+    tasks = index.setdefault("tasks", [])
     for row in rows:
-        existing = lookup.get(row_key(row))
+        existing = row_for(tasks, row)
         if existing is None:
-            index["tasks"].append(row)
-            lookup[row_key(row)] = row
+            tasks.append(row)
             continue
         existing.setdefault("results", {})[key] = row["results"][key]
         existing.setdefault("hasTrajectory", {})[key] = row["hasTrajectory"][key]
-    index["tasks"].sort(key=lambda row: (row.get("repo") or "", row.get("taskId") or "", row.get("features") or ""))
-    index.setdefault("stats", {})[key] = model_stats(index["tasks"], key)
+    tasks.sort(key=lambda row: (row.get("repo") or "", row.get("taskId") or "", row.get("features") or ""))
+    index.setdefault("stats", {})[key] = model_stats(tasks, key)
     return index
 
 
@@ -1727,12 +1824,24 @@ def model_stats(rows, key):
 
 
 def row_repo(index, row):
-    """The repo name the index's row for this pair carries, which may be
-    the alias: the stock viewer builds its URL from it."""
-    for existing in index.get("tasks", []):
-        if row_key(existing) == row_key(row):
-            return existing.get("repo")
-    return row.get("repo")
+    """The repo name of the index row this pair's result joined (row_for),
+    which may be the alias: the viewer URL is built from it, so a reader
+    of the index finds the result under the name the URL gives."""
+    existing = row_for(index.get("tasks", []), row)
+    return existing.get("repo") if existing else row.get("repo")
+
+
+def index_result(index, repo, task, features, model):
+    """A model's result for a pair in a website index, and the row it is
+    in: among the rows of the pair (the repo through REPO_ALIASES, so both
+    of a typst pair's rows), the one that holds the model's result, else
+    the one under the repo name given, else the first. (None, None) when
+    the index has no row for the pair."""
+    wanted = {"repo": repo, "taskId": task, "features": features}
+    same = [row for row in index.get("tasks", []) if isinstance(row, dict) and row_key(row) == row_key(wanted)]
+    holding = next((row for row in same if model in (row.get("results") or {})), None)
+    row = holding or next((row for row in same if row.get("repo") == repo), same[0] if same else None)
+    return ((row or {}).get("results") or {}).get(model), row
 
 
 def legacy_detail(trajectory, evaluation):
@@ -1821,10 +1930,10 @@ def merge_causes(index, entry):
 def write_site(out_dir, exported, key_override=None):
     """Every exported pair into the website's layout under out_dir:
     [(pair_dir, trajectory, evaluation)]. Returns the viewer URLs."""
-    out_dir, urls = Path(out_dir), []
+    out_dir, urls, taken = Path(out_dir), [], {}
     data = out_dir / "static" / "data"
     for pair_dir, trajectory, evaluation in exported:
-        key = key_override or model_key(trajectory)
+        key = unclaimed_key(taken, key_override or model_key(trajectory), trajectory, pair_dir)
         setting = setting_dir(trajectory)
         row = index_row(trajectory, key)
         index_path = data / setting / "index.json"
@@ -1840,7 +1949,43 @@ def write_site(out_dir, exported, key_override=None):
         cause = metadata["coordbench"].get("cause")
         if cause:
             write_cause(data, pair_dir, trajectory, key, cause)
+    ensure_cause_index(data)
     return urls
+
+
+def ensure_cause_index(data):
+    """An empty causes/index.json where the tree has none: the stock
+    viewer fetches it on load before it reads its URL and loads nothing
+    when the fetch fails, so a tree written into a fresh directory needs
+    it to open at all. One that is there is the website's or a labelled
+    run's, and is left as it is."""
+    path = data / "causes" / "index.json"
+    if not path.exists():
+        write_json(path, {cause: [] for cause in CAUSES})
+
+
+def site_pair(trajectory, key):
+    metadata = trajectory["metadata"]
+    return (setting_dir(trajectory), key, canonical_repo(metadata["repo"]), metadata["task_id"], metadata["features"])
+
+
+def unclaimed_key(taken, key, trajectory, pair_dir):
+    """The key a pair is written under: its own, unless this call already
+    wrote another run's same pair under it, which the later one would
+    silently replace (two runs of one model, arm and driver over a pair,
+    or one --model-key given for both); then the key with the run's name
+    added, and a warning, so neither run is lost."""
+    candidate, number = key, 1
+    run = slug(trajectory["metadata"]["coordbench"].get("run_name") or "run")
+    while site_pair(trajectory, candidate) in taken:
+        number += 1
+        candidate = f"{key}_{run}" if number == 2 else f"{key}_{run}_{number}"
+    if candidate != key:
+        warn(f"{pair_dir}: {taken[site_pair(trajectory, key)]} is already exported under {key} for this pair, "
+             f"so this one goes under {candidate}; export each run in its own call with its own --model-key "
+             "to choose the names")
+    taken[site_pair(trajectory, candidate)] = pair_dir
+    return candidate
 
 
 def write_legacy(out_dir, trajectory, setting, key, evaluation):

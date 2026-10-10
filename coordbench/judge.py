@@ -1630,8 +1630,10 @@ def tool_uses(records):
 
 def agent_tool_uses(pair, agent):
     """The agent's tool calls from its session transcript (which has
-    times), else its stream; None when neither shows a call."""
-    for name in (f"{agent}_session.jsonl", f"{agent}_stream.jsonl"):
+    times), else its stream; None when neither shows a call. A solo
+    agent's files are solo_*, whatever its id, as run.py names them."""
+    stem = "solo" if pair.result.get("setting") == "solo" else agent
+    for name in (f"{stem}_session.jsonl", f"{stem}_stream.jsonl"):
         records = read_jsonl(pair.dir / name)
         calls = tool_uses(main_chain(records)) if records else []
         if calls:

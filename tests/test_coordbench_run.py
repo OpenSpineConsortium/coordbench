@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -108,7 +109,8 @@ COOPERBENCH_SOLO_KEYS = ["repo", "task_id", "features", "setting", "run_id", "ru
                          "started_at", "ended_at", "duration_seconds", "agent", "total_cost", "total_steps", "log_dir"]
 # What coordbench adds after them.
 COORDBENCH_RESULT_KEYS = {"arm", "driver", "agents_seconds", "isolation", "options", "agent_models", "max_turns",
-                          "timeout_s", "disallowed_tools", "provenance", "image", "metrics", "timings"}
+                          "timeout_s", "disallowed_tools", "provenance", "image", "metrics", "timings",
+                          "utc_offset_seconds"}
 RESULT_KEYS = set(COOPERBENCH_COOP_KEYS) | COORDBENCH_RESULT_KEYS
 # coop.py's per-agent fields in its order, then coordbench's.
 COOPERBENCH_AGENT_KEYS = ["feature_id", "status", "cost", "steps", "input_tokens", "output_tokens",
@@ -424,6 +426,18 @@ def write_transcript(path, token, model="claude-sonnet-4-5", age=10, final=True)
     return path
 
 
+def user_line(text):
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def write_lines(path, lines):
+    """A transcript of the given lines, ten seconds old like write_transcript's."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    os.utime(path, (time.time() - 10, time.time() - 10))
+    return path
+
+
 def write_dataset(cooperbench_dir):
     task = cooperbench_dir / "dataset" / REPO / f"task{TASK}"
     for feature in (1, 2, 6, 10):
@@ -710,8 +724,40 @@ class Provisioning(RunnerCase):
         self.assertEqual(plan["warnings"], [])
         self.assertFalse([c for c in self.docker.commands() if "coordbench-git" in c])
         runner.teardown(plan)
-        self.assertIn(["volume", "rm", "-f", volume], self.docker.commands())
-        self.assertIn(["rm", "-f", *[a["container"] for a in plan["agents"]]], self.docker.commands())
+        commands = self.docker.commands()
+        self.assertIn(["volume", "rm", "-f", volume], commands)
+        removed = ["rm", "-f", *[a["container"] for a in plan["agents"]]]
+        self.assertIn(removed, commands)
+        # The volume's last state is copied out of a container that mounts
+        # it, before the containers and the volume go.
+        copied = ["cp", f"{plan['agents'][0]['container']}:/workspace/shared/.", str(Path(plan["run_dir"]) / "shared")]
+        self.assertLess(commands.index(copied), commands.index(removed))
+        self.assertTrue((Path(plan["run_dir"]) / "shared").is_dir())
+
+    def test_a_pair_run_again_packs_the_earlier_attempt_s_files_first(self):
+        plan, _, _ = self.prepare("coop")
+        runner.teardown(plan)
+        run_dir = Path(plan["run_dir"])
+        (run_dir / "judge.json").write_text('{"speech_acts": {"6": "Plan"}}')
+        (run_dir / "agent2_sent.jsonl").write_text("{}\n")
+        (run_dir / "bin" / "agent1").mkdir(parents=True)
+        (run_dir / "bin" / "agent1" / "token").write_text("secret")
+        (run_dir / "workspaces" / "agent1").mkdir(parents=True)
+        again, _, _ = self.prepare("coop")
+        self.assertEqual(again["run_dir"], plan["run_dir"])
+        archives = sorted(run_dir.glob("previous-*.tar.gz"))
+        self.assertEqual(len(archives), 1)
+        self.assertFalse((run_dir / "judge.json").exists())
+        self.assertFalse((run_dir / "agent2_sent.jsonl").exists())
+        with tarfile.open(archives[0]) as bundle:
+            names = bundle.getnames()
+        self.assertIn("judge.json", names)
+        self.assertIn("agent2_sent.jsonl", names)
+        self.assertFalse([name for name in names if name.split("/")[0] in ("bin", "workspaces")])
+        self.assertIn(f"an earlier attempt's files in the pair directory were packed into {archives[0].name}",
+                      again["warnings"])
+        runner.teardown(again)
+        self.assertIsNone(runner.set_aside_earlier_attempt(self.tmp / "no-such-pair"))
 
     def test_a_shared_volume_with_no_host_path_fails_the_pair_and_one_not_writable_is_warned_of(self):
         self.docker.mountpoint = ""
@@ -1455,6 +1501,36 @@ class Runs(RunnerCase):
         self.assertEqual(len(self.scorer.calls), 2)
         self.assertTrue((self.pair() / "eval.json").exists())
 
+    def test_rescore_scores_from_the_patches_and_never_starts_an_agent(self):
+        """An agent in Error makes a pair unfinished, so run would run it
+        again with its agents; rescore scores it from its patches alone,
+        and leaves the run's config.json and result.json as they were."""
+        self.main(*self.run_arguments("coop", "--features", "1,6"))
+        pair = self.pair()
+        result = json.loads((pair / "result.json").read_text())
+        result["agents"]["agent2"]["status"] = "Error"
+        (pair / "result.json").write_text(json.dumps(result))
+        evaluation = json.loads((pair / "eval.json").read_text())
+        evaluation.pop("cascade")
+        (pair / "eval.json").write_text(json.dumps(evaluation))
+        config, kept = (self.logs / "t" / "config.json").read_bytes(), (pair / "result.json").read_bytes()
+        before, scored = len(self.container_work()), len(self.scorer.calls)
+        code, _, err = self.main("rescore", "--run-dir", str(self.logs / "t"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.container_work()), before, "no container, no agent")
+        self.assertEqual(len(self.scorer.calls), scored + 1)
+        self.assertIn("cascade", json.loads((pair / "eval.json").read_text()))
+        self.assertEqual(((self.logs / "t" / "config.json").read_bytes(), (pair / "result.json").read_bytes()),
+                         (config, kept))
+        self.assertIn("rescored: 1 pass", err)
+        # A pair whose eval.json has its cascade is scored again only with --force.
+        code, _, err = self.main("rescore", "--run-dir", str(pair))
+        self.assertEqual((code, len(self.scorer.calls)), (0, scored + 1))
+        self.assertIn("rescored: 1 skipped", err)
+        code, _, err = self.main("rescore", "--run-dir", str(pair), "--force")
+        self.assertEqual((code, len(self.scorer.calls)), (0, scored + 2))
+        self.assertEqual(self.main("rescore", "--run-dir", str(self.tmp / "nothing"))[0], 1)
+
     def test_prepare_then_finish_with_the_session_driver(self):
         code, out, err = self.main("prepare", "--arm", "coop", "--repo", REPO, "--task", str(TASK),
                                    "--features", "1,6", "--hub", self.hub_url, "--name", "t",
@@ -1941,10 +2017,41 @@ class SessionTranscripts(unittest.TestCase):
         self.assertEqual(drivers.find_transcripts("tok-1", [self.root], time.time() - 600), [mine])
         self.assertEqual(drivers.find_transcripts("tok-1", [self.root], 0), [mine, old])
         pasted = self.root / "p" / "s" / "subagents" / "agent-4.jsonl"
-        pasted.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "...tok-5..."}}) + "\n"
-                          + json.dumps({"type": "user", "message": {"role": "user", "content": "tok-6"}}) + "\n")
-        self.assertTrue(drivers.carries_token(pasted, "tok-5"))
-        self.assertFalse(drivers.carries_token(pasted, "tok-6"), "only the first user message is the prompt")
+        write_lines(pasted, [user_line("[Workflow harness - user request] ...tok-5..."),
+                             user_line("[Workflow harness - computed task] ...tok-6..."),
+                             {"type": "assistant", "message": {"role": "assistant", "content": [
+                                 {"type": "text", "text": "Reading it."}]}},
+                             user_line("tok-7, read back from a file after the first reply")])
+        self.assertEqual(drivers.carries_token(pasted, "tok-5"), "prompt")
+        self.assertEqual(drivers.carries_token(pasted, "tok-6"), "prompt", "every user line before a reply is the prompt")
+        self.assertIsNone(drivers.carries_token(pasted, "tok-7"))
+
+    def test_an_orchestrator_that_pasted_both_prompts_is_neither_agent_s(self):
+        """An orchestrating subagent carries both agents' tokens in its
+        tool calls' inputs, and is the newest file, since it runs finish;
+        a token in a tool call's input never counts, and a transcript that
+        names another agent of the run is nobody's."""
+        one, two = drivers.run_token("run-1", "agent1"), drivers.run_token("run-1", "agent10")
+        subagents = self.root / "p" / "s" / "subagents"
+        mine = write_transcript(subagents / "agent-a1.jsonl", one, age=100)
+        write_transcript(subagents / "agent-a10.jsonl", two, age=90)
+        launch = [{"type": "tool_use", "id": f"t{n}", "name": "Agent", "input": {"prompt": f"Begin with {token}."}}
+                  for n, token in enumerate((one, two))]
+        orchestrator = write_lines(subagents / "agent-orchestrator.jsonl", [
+            user_line("Run the pair."), {"type": "assistant", "message": {"role": "assistant", "content": launch}}])
+        self.assertIsNone(drivers.carries_token(orchestrator, one))
+        self.assertEqual(drivers.find_transcripts(one, [self.root], 0), [mine])
+        self.assertEqual(drivers.find_transcripts(two, [self.root], 0), [subagents / "agent-a10.jsonl"])
+        alone = write_lines(subagents / "agent-launcher.jsonl", [
+            user_line("Run agent1."), {"type": "assistant", "message": {"role": "assistant", "content": launch[:1]}}])
+        self.assertIsNone(drivers.carries_token(alone, one), "a token in a tool call's input is not a reply")
+
+    def test_a_transcript_whose_reply_carries_the_token_comes_before_a_newer_one_whose_prompt_does(self):
+        token = drivers.run_token("run-2", "agent1")
+        subagents = self.root / "p" / "s" / "subagents"
+        replied = write_transcript(subagents / "agent-replied.jsonl", token, age=100)
+        prompted = write_lines(subagents / "agent-prompted.jsonl", [user_line(f"Begin with {token}.")])
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0), [replied, prompted])
 
     def test_usage_counts_each_api_message_once_with_its_largest_figures(self):
         usage = drivers.transcript_usage("".join(json.dumps(line) + "\n" for line in transcript_lines("t")))

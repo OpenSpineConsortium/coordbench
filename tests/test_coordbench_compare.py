@@ -123,6 +123,23 @@ class Report(unittest.TestCase):
         self.assertEqual(extras["feature_titles"], [{"feature": "feature1", "title": "One"},
                                                     {"feature": "feature2", "title": "Two"}])
 
+    def test_a_typst_pair_s_result_is_found_in_whichever_row_holds_it(self):
+        """The website keeps a typst pair as two rows, typst for the paper
+        models and typst_task for the Gemini runs; a Gemini file finds its
+        result in the second whatever name it is asked by."""
+        self.published_site()
+        data = self.root / "site" / "static" / "data"
+        index = json.loads((data / "coop" / "index.json").read_text())
+        index["tasks"].append({"repo": "typst_task", "taskId": "task6554", "features": "feature1_feature2",
+                               "results": {"gemini_flash_sdk": {"passed": False, "hasConflict": True}}})
+        (data / "coop" / "index.json").write_text(json.dumps(index))
+        gemini = data / "coop" / "trajectories" / "gemini_flash_sdk"
+        gemini.mkdir()
+        for name in ("typst_task_task6554_feature1_feature2.json.gz", "typst_task6554_feature1_feature2.json.gz"):
+            (gemini / name).write_bytes(gzip.compress(json.dumps([]).encode()))
+            extras = compare.site_extras(gemini / name)
+            self.assertEqual(extras.get("index_result"), {"passed": False, "hasConflict": True}, name)
+
     def test_a_pair_the_index_lacks_is_marked_not_published(self):
         path = self.published_site()
         renamed = path.with_name("typst_task6554_feature1_feature3.json.gz")
@@ -225,6 +242,24 @@ def stepless_sample():
                                       "conversation": None, "judge": json.loads((FIXTURE / "judge.json").read_text())}}
 
 
+def silent_sample():
+    """The fixture's export with judge.json as judge.py writes it for a
+    failed pair with no messages: App G's rule decided the symptoms and
+    no model was called."""
+    data = export.build_trajectory(FIXTURE, NO_DATASET)
+    data["metadata"]["coordbench"]["failure_modes"] = {"calls": {}, "symptoms": {
+        "prompt_variant": "symptoms-r1", "decided_by": "rule", "level": "implementation", "primary": None,
+        "secondary": [], "evidence": [], "coerced": True}}
+    return data
+
+
+def partial_sample():
+    """The fixture's export with one agent's output count not measured."""
+    data = export.build_trajectory(FIXTURE, NO_DATASET)
+    data["metadata"]["coordbench"]["agents"][1]["tokens"]["output"] = None
+    return data
+
+
 def judged_sample():
     """The fixture's export with judge.json's calls, as judge.py writes
     them: one entry per section, each naming its own judge."""
@@ -248,7 +283,8 @@ class Normaliser(unittest.TestCase):
                  {"label": "seven", "data": seven_key_sample()}, {"label": "stepless", "data": stepless_sample()},
                  {"label": "unknown", "data": {"hello": 1}},
                  {"label": "unpublished", "data": legacy_sample(), "extras": {"index_missing": True}},
-                 {"label": "judged", "data": judged_sample()}]
+                 {"label": "judged", "data": judged_sample()}, {"label": "silent", "data": silent_sample()},
+                 {"label": "partial", "data": partial_sample()}]
         done = subprocess.run([NODE, "-e", HARNESS, str(PAGE)], input=json.dumps(cases), capture_output=True,
                               text=True, timeout=60)
         if done.returncode != 0:
@@ -259,7 +295,8 @@ class Normaliser(unittest.TestCase):
         shapes = {label: run.get("shape") for label, run in self.runs.items()}
         self.assertEqual(shapes, {"coordbench": "coordbench", "legacy": "legacy-openhands", "sdk": "openhands-sdk",
                                   "miniswe": "mini-swe", "seven": "seven-key", "stepless": "coordbench-stepless",
-                                  "unknown": None, "unpublished": "legacy-openhands", "judged": "coordbench"})
+                                  "unknown": None, "unpublished": "legacy-openhands", "judged": "coordbench",
+                                  "silent": "coordbench", "partial": "coordbench"})
         self.assertIn("not a trajectory", self.runs["unknown"]["error"])
 
     def test_the_coordbench_export_reads_whole(self):
@@ -303,10 +340,121 @@ class Normaliser(unittest.TestCase):
                          "claude-cli, m1: appF-7, symptoms-r1; openai-compatible, gpt-5: speechacts-v1")
         self.assertNotIn(";", self.runs["coordbench"]["judge"] or "")
 
+    def test_symptoms_app_g_s_rule_decided_are_marked_rule_and_name_no_judge(self):
+        run = self.runs["silent"]
+        self.assertEqual(run["cells"]["primary"], ["absent", "rule"])
+        self.assertEqual(run["cells"]["secondary"], ["absent", "rule"])
+        self.assertEqual(run["judge"], "")
+        self.assertEqual(self.runs["judged"]["cells"]["primary"][1], "judge")
+
+    def test_a_token_total_that_leaves_a_count_out_is_a_lower_bound(self):
+        self.assertTrue(self.runs["partial"]["speed"]["tokens_partial"])
+        self.assertFalse(self.runs["coordbench"]["speed"]["tokens_partial"])
+
     def test_a_missing_index_row_is_not_published_never_a_fail(self):
         run = self.runs["unpublished"]
         self.assertIsNone(run["outcome"]["passed"])
         self.assertEqual(run["cells"]["naive_conflict"], ["unpublished", None])
+
+
+CHECKS_HARNESS = r"""
+const fs = require("fs"); const vm = require("vm");
+const html = fs.readFileSync(process.argv[1], "utf8");
+const schema = html.match(/<script id="coordbench-schema" type="application\/json">([\s\S]*?)<\/script>/)[1];
+const scripts = html.match(/<script>([\s\S]*?)<\/script>/g);
+const main = scripts[scripts.length - 1].replace(/^<script>/, "").replace(/<\/script>$/, "");
+const sandbox = { console, URLSearchParams, TextDecoder, Date, JSON, Math, Set, Map, Object, Array, String, Number, RegExp,
+  window: { COORDBENCH_COMPARE_NO_START: true, location: { search: "" } },
+  document: { getElementById: (id) => ({ textContent: id === "coordbench-schema" ? schema : "null" }) } };
+vm.createContext(sandbox);
+vm.runInContext(main + "\n;globalThis.__checks = " + fs.readFileSync(0, "utf8") + ";", sandbox);
+process.stdout.write(JSON.stringify(sandbox.__checks()));
+"""
+
+# Each check runs inside the page's script, so it calls the page's own
+# functions; the speed table's arithmetic, the baseline's place, the
+# index lookup and the naive-time reading.
+PAGE_CHECKS = r"""() => {
+  const metric = (key) => SPEED_METRICS.find((m) => m.key === key);
+  const run = (label, speed, kind) => ({ label, speed, timestamps_kind: kind || "real" });
+  const a = run("a", { wall_ms: 1000, first_message_ms: 250, steps_per_min: 6, tokens: 100, tokens_partial: false });
+  const b = run("b", { wall_ms: 4000, first_message_ms: 2000, steps_per_min: 3, tokens: 50, tokens_partial: true });
+  const c = run("c", { wall_ms: 500, first_message_ms: null, steps_per_min: 12, tokens: null }, "interpolated");
+  const plain = { relative: false, ownScale: false }, relative = { relative: true, ownScale: false };
+  const own = { relative: false, ownScale: true }, both = { relative: true, ownScale: true };
+  const values = (m, options, base) => [a, b, c].map((r) => metricValue(r, metric(m), options, base));
+  const ranks = (m, options, base, include) =>
+    rankedRuns(metric(m), [a, b, c], values(m, options, base), include).map((x) => x.r.label);
+  const out = {
+    plain: values("wall_ms", plain, a), relative_to_a: values("wall_ms", relative, a),
+    relative_to_b: values("wall_ms", relative, b), own_scale: values("first_message_ms", own, a),
+    own_scale_relative: values("first_message_ms", both, a),
+    rank_time: ranks("wall_ms", plain, a, false), rank_time_all: ranks("wall_ms", plain, a, true),
+    rank_rate: ranks("steps_per_min", plain, a, true), rank_relative: ranks("wall_ms", relative, b, true),
+    lower_bound: [lowerBound(b, metric("tokens"), plain, a), lowerBound(b, metric("tokens"), relative, a),
+                  lowerBound(b, metric("tokens"), relative, b), lowerBound(a, metric("tokens"), plain, a)],
+  };
+  page.runs = ["r0", "r1", "r2", "r3"].map((label, index) => ({ label, index }));
+  page.baseline = 2;
+  out.after_removing_before = [removeRun(0), page.baseline, page.runs[page.baseline].label];
+  out.after_removing_after = [removeRun(2), page.baseline, page.runs[page.baseline].label];
+  out.after_removing_baseline = [removeRun(1), page.baseline, page.runs[page.baseline].label];
+  const rows = (repo, model) => ({ repo, taskId: "task6554", features: "feature1_feature2",
+    results: { [model]: { passed: model === "gpt5" } } });
+  const index = { tasks: [rows("typst", "gpt5"), rows("typst_task", "gemini_flash_sdk")] };
+  const job = (repo, model) => ({ repo, task: "task6554", features: "feature1_feature2", model });
+  out.index = [indexResult(index, job("typst_task", "gemini_flash_sdk")), indexResult(index, job("typst", "gemini_flash_sdk")),
+               indexResult(index, job("typst_task", "gpt5")), indexResult(index, job("typst", "claude"))];
+  out.naive_times = [resultTimeMs("2026-10-09T23:06:38", { utc_offset_seconds: 7200 }),
+                     resultTimeMs("2026-10-09T23:06:38.500000", { utc_offset_seconds: 7200 }),
+                     resultTimeMs("2026-10-09T21:06:38Z", { utc_offset_seconds: 7200 })];
+  return out;
+}"""
+
+
+@unittest.skipUnless(NODE, "node is not on PATH")
+class PageFunctions(unittest.TestCase):
+    """The page's speed arithmetic and ranks, the baseline kept on the run
+    the user chose when another is removed, the typst rows' lookup by
+    model and the reading of result.json's naive times, run by node."""
+
+    @classmethod
+    def setUpClass(cls):
+        done = subprocess.run([NODE, "-e", CHECKS_HARNESS, str(PAGE)], input=PAGE_CHECKS, capture_output=True,
+                              text=True, timeout=60)
+        if done.returncode != 0:
+            raise AssertionError(done.stderr)
+        cls.out = json.loads(done.stdout)
+
+    def test_relative_speed_is_each_run_over_the_baseline(self):
+        self.assertEqual(self.out["plain"], [1000, 4000, 500])
+        self.assertEqual(self.out["relative_to_a"], [1, 4, 0.5])
+        self.assertEqual(self.out["relative_to_b"], [0.25, 1, 0.125])
+        self.assertEqual(self.out["own_scale"], [0.25, 0.5, None])
+        self.assertEqual(self.out["own_scale_relative"], [1, 2, None])
+
+    def test_ranks_put_the_fastest_first_and_leave_unreliable_times_out(self):
+        self.assertEqual(self.out["rank_time"], ["a", "b"])
+        self.assertEqual(self.out["rank_time_all"], ["c", "a", "b"])
+        self.assertEqual(self.out["rank_rate"], ["c", "a", "b"])
+        self.assertEqual(self.out["rank_relative"], ["c", "a", "b"])
+
+    def test_a_partial_token_total_is_marked_unless_its_baseline_is_partial_too(self):
+        self.assertEqual(self.out["lower_bound"], [True, True, False, False])
+
+    def test_removing_a_run_keeps_the_chosen_baseline(self):
+        self.assertEqual(self.out["after_removing_before"], [None, 1, "r2"])
+        self.assertEqual(self.out["after_removing_after"], [None, 1, "r2"])
+        note, baseline, label = self.out["after_removing_baseline"]
+        self.assertEqual((baseline, label), (0, "r1"))
+        self.assertIn("the baseline r2 was removed", note)
+
+    def test_a_typst_pair_s_result_is_found_in_either_row(self):
+        self.assertEqual(self.out["index"], [{"passed": False}, {"passed": False}, {"passed": True}, None])
+
+    def test_result_json_s_naive_times_are_read_in_the_run_host_s_zone(self):
+        expected = 1791580000000 - 2000
+        self.assertEqual(self.out["naive_times"], [expected, expected + 500, expected])
 
 
 if __name__ == "__main__":

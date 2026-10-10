@@ -1013,13 +1013,15 @@ class RemoteSandbox:
 
     def kill(self):
         """The process, and the container it can no longer end: a killed
-        helper runs no finally, so the sandbox would stay up."""
+        helper runs no finally, so the sandbox would stay up. The container
+        is forgotten once removed, so a second close removes nothing."""
         if self.process.poll() is None:
             self.process.kill()
             self.process.wait()
         if self.container:
+            container, self.container = self.container, None
             with contextlib.suppress(OSError, subprocess.SubprocessError):
-                drivers.docker("rm", "-f", self.container, timeout=60)
+                drivers.docker("rm", "-f", container, timeout=60)
 
 
 def scorer_environment():

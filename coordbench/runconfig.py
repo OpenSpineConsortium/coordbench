@@ -250,7 +250,10 @@ def pair_report(run_dir, task, status, eval_skipped=False):
     if status == "error":
         entry["error"] = result.get("error")
     entry["eval"] = None if status == "error" else eval_status(read_json(Path(run_dir) / "eval.json"))
-    return {"entry": entry, "eval_skipped": eval_skipped and entry["eval"] is not None, "run_dir": str(run_dir)}
+    # _process_eval_result checks an evaluation's error before its skipped
+    # flag, so an errored evaluation found on disk is an error, never a skip.
+    skipped = eval_skipped and entry["eval"] in ("pass", "fail")
+    return {"entry": entry, "eval_skipped": skipped, "run_dir": str(run_dir)}
 
 
 def eval_tally(reports):

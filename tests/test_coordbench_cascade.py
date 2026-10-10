@@ -782,12 +782,17 @@ class TheChannel(unittest.TestCase):
         self.assertIsNotNone(self.sandbox.process.returncode)
         self.assertLess(time.monotonic() - started, 30)
 
-    def test_a_kill_removes_the_container_it_knows(self):
+    def test_a_kill_removes_the_container_it_knows_once(self):
+        """The id is made up, so no docker may ever see it: the container
+        is forgotten once removed, and setUp's cleanup, which closes the
+        sandbox again after the mock is gone, removes nothing."""
         self.sandbox.container = "c0ffee"
         self.sandbox.broken = True
         with mock.patch.object(cascade.drivers, "docker") as docker:
             self.sandbox.close()
+            self.sandbox.close()
         docker.assert_called_once_with("rm", "-f", "c0ffee", timeout=60)
+        self.assertIsNone(self.sandbox.container)
 
 
 def cooperbench_checkout():

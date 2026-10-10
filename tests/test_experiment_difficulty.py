@@ -33,6 +33,12 @@ class BucketTest(unittest.TestCase):
         self.assertEqual(difficulty.bucket_of(0.999), 9)
         self.assertEqual(difficulty.bucket_of(1.0), 9)
 
+    def test_a_value_inside_a_bucket_is_floored_never_rounded(self):
+        # floor(10 d~): 0.35 and 0.39 are bucket 3, 0.95 bucket 9, and 0.05
+        # bucket 0, where rounding would move each up a bucket.
+        for d_tilde, bucket in ((0.05, 0), (0.15, 1), (0.35, 3), (0.39, 3), (0.45, 4), (0.65, 6), (0.95, 9)):
+            self.assertEqual(difficulty.bucket_of(d_tilde), bucket, d_tilde)
+
     def test_midpoints(self):
         self.assertEqual(difficulty.midpoint(0), 0.05)
         self.assertEqual(difficulty.midpoint(9), 0.95)
