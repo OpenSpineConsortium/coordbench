@@ -111,14 +111,17 @@ itself merges a pull request once it is marked ready and a branch brings
 a moved main in by merging it; the arm keeps its tools, its prompt, its
 metrics and its words, and names its own commands where two of the
 gate's refusals name none. The library is vendored at
-coordbench/vendor/sdlc_protocol, and coordbench/vendor/VENDORED names the
-version and commit the copy is. The directory is inside the package, so
-the hub imports it from there and install_coordbench copies it into every
-agent's container with the rest. To take another release, check out its
-tag in a clone of OpenSpineConsortium/sdlc-protocol, run its
-scripts/vendor.sh on this repository, which writes tools/sdlc_protocol
-and tools/VENDORED, and move both into coordbench/vendor;
-tests/test_coordbench_vendor.py holds the copy to VENDORED's line.
+coordbench/vendor/sdlc_protocol, and coordbench/vendor/VENDORED records
+the copy: the version and the commit it was made from, then the sha256
+of every file. The directory is inside the package, so the hub imports
+it from there and install_coordbench copies it into every agent's
+container with the rest. The copy is never edited here: a change to the
+protocol is made in OpenSpineConsortium/sdlc-protocol, whose sync
+workflow brings it here as the pull request sdlc-protocol/sync, and
+scripts/check.sh fails on a copy that differs from its record.
+coordbench/vendor/README.md says how the copy is refreshed, and
+tests/test_coordbench_vendor.py holds it to the record and, on CI, which
+clones sdlc-protocol, to the library's own files.
 
 ## An arm is a Claude Code plugin
 
