@@ -1,14 +1,18 @@
 name: Checks
 
 # bash scripts/check.sh on every pull request and on every push to a branch
-# that is not a claude/ branch: a claude/ branch's pull request runs the
-# check already, so the push trigger leaves those out rather than run it
-# twice. The runner's own python3 is used (3.12 on ubuntu-latest).
+# that is not a claude/ branch or sdlc-protocol's sync branch: each of those
+# has its pull request, which runs the check already, so the push trigger
+# leaves them out rather than run it twice. sdlc-protocol's sync workflow
+# pushes the branch sdlc-protocol/sync with the GitHub App's token, which,
+# unlike a workflow's own GITHUB_TOKEN, starts this workflow on its pull
+# request.
+# The runner's own python3 is used (3.12 on ubuntu-latest).
 
 on:
   pull_request:
   push:
-    branches-ignore: ["claude/**"]
+    branches-ignore: ["claude/**", "sdlc-protocol/**"]
 
 permissions:
   contents: read
