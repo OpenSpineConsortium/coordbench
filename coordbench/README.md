@@ -120,7 +120,8 @@ protocol is made in OpenSpineConsortium/sdlc-protocol, whose sync
 workflow brings it here as the pull request sdlc-protocol/sync, and
 scripts/check.sh fails on a copy that differs from its record.
 coordbench/vendor/README.md says how the copy is refreshed, and
-tests/test_coordbench_vendor.py holds it to the record and the library.
+tests/test_coordbench_vendor.py holds it to the record and, on CI, which
+clones sdlc-protocol, to the library's own files.
 
 ## An arm is a Claude Code plugin
 

@@ -13,7 +13,12 @@ every pull request, starts with
     python3 coordbench/vendor/sdlc_protocol/vendoring.py verify coordbench/vendor
 
 which fails on a file that differs from VENDORED, a file missing or a
-file added. A change to the protocol is made in sdlc-protocol, by pull
+file added. VENDORED sits in the same tree, so a pull request that edits
+the copy could rewrite it to match; CI therefore clones sdlc-protocol,
+which is public, and names the clone in SDLC_PROTOCOL, and
+tests/test_coordbench_vendor.py compares every file of the copy with the
+library's at the commit VENDORED names, failing when they differ or when
+the clone has no such commit. A change to the protocol is made in sdlc-protocol, by pull
 request there; once it merges, that repository's sync workflow vendors
 it into this one and opens the pull request sdlc-protocol/sync here, or
 updates the one already open, and this repository's own check decides
