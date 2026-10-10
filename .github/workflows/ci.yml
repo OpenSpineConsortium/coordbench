@@ -1,0 +1,21 @@
+name: Checks
+
+# bash scripts/check.sh on every pull request and on every push to a branch
+# that is not a claude/ branch: a claude/ branch's pull request runs the
+# check already, so the push trigger leaves those out rather than run it
+# twice. The runner's own python3 is used (3.12 on ubuntu-latest).
+
+on:
+  pull_request:
+  push:
+    branches-ignore: ["claude/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check.sh
