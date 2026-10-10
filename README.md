@@ -38,5 +38,6 @@ and are skipped otherwise, as on CI.
 coordbench was split from OpenSpineConsortium/sdlc-template, where it was
 the experiment/ directory, with its history: the commits before the split
 are that directory's. Its sdlc arm benchmarks that template's claim
-protocol, and will import the protocol's merge gate from
-OpenSpineConsortium/sdlc-protocol rather than keep its own copy.
+protocol, deciding through the protocol's merge gate from
+OpenSpineConsortium/sdlc-protocol, vendored at coordbench/vendor, rather
+than through a copy of its own.

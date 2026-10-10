@@ -37,58 +37,73 @@ Labels beyond the four states, blockers, the 24-hour release, the lead and
 the template's scripts/check.sh are left out: in a run of two or three
 agents on one task pair there is nothing for them to act on.
 
-The gate acts on the real repository, named by the run option
-"git_remote_host" (the shared remote as the hub's host reaches it). It
-keeps one scratch clone per run in a temporary directory, runs git through
-subprocess with a timeout, serialises every git operation with its own
-lock, and never force-pushes, so main only ever moves forward. Its lock is
-always taken before the run's lock and never while holding it, which is
-what keeps the hub's metrics (read under the run's lock) from deadlocking
-against a merge in progress. When the run closes, teardown frees the clone
-and shuts the gate, so a late call is refused rather than cloning again.
+The protocol's decisions are not this file's. The claim, the pull request,
+mark ready and its merge, a pull request's status and the board are
+sdlc_protocol.gate's, the one copy of the rules that the template's tools
+and the GitHub App decide through as well, so the arm benchmarks the
+protocol as it runs there rather than a port of it. The library is
+vendored under coordbench/vendor, beside coordbench's own modules, where
+the hub imports it and where install_coordbench copies it into each
+container with the rest of the directory; VENDORED there names its version
+and commit. The gate decides under POLICY below, and over the world of
+sdlc_protocol.adapters.bare_git: the real repository named by the run
+option "git_remote_host" (the shared remote as the hub's host reaches it),
+reached through one scratch clone per run in a temporary directory, with
+git run through subprocess with a timeout, every git operation serialised
+by the world's own lock, and never a force-push, so main only ever moves
+forward. This file keeps what is the arm's own: the tools and their words,
+the prompt, the issues' titles, the events the metrics count and where
+the queue and the world live in run.state.
+
+The world's lock is always taken before the run's lock and never while
+holding it, which is what keeps the hub's metrics (read under the run's
+lock) from deadlocking against a merge in progress. Each decision is
+taken in the gate's parts, the steps on the queue under the run's lock and
+the steps that ask the world outside it, so the run's lock is never held
+while git runs. When the run closes, teardown frees the clone and shuts
+the world, so a late call is refused rather than cloning again.
 
 A refusal's shell command exits with a code that says what kind of
-refusal it is (the EXIT_ constants below, listed for the agents in
+refusal it is (the gate's EXIT_ constants, listed for the agents in
 SKILL.md), so a script can tell losing a race from main having moved.
 """
 
-import os
+import functools
 import re
-import subprocess
-import tempfile
-import threading
-from dataclasses import dataclass
+import sys
+from pathlib import Path
 
 import kit
 from arm import AgentSpec, Arm, SUBMISSION_BLOCK, Tool, ToolError
+
+# The vendored copy is put first on the path, so the version VENDORED
+# names is the one a run decides with, even where another sdlc_protocol
+# is installed: a benchmark's result must not change with the host.
+VENDOR_DIR = Path(kit.__file__).resolve().parent / "vendor"
+if str(VENDOR_DIR) not in sys.path:
+    sys.path.insert(0, str(VENDOR_DIR))
+
+from sdlc_protocol import gate  # noqa: E402
+from sdlc_protocol.adapters import bare_git  # noqa: E402
 
 # The same rule the coop arms put between a prompt's sections, so the
 # prompts of every arm read alike.
 SECTION_RULE = "\n\n---\n\n"
 
-MAIN = "main"
-MAIN_REF = f"refs/remotes/origin/{MAIN}"
-GIT_TIMEOUT_SECONDS = 300
+# How the gate behaves in this arm. The gate itself merges when a pull
+# request is marked ready, standing in for the owner's merge; a branch
+# brings a moved main in by merging it, as TEAM.md has members do, so
+# nobody force-pushes; and there is no required check, since the bench's
+# hidden tests cannot run at the gate. Every agent's clone calls the shared
+# remote `team`, which is the name the gate's answers use.
+POLICY = gate.Policy(bring_main_in=gate.MERGE, who_merges=gate.GATE, required_check="", remote="team")
+MAIN = POLICY.default_branch
 
-# The board's own words for a pull request main has moved past, in the
-# merge-not-rebase form TEAM.md gives members.
-MAIN_MOVED = ("main moved: merge team/main into your branch, resolve the conflicts, push, "
-              "and call mark_ready again")
-
-# The scratch clone is the gate's own: a signing key, a hook or a pager in
-# the host's git configuration must not decide whether a merge lands.
-GIT_OPTIONS = ("-c", "user.name=coordbench merge gate", "-c", "user.email=gate@coordbench.local",
-               "-c", "commit.gpgsign=false", "-c", f"core.hooksPath={os.devnull}")
+# The board's own words for a pull request main has moved past, as the
+# gate words them under this policy; the prompt quotes them.
+MAIN_MOVED = gate.main_moved_instruction(POLICY)
 
 QUEUE_KEY, GATE_KEY = "sdlc_queue", "sdlc_gate"
-
-# What a refused call's shell command exits with, beyond the 1 of any
-# refusal the caller fixes by acting (a branch not pushed yet, nothing to
-# merge). 2 is the code CooperBench's coop-task-claim gives a task someone
-# else owns, kept so a script written for it reads this arm the same way.
-EXIT_SOMEONE_ELSES = 2   # another agent holds the claim, the issue or the pull request
-EXIT_MAIN_MOVED = 3      # the gate left main as it was; merge main in and try again
-EXIT_GATE_FAILED = 4     # the gate itself could not act: git failed, or the run closed
 
 # A spec's title is its first heading line: a markdown heading, or a line
 # that opens in bold, as CooperBench's specs open ("**Title**: ..."). The
@@ -101,12 +116,17 @@ HEADING_LABEL = re.compile(r"^(title|feature(\s+\d+)?)\s*:\s*", re.IGNORECASE)
 TITLE_LIMIT = 120
 
 ISSUE_ARGUMENT = {"type": "integer", "description": "the issue's number, which is its feature's number"}
-# An issue as an agent writes it: the number, or the board's "#3", in ASCII
-# digits only. str.isdigit would also take superscripts, which int()
-# refuses, and Arabic-Indic digits, which it reads as numbers; and a run
-# of digits longer than int() parses would crash where a refusal belongs.
-# Nine digits is far more than any run has features.
-ISSUE_TEXT = re.compile(r"#?\s*([0-9]{1,9})")
+
+# Two of the gate's refusals say what to do next in words that know no
+# tools. The arm names its own command there, as its answers did before the
+# gate moved to the library, so the move changed no word an agent reads and
+# a run from before it compares with one from after.
+COMMAND_HINTS = (
+    (re.compile(r"(on #([0-9]+) opens its pull request, and nobody has claimed it; claim it first)$"),
+     r"\1 with sdlc-claim \2"),
+    (re.compile(r"^(#([0-9]+) has no pull request; open it) (once claude/)"),
+     r"\1 with open_pull_request (sdlc-pr \2) \3"),
+)
 
 # What each tool does, in a few words, for the table in the prompt; a tool
 # missing here is described by the first sentence of its description.
@@ -123,14 +143,6 @@ SUMMARIES = {
     "list_agents": "every agent id in the run",
     "wait_for_message": "wait for the next message instead of polling",
 }
-
-
-def branch_of(number):
-    return f"claude/{number}"
-
-
-def short(sha):
-    return sha[:7] if sha else "unknown"
 
 
 def issue_title(spec, number):
@@ -152,527 +164,153 @@ def heading_text(line):
     return text if len(text) <= TITLE_LIMIT else text[:TITLE_LIMIT - 3].rstrip() + "..."
 
 
-@dataclass
-class Issue:
-    """One feature's issue: its title, who was given it, who claimed it,
-    and whether its pull request has merged, which closes it."""
-
-    number: int
-    given_to: str
-    title: str
-    claimant: str = ""
-    claim_released: bool = False
-    closed: bool = False
-
-    def label(self):
-        """The issue's state in the template's label words."""
-        if self.closed:
-            return "closed"
-        if self.claim_released:
-            return "in-review"
-        return "claimed" if self.claimant else "todo"
-
-
-@dataclass
-class PullRequest:
-    """One issue's pull request. State is draft, ready (marked ready and at
-    or past the gate), main moved (the gate refused it for conflicts) or
-    merged."""
-
-    issue: int
-    author: str
-    title: str
-    state: str = "draft"
-    attempts: int = 0
-    merge_commit: str = ""
-    conflicts: tuple = ()
-
-
-class Queue:
-    """The issues and pull requests of one run, which the board shows.
-    Every method expects the caller to hold run.lock."""
-
-    def __init__(self, given, titles, open_queue, base_ref):
-        self.issues = {number: Issue(number, agent, titles[number]) for number, agent in sorted(given.items())}
-        self.pulls = {}
-        self.open_queue = open_queue
-        self.base_ref = base_ref
-
-    def issue(self, number):
-        if number not in self.issues:
-            known = ", ".join(f"#{n}" for n in self.issues)
-            raise ToolError(f"there is no issue #{number}; the issues are {known}")
-        return self.issues[number]
-
-    def given_to(self, agent):
-        return [issue.number for issue in self.issues.values() if issue.given_to == agent]
-
-    def pull(self, number):
-        self.issue(number)
-        if number not in self.pulls:
-            raise ToolError(f"#{number} has no pull request; open it with open_pull_request "
-                            f"(sdlc-pr {number}) once {branch_of(number)} is pushed")
-        return self.pulls[number]
-
-
-@dataclass
-class Standing:
-    """How a branch stands to main on the remote right now, in GitHub's
-    words where GitHub has one: clean, behind, conflicting."""
-
-    word: str
-    main: str = ""
-    conflicts: tuple = ()
-
-
-@dataclass
-class MergeOutcome:
-    """What one merge attempt did: merged, or why not, and main's commit
-    after it (the merge commit, or main as it was)."""
-
-    merged: bool
-    main: str
-    conflicts: tuple = ()
-    main_moved: bool = False
-    reason: str = ""
-
-
-def git_environment():
-    """The host's environment, with git told never to wait for a password
-    and to speak English, since the gate quotes its messages."""
-    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
-
-
-def run_git(args, cwd=None):
-    """One git command with the gate's options and a timeout. A git that
-    hangs or is missing becomes a ToolError the agent can read."""
-    try:
-        return subprocess.run(["git", *GIT_OPTIONS, *args], cwd=cwd, capture_output=True, text=True,
-                              errors="replace", timeout=GIT_TIMEOUT_SECONDS, env=git_environment(),
-                              stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        raise ToolError(f"git {args[0]} took longer than {GIT_TIMEOUT_SECONDS} seconds and was stopped",
-                        EXIT_GATE_FAILED)
-    except FileNotFoundError:
-        raise ToolError("git is not installed where the coordbench hub runs", EXIT_GATE_FAILED)
-
-
-def last_line(result):
-    lines = [line.strip() for line in (result.stderr + "\n" + result.stdout).splitlines() if line.strip()]
-    return lines[-1] if lines else f"git exited with {result.returncode}"
-
-
-def remote_main(remote):
-    """main's commit on the remote, or "" when it cannot be read."""
-    try:
-        result = run_git(["ls-remote", remote, f"refs/heads/{MAIN}"])
-    except ToolError:
-        return ""
-    words = result.stdout.split()
-    return words[0] if result.returncode == 0 and words else ""
-
-
-class Gate:
-    """The merge gate: a scratch clone of the shared remote, made at first
-    use, and the lock every git operation on it holds."""
-
-    def __init__(self, remote):
-        self.remote = remote
-        self.lock = threading.Lock()
-        self.scratch = None
-        self.closed = False
-
-    @property
-    def repo(self):
-        return os.path.join(self.scratch.name, "repo")
-
-    def git(self, *args, check=True):
-        result = run_git(list(args), cwd=self.repo)
-        if check and result.returncode != 0:
-            raise ToolError(f"the merge gate's git {args[0]} failed: {last_line(result)}", EXIT_GATE_FAILED)
-        return result
-
-    def ensure_clone(self):
-        """Clone the remote without checking anything out; every merge
-        checks out the main it merges into."""
-        if self.scratch is not None:
-            return
-        if self.closed:
-            raise ToolError("the run has closed, and the merge gate with it: nothing more merges into "
-                            f"{MAIN}; submit what you have", EXIT_GATE_FAILED)
-        scratch = tempfile.TemporaryDirectory(prefix="coordbench-sdlc-gate-")
-        result = run_git(["clone", "--quiet", "--no-checkout", self.remote,
-                          os.path.join(scratch.name, "repo")])
-        if result.returncode != 0:
-            scratch.cleanup()
-            raise ToolError(f"the merge gate cannot clone the shared remote: {last_line(result)}",
-                            EXIT_GATE_FAILED)
-        self.scratch = scratch
-
-    def close(self):
-        """Free the scratch clone for good. A call that reaches the gate
-        later is refused rather than cloning again, since nothing would free
-        a second clone; one in progress finishes first, holding the lock."""
-        with self.lock:
-            self.closed = True
-            if self.scratch is not None:
-                self.scratch.cleanup()
-                self.scratch = None
-
-    def fetch(self):
-        self.ensure_clone()
-        self.git("fetch", "--quiet", "--prune", "origin")
-
-    def commit_of(self, ref):
-        result = self.git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
-        return result.stdout.strip() if result.returncode == 0 else ""
-
-    def branch_tip(self, branch):
-        return self.commit_of(f"refs/remotes/origin/{branch}")
-
-    def main_tip(self):
-        main = self.commit_of(MAIN_REF)
-        if not main:
-            raise ToolError(f"the shared remote has no branch {MAIN}; the run was not set up as this arm needs",
-                            EXIT_GATE_FAILED)
-        return main
-
-    def is_ancestor(self, older, newer):
-        return self.git("merge-base", "--is-ancestor", older, newer, check=False).returncode == 0
-
-    def tidy(self):
-        """Leave the clone with no merge in progress and nothing stray, so a
-        refused or interrupted merge never leaks into the next one."""
-        self.git("merge", "--abort", check=False)
-        self.git("reset", "--hard", "--quiet", check=False)
-        self.git("clean", "-ffdq", check=False)
-
-    def unmerged_paths(self):
-        result = self.git("diff", "--name-only", "--diff-filter=U", check=False)
-        return tuple(sorted(set(result.stdout.splitlines())))
-
-    def prepare(self, branch):
-        """Fetch, and the branch's tip and main's, refusing a branch that is
-        not on the remote or holds nothing main lacks."""
-        self.fetch()
-        tip = self.branch_tip(branch)
-        if not tip:
-            raise ToolError(f"{branch} is not on team; push it first: git push -u team {branch}")
-        main = self.main_tip()
-        if self.is_ancestor(tip, main):
-            raise ToolError(f"nothing to merge: every commit on {branch} is already in {MAIN}; "
-                            f"commit your work, push it, and call mark_ready again")
-        return tip, main
-
-    def merge(self, tip, main, message):
-        """Merge tip into main as `git merge --no-ff --no-edit` does and push
-        main without force; a conflict or a refused push leaves main as it
-        was on the remote."""
-        self.tidy()
-        self.git("checkout", "--quiet", "--force", "--detach", main)
-        attempt = self.git("merge", "--no-ff", "--no-edit", "-m", message, tip, check=False)
-        if attempt.returncode != 0:
-            conflicts = self.unmerged_paths()
-            self.tidy()
-            return MergeOutcome(False, main, conflicts, main_moved=bool(conflicts), reason=last_line(attempt))
-        merged = self.commit_of("HEAD")
-        push = self.git("push", "--quiet", "origin", f"{merged}:refs/heads/{MAIN}", check=False)
-        if push.returncode != 0:
-            # Someone moved main on the remote while the gate merged; the
-            # answer is the same as for a conflict, since merging the new
-            # main in is again what the branch needs.
-            return MergeOutcome(False, main, main_moved=True,
-                                reason=f"the push of {MAIN} was refused: {last_line(push)}")
-        return MergeOutcome(True, merged)
-
-    def standing(self, branch):
-        """How the branch stands to main now; the caller has fetched."""
-        main = self.commit_of(MAIN_REF)
-        tip = self.branch_tip(branch)
-        if not tip or not main:
-            return Standing("no branch" if not tip else "unknown", main)
-        if self.is_ancestor(tip, main):
-            return Standing("nothing new", main)
-        if self.is_ancestor(main, tip):
-            return Standing("clean", main)
-        probe = self.git("merge-tree", "--write-tree", "--name-only", "--no-messages", main, tip, check=False)
-        if probe.returncode == 0:
-            return Standing("behind", main)
-        if probe.returncode == 1:
-            return Standing("conflicting", main, tuple(sorted(set(probe.stdout.splitlines()[1:]))))
-        return Standing("unknown", main)
-
+# Where the gate's queue and world live, and how its refusals reach the agent.
 
 def queue_of(run):
     return run.state[QUEUE_KEY]
 
 
-def gate_of(run):
-    gate = run.state.get(GATE_KEY)
-    if gate is None:
+def world_of(run):
+    world = run.state.get(GATE_KEY)
+    if world is None:
         raise ToolError("this run has no git_remote_host, so the merge gate cannot reach the shared "
-                        "remote; tell the operator", EXIT_GATE_FAILED)
-    return gate
+                        "remote; tell the operator", gate.EXIT_GATE_FAILED)
+    return world
+
+
+def refusals_as_tool_errors(handler):
+    """The gate refuses with a GateError that carries its exit code; the hub
+    answers a ToolError, so the refusal becomes one with the gate's text, in
+    the arm's words, and its code, and the shell command exits as the gate's
+    command line would."""
+    @functools.wraps(handler)
+    def answer(call):
+        try:
+            return handler(call)
+        except gate.GateError as refusal:
+            raise ToolError(in_the_arms_words(str(refusal)), refusal.exit_code) from refusal
+    return answer
+
+
+def in_the_arms_words(text):
+    """The gate's text with the arm's commands named where it says what to
+    do next (COMMAND_HINTS)."""
+    for gates, arms in COMMAND_HINTS:
+        text = gates.sub(arms, text)
+    return text
 
 
 def issue_number(call):
-    """The issue argument as a number; "#3" and "3" are read as 3, since an
-    agent may write an issue the way the board does. Anything ISSUE_TEXT
-    does not match is refused, never handed to int()."""
-    value = call.arg("issue", required=True)
-    match = ISSUE_TEXT.fullmatch(str(value).strip())
-    if isinstance(value, bool) or match is None:
-        raise ToolError(f"issue must be an issue number, such as 1, not {value!r}")
-    return int(match.group(1))
+    """The issue argument as the gate reads one: "#3" and "3" are 3, since
+    an agent may write an issue the way the board does."""
+    return gate.issue_number(call.arg("issue", required=True))
 
 
 def standings(run, branches):
-    """Each branch's standing and main's commit, read live from the remote;
-    unknown for all when the run has no remote or git fails."""
-    gate = run.state.get(GATE_KEY)
-    if gate is None:
-        return "", {}
-    with gate.lock:
-        try:
-            gate.fetch()
-            return gate.commit_of(MAIN_REF), {branch: gate.standing(branch) for branch in branches}
-        except ToolError:
-            return "", {}
+    """main's commit and each branch's standing, read live from the remote
+    in one fetch; none at all when the run has no remote or git fails."""
+    world = run.state.get(GATE_KEY)
+    return world.standings(branches) if world is not None else ("", {})
 
 
 # The tools.
 
+@refusals_as_tool_errors
 def claim_issue(call):
     run, me = call.run, call.agent
     number = issue_number(call)
     with run.lock:
-        issue = claimable(queue_of(run), number, me)
-        issue.claimant = me
+        gate.claim(POLICY, queue_of(run), number, me)
     run.emit("claim", me, issue=number)
-    branch = branch_of(number)
+    branch = POLICY.branch_of(number)
     return (f"claimed #{number}: it is yours until your pull request is marked ready. Next: start "
             f"{branch} from the base ref {queue_of(run).base_ref}, commit, push it "
             f"(git push -u team {branch}), and open the pull request with sdlc-pr {number}.")
 
 
-def claimable(queue, number, me):
-    """The issue, when `me` may claim it now; otherwise the refusal says why."""
-    issue = queue.issue(number)
-    if not queue.open_queue and issue.given_to != me:
-        mine = ", ".join(f"#{n}" for n in queue.given_to(me)) or "none"
-        raise ToolError(f"#{number} was given to {issue.given_to}; in this run each agent claims only "
-                        f"its own issue, and yours is {mine}", EXIT_SOMEONE_ELSES)
-    if issue.closed:
-        raise ToolError(f"#{number} is closed: its pull request has merged")
-    if issue.claimant == me:
-        raise ToolError(f"you already hold #{number}; carry on with {branch_of(number)}")
-    if issue.claimant:
-        raise ToolError(f"#{number} is claimed by {issue.claimant}: a claim is first come, first served, "
-                        f"so another agent has it; pick another issue", EXIT_SOMEONE_ELSES)
-    return issue
-
-
+@refusals_as_tool_errors
 def open_pull_request(call):
+    """Checked again once the remote has answered, since the run's lock was
+    let go while it did and another call may have raced this one."""
     run, me = call.run, call.agent
     number = issue_number(call)
     with run.lock:
-        check_can_open(queue_of(run), number, me)
-    gate = gate_of(run)
-    branch = branch_of(number)
-    with gate.lock:
-        gate.fetch()
-        if not gate.branch_tip(branch):
-            raise ToolError(f"{branch} is not on team yet; push it first (git push -u team {branch}), "
-                            f"then open the pull request")
+        gate.can_open_pull(POLICY, queue_of(run), number, me)
+    gate.require_pushed(POLICY, world_of(run), number)
     with run.lock:
-        check_can_open(queue_of(run), number, me)
-        title = str(call.arg("title") or queue_of(run).issues[number].title)
-        queue_of(run).pulls[number] = PullRequest(number, me, title)
+        gate.add_pull(POLICY, queue_of(run), number, me, call.arg("title"))
     run.emit("pr_opened", me, issue=number)
-    return (f"opened the pull request for #{number} from {branch} to {MAIN}, as a draft. Push often; "
-            f"when the feature is done, mark it ready with sdlc-ready {number}.")
+    return (f"opened the pull request for #{number} from {POLICY.branch_of(number)} to {MAIN}, as a draft. "
+            f"Push often; when the feature is done, mark it ready with sdlc-ready {number}.")
 
 
-def check_can_open(queue, number, me):
-    issue = queue.issue(number)
-    if not issue.claimant:
-        raise ToolError(f"only the agent holding the claim on #{number} opens its pull request, and "
-                        f"nobody has claimed it; claim it first with sdlc-claim {number}")
-    if issue.claimant != me:
-        raise ToolError(f"only the agent holding the claim on #{number} opens its pull request, and "
-                        f"it is claimed by {issue.claimant}", EXIT_SOMEONE_ELSES)
-    if number in queue.pulls:
-        raise ToolError(f"#{number} already has a pull request ({queue.pulls[number].state}); "
-                        f"one issue, one pull request")
-
-
+@refusals_as_tool_errors
 def mark_ready(call):
+    """gate.mark_ready taken in its parts, so the events go out between
+    them. The world is held from first to last: the decision sees one
+    fetch of the remote, and what the merge did is in the queue before the
+    next call reaches the gate."""
     run, me = call.run, call.agent
     number = issue_number(call)
-    gate = gate_of(run)
-    with gate.lock:
+    world = world_of(run)
+    with world:
         with run.lock:
-            pull = pull_to_ready(queue_of(run), number, me)
-        tip, main = gate.prepare(branch_of(number))
+            pull = gate.pull_to_ready(POLICY, queue_of(run), number, me)
+        attempt = gate.prepare(POLICY, world, number)
+        gate.require_green(POLICY, world, attempt.branch)
         with run.lock:
-            pull.state = "ready"
-            pull.attempts += 1
-            queue_of(run).issues[number].claim_released = True
+            gate.begin_attempt(queue_of(run), pull)
         run.emit("ready", me, issue=number)
-        run.emit("merge_attempt", me, issue=number, branch_commit=tip, main_before=main)
-        try:
-            outcome = gate.merge(tip, main, f"Merge {branch_of(number)}: closes #{number}")
-        except ToolError as problem:
-            run.emit("merge_refused", me, issue=number, reason=str(problem))
-            raise
-        # Recorded before the gate's lock is let go, so the next call to
-        # reach the gate sees this pull request as it now is.
-        return record_outcome(run, me, pull, outcome)
+        run.emit("merge_attempt", me, issue=number, branch_commit=attempt.tip, main_before=attempt.main)
+        merge = gate.attempt_merge(world, attempt)
+        with run.lock:
+            outcome = gate.record_outcome(POLICY, queue_of(run), attempt, merge)
+        return answer_merge(run, me, outcome)
 
 
-def pull_to_ready(queue, number, me):
-    pull = queue.pull(number)
-    if pull.author != me:
-        raise ToolError(f"the pull request for #{number} is {pull.author}'s; only its author marks it ready",
-                        EXIT_SOMEONE_ELSES)
-    if pull.state == "merged":
-        raise ToolError(f"the pull request for #{number} has already merged, as {short(pull.merge_commit)}")
-    return pull
-
-
-def record_outcome(run, me, pull, outcome):
-    """Write what the gate did into the queue and the events, and answer."""
-    number, branch = pull.issue, branch_of(pull.issue)
+def answer_merge(run, me, outcome):
+    """The events for what the merge came to, and the agent's answer: the
+    gate's text with where to build the patch from once it merged, or a
+    refusal carrying the gate's exit code."""
+    number = outcome.issue
     if outcome.merged:
-        with run.lock:
-            pull.state, pull.merge_commit, pull.conflicts = "merged", outcome.main, ()
-            queue_of(run).issues[number].closed = True
         run.emit("merge", me, issue=number, commit=outcome.main)
-        return merged_text(run, pull)
-    if outcome.main_moved:
-        with run.lock:
-            pull.state, pull.conflicts = "main moved", outcome.conflicts
+        return f"{outcome.text} {patch_hint(queue_of(run).base_ref)}"
+    if outcome.result == gate.MAIN_MOVED:
         kind = "merge_conflict" if outcome.conflicts else "merge_refused"
         run.emit(kind, me, issue=number, files=list(outcome.conflicts), reason=outcome.reason)
-        raise ToolError(main_moved_text(outcome), EXIT_MAIN_MOVED)
-    run.emit("merge_refused", me, issue=number, reason=outcome.reason)
-    raise ToolError(f"the merge gate could not merge {branch} into {MAIN}: {outcome.reason}. {MAIN} was "
-                    f"left as it was; fix what git names, push, and call mark_ready again.")
-
-
-def merged_text(run, pull):
-    base = queue_of(run).base_ref
-    return (f"merged: {branch_of(pull.issue)} is in {MAIN} as {short(pull.merge_commit)}, and #{pull.issue} "
-            f"is closed. Build your patch from the integrated main: git fetch team && "
-            f"git diff {base} team/{MAIN} > patch.txt")
-
-
-def main_moved_text(outcome):
-    lines = [MAIN_MOVED + "."]
-    if outcome.conflicts:
-        lines.append(f"Conflicting files: {', '.join(outcome.conflicts)}.")
     else:
-        lines.append(f"Why: {outcome.reason}.")
-    lines.append(f"{MAIN} is still at {short(outcome.main)}; the gate left it as it was.")
-    return "\n".join(lines)
+        run.emit("merge_refused", me, issue=number, reason=outcome.reason)
+    raise ToolError(outcome.text, outcome.exit_code)
 
 
+def patch_hint(base):
+    return (f"Build your patch from the integrated main: git fetch team && "
+            f"git diff {base} {POLICY.upstream} > patch.txt")
+
+
+@refusals_as_tool_errors
 def pull_request_status(call):
     run = call.run
     number = issue_number(call)
     with run.lock:
-        issue = queue_of(run).issue(number)
-        if number not in queue_of(run).pulls:
-            holder = f"claimed by {issue.claimant}" if issue.claimant else "not claimed yet"
-            return f"#{number} has no pull request yet; the issue is {holder} ({issue.label()})."
-    main, live = standings(run, [branch_of(number)])
+        unopened = gate.status_without_pull(queue_of(run), number)
+    if unopened:
+        return unopened
+    branch = POLICY.branch_of(number)
+    main, live = standings(run, [branch])
     with run.lock:
-        pull = queue_of(run).pulls[number]
-        return status_text(pull, live.get(branch_of(number)), main)
+        return gate.status_text(POLICY, queue_of(run).pulls[number], live.get(branch), main)
 
 
-def status_text(pull, standing, main):
-    lines = [f"Pull request for #{pull.issue}: {branch_of(pull.issue)} -> {MAIN}, by {pull.author}, "
-             f"{pull.state}. Merge attempts: {pull.attempts}."]
-    if pull.state == "merged":
-        lines.append(f"Merged into {MAIN} as {short(pull.merge_commit)}.")
-        return "\n".join(lines)
-    if pull.state == "main moved" and pull.conflicts:
-        lines.append(f"The gate's last answer was main moved, with conflicts in {', '.join(pull.conflicts)}.")
-    lines.append(standing_sentence(standing, main, pull.issue))
-    return "\n".join(lines)
-
-
-def standing_sentence(standing, main, number):
-    branch = branch_of(number)
-    if standing is None:
-        return f"Against {MAIN}: unknown; the gate could not read the shared remote."
-    at = f"{MAIN} at {short(main)}"
-    sentences = {
-        "clean": f"Against {at}: clean, up to date with {MAIN} and merging cleanly.",
-        "behind": f"Against {at}: behind; {MAIN} moved since {branch} branched, but it still merges "
-                  f"cleanly, so the gate can merge it as it is.",
-        "conflicting": f"Against {at}: conflicting; main moved and {branch} no longer merges cleanly with it "
-                       f"(conflicts in {', '.join(standing.conflicts) or 'some files'}). Merge team/{MAIN} "
-                       f"into your branch, resolve the conflicts and push before mark_ready.",
-        "nothing new": f"Against {at}: nothing new; every commit on {branch} is already in {MAIN}.",
-        "no branch": f"Against {at}: {branch} is not on team; push it.",
-    }
-    return sentences.get(standing.word, f"Against {at}: unknown.")
-
-
+@refusals_as_tool_errors
 def board(call):
     run = call.run
     with run.lock:
-        branches = [branch_of(n) for n, pull in queue_of(run).pulls.items() if pull.state != "merged"]
+        branches = gate.open_branches(POLICY, queue_of(run))
     main, live = standings(run, branches)
     with run.lock:
-        return board_text(queue_of(run), live, main)
-
-
-def table(header, rows):
-    """A markdown table with the template's "(none)" row when empty. A pipe
-    in a cell is escaped, since a title comes from a spec and may hold one."""
-    lines = ["| " + " | ".join(header) + " |", "|" + " --- |" * len(header)]
-    escaped = [[cell.replace("|", "\\|") for cell in row] for row in rows]
-    lines += ["| " + " | ".join(row) + " |" for row in escaped] or ["| (none) |"]
-    return "\n".join(lines)
-
-
-def board_text(queue, live, main):
-    issues = queue.issues.values()
-    pulls = [queue.pulls[n] for n in sorted(queue.pulls)]
-    sections = [
-        "# Board",
-        f"As of commit {short(main)} on {MAIN}; the run began at the base ref {short(queue.base_ref)}. "
-        f"One issue, one branch claude/<issue>, one pull request; only the merge gate moves {MAIN}.",
-        "## Issues (one per feature)",
-        table(["Issue", "Title", "Given to", "Label"],
-              [[f"#{i.number}", i.title, i.given_to, i.label()] for i in issues]),
-        "## Claims (held until the pull request is marked ready)",
-        table(["Issue", "Branch", "Agent", "Pull request"],
-              [[f"#{i.number}", branch_of(i.number), i.claimant, queue.pulls[i.number].state
-                if i.number in queue.pulls else "none yet"]
-               for i in issues if i.claimant and not i.claim_released]),
-        "## Pull requests",
-        table(["Issue", "Branch", "Author", "State", "Against main", "Merge attempts"],
-              [pull_row(pull, live) for pull in pulls]),
-        "## Queue (open issues nobody has claimed)",
-        table(["Issue", "Title", "Given to"],
-              [[f"#{i.number}", i.title, i.given_to] for i in issues if i.label() == "todo"]),
-    ]
-    return "\n\n".join(sections)
-
-
-def pull_row(pull, live):
-    if pull.state == "merged":
-        against = f"merged as {short(pull.merge_commit)}"
-    else:
-        standing = live.get(branch_of(pull.issue))
-        against = standing.word if standing else "unknown"
-        if standing and standing.conflicts:
-            against += f" ({', '.join(standing.conflicts)})"
-    return [f"#{pull.issue}", branch_of(pull.issue), pull.author, pull.state, against, str(pull.attempts)]
+        return gate.board_text(POLICY, queue_of(run), live, main)
 
 
 def sdlc_tools():
@@ -844,10 +482,10 @@ def resolve_base_ref(options):
     if options.get("base_ref"):
         return str(options["base_ref"])
     if options.get("git_remote_host"):
-        main = remote_main(str(options["git_remote_host"]))
+        main = bare_git.remote_main(str(options["git_remote_host"]), MAIN)
         if main:
             return main
-    return f"team/{MAIN}"
+    return POLICY.upstream
 
 
 def count_events(run, kind):
@@ -871,9 +509,9 @@ def first_merge_seconds(run):
 
 class SdlcArm(Arm):
     name = "sdlc"
-    description = ("This template's claim protocol: one agent per feature, each claiming its issue, "
-                   "working on claude/<issue> on a shared remote and landing it by pull request through "
-                   "a merge gate.")
+    description = ("The claim protocol of OpenSpineConsortium/sdlc-template: one agent per feature, each "
+                   "claiming its issue, working on claude/<issue> on a shared remote and landing it by pull "
+                   "request through a merge gate.")
     needs = ("git_remote",)
 
     def layout(self, features):
@@ -884,10 +522,10 @@ class SdlcArm(Arm):
     def setup(self, run):
         given = {number: spec.id for spec in run.agents.values() for number in spec.features}
         titles = {number: issue_title(run.specs.get(number), number) for number in given}
-        run.state[QUEUE_KEY] = Queue(given, titles, bool(run.options.get("open_queue")),
-                                     resolve_base_ref(run.options))
+        run.state[QUEUE_KEY] = gate.Queue(given, titles, bool(run.options.get("open_queue")),
+                                          resolve_base_ref(run.options))
         remote = run.options.get("git_remote_host")
-        run.state[GATE_KEY] = Gate(str(remote)) if remote else None
+        run.state[GATE_KEY] = bare_git.BareGitWorld(str(remote), MAIN) if remote else None
 
     def tools(self, run, agent):
         return sdlc_tools() + kit.messaging_tools(wait=True)
@@ -900,10 +538,10 @@ class SdlcArm(Arm):
 
     def teardown(self, run):
         # The hub calls this outside run.lock, so waiting here for a merge in
-        # progress, which holds the gate's lock, cannot deadlock.
-        gate = run.state.get(GATE_KEY)
-        if gate is not None:
-            gate.close()
+        # progress, which holds the world's lock, cannot deadlock.
+        world = run.state.get(GATE_KEY)
+        if world is not None:
+            world.close()
 
     def metrics(self, run):
         return {**super().metrics(run), **kit.message_metrics(run), "tool_calls": tool_call_counts(run),

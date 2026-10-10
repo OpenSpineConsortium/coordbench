@@ -1,6 +1,6 @@
 ---
 name: coordbench-sdlc
-description: The sdlc protocol of a coordbench run, this template's claim protocol. Use when you are one of several agents each implementing one feature of the same codebase as an issue, to read the board, claim your issue, work on branch claude/<issue> on the shared remote team, open and mark ready a pull request, and answer main moved from the merge gate.
+description: The sdlc protocol of a coordbench run, the claim protocol of OpenSpineConsortium/sdlc-template. Use when you are one of several agents each implementing one feature of the same codebase as an issue, to read the board, claim your issue, work on branch claude/<issue> on the shared remote team, open and mark ready a pull request, and answer main moved from the merge gate.
 ---
 
 # Working by the claim protocol

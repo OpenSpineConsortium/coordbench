@@ -102,6 +102,24 @@ number is refused by the shell command before anything is sent; so are
 the words true, false and null, which would otherwise be read as 1.0,
 0.0 and no wait.
 
+The sdlc arm benchmarks the claim protocol as it runs everywhere else
+rather than a port of it. Its claims, pull requests, merges, statuses and
+board are decided by sdlc_protocol.gate, the library the template's tools
+and the GitHub App decide through as well, over that library's bare-git
+world (sdlc_protocol.adapters.bare_git), under a policy in which the gate
+itself merges a pull request once it is marked ready and a branch brings
+a moved main in by merging it; the arm keeps its tools, its prompt, its
+metrics and its words, and names its own commands where two of the
+gate's refusals name none. The library is vendored at
+coordbench/vendor/sdlc_protocol, and coordbench/vendor/VENDORED names the
+version and commit the copy is. The directory is inside the package, so
+the hub imports it from there and install_coordbench copies it into every
+agent's container with the rest. To take another release, check out its
+tag in a clone of OpenSpineConsortium/sdlc-protocol, run its
+scripts/vendor.sh on this repository, which writes tools/sdlc_protocol
+and tools/VENDORED, and move both into coordbench/vendor;
+tests/test_coordbench_vendor.py holds the copy to VENDORED's line.
+
 ## An arm is a Claude Code plugin
 
 ```
