@@ -376,6 +376,21 @@ class MissingFilesTest(TimelineCase):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("result.json is not there to read", err)
 
+    def test_a_solo_run_s_singular_agent_block_is_read_under_the_id_it_records(self):
+        """run.py writes a solo pair as CooperBench's solo.py does, one
+        "agent" block without "agents"; its "id" is the name the timings
+        and the events use, and CooperBench's own block, which has none,
+        reads as "solo"."""
+        result = contract_result()
+        del result["agents"]
+        result.update(setting="solo", agent={**agent_record(None, "solo", duration_ms=598000), "id": "agent1"})
+        result["timings"] = [t for t in result["timings"] if t["agent"] != "agent2"]
+        events = [tool("agent1", "list_agents", 10.0), done("agent1", "list_agents", 10.5, 500)]
+        _, out, _ = run_main(str(self.run_dir(result, events, {"both_passed": True})))
+        self.assertIn("| agent1 | 600.0 s |", out)
+        self.assertEqual(timeline.agent_records({"agent": {"status": "Error"}}), {"solo": {"status": "Error"}})
+        self.assertEqual(timeline.verdict({"agent": {"status": "Error"}}, {"both_passed": True}), "error")
+
 
 class StandsAloneTest(TimelineCase):
     def test_a_copy_of_the_module_runs_alone_as_a_script(self):

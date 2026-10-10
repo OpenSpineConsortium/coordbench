@@ -111,8 +111,14 @@ def seconds_of_ms(value):
 
 
 def agent_records(result):
+    """The agents by id: the "agents" block, or the solo setting's
+    singular "agent" (CooperBench's solo.py, and run.py for solo), under
+    the id run.py records in it, which the timings and events name."""
     agents = result.get("agents")
-    return agents if isinstance(agents, dict) else {}
+    if isinstance(agents, dict):
+        return agents
+    agent = result.get("agent")
+    return {agent.get("id") or "solo": agent} if isinstance(agent, dict) else {}
 
 
 def timing_records(result):

@@ -413,17 +413,31 @@ benchmarked as coordination:
   holds the tokens too and has the same mode, and the plan prepare prints
   leaves them out. `run.py prepare` provisions the pair and prints a plan
   of prompts; the session spawns one subagent per prompt (the Workflow
-  tool); `run.py finish` waits for each agent's marker, scores and tears
-  down. A subagent leaves no stream on the host, so result.json records
-  its tokens, steps, cost, duration_ms and api_duration_ms as null
-  (unknown), never as zero, and bench/cooperbench/report.py shows them as '-';
-  the agent's wall time is still in result.json's timings, measured by
-  the runner from prepare's start to the marker.
+  tool, with the model each agent's entry names); `run.py finish` waits
+  for each agent's marker, scores and tears down. A subagent leaves no
+  stream on the host, so result.json records its steps, duration_ms and
+  api_duration_ms as null (unknown), never as zero. Its tokens come from
+  its own transcript: the prompt asks the subagent to open its first
+  reply with a run token, finish finds the transcript under Claude Code's
+  projects directory that carries it, copies it as
+  `<agent>_session.jsonl`, sums each API message's usage once and
+  estimates the cost at the model's price (cost_source "estimated from
+  tokens"; null for a model without a price). Claude Code writes a
+  message's final output count only on the line that carries its
+  stop_reason, which most messages lack; for those the output count and
+  the cost stay null, and output_tokens_lower_bound and cost_lower_bound
+  give what the transcript does show. A subagent whose transcript
+  is not found keeps null usage, and bench/cooperbench/report.py shows
+  it as '-'. How it ended is in `<agent>_session_outcome.json`, and
+  result.json marks the run's isolation "advisory", since the subagent's
+  file tools reach the host. The agent's wall time is in result.json's
+  timings, measured by the runner from prepare's start to the marker.
 - your own: `--driver path/to/driver.py:Class`, any class with start(job)
   and wait(handle) (drivers.py says what they take and return; the class
-  attributes host_workspace, resumable, framework and measures_usage tell
-  the runner what the driver wants, and a driver that does not set
-  measures_usage = True has its usage recorded as null).
+  attributes host_workspace, resumable, framework, measures_usage,
+  isolation and differences_from_cooperbench tell the runner what the
+  driver wants and what config.json says of it, and a driver that does
+  not set measures_usage = True has its usage recorded as null).
 
 ## Running
 
@@ -435,21 +449,50 @@ python3 coordbench/run.py run --arm team --repo pallets_click_task --task 2068 \
 python3 bench/cooperbench/report.py --run team-coordbench=flash-team-coordbench --run team-cooperbench=flash-team-cc
 ```
 
+`--subset` alone runs every pair of the subset across its tasks, as
+CooperBench's runner does, and `--repo`/`--task` narrow it;
+`--concurrency N` runs N pairs at once on one hub (CooperBench runs 20).
+`--agent-model agent2=MODEL` gives one agent its own model,
+`--disallowed-tools WebFetch,WebSearch` keeps the agents to local tools
+as the paper did, and `--dataset-dir` points the specs and the scorer at
+another dataset (a 59bbf65 worktree for the paper's) while CooperBench's
+own code scores.
+
 The logs take CooperBench's layout, so `cooperbench eval` and
-bench/cooperbench/report.py read them as they read the authors' runs. result.json
-holds the fields CooperBench's coop.py and solo.py write (per agent the
-status, cost, steps, the token counts, patch_lines and error; total_cost
-and total_steps for the run) plus the arm, the driver and the hub's
-metrics. A driver that cannot measure usage (drivers.py, measures_usage)
-writes null, not 0, for an agent's cost, steps and token counts, and null
-totals when no agent was measured; report.py takes a null as unknown,
-leaves such a pair out of "Tokens per pair", and shows '-' when no pair of
-the arm was measured.
+bench/cooperbench/report.py read them as they read the authors' runs.
+`<run>/config.json` is written when the run starts and `<run>/summary.json`
+when it ends, with the keys and formulas of CooperBench's runner (the
+summary's pass_rate is passed over passed and failed, the tally comes
+from eval.json alone) and coordbench's beside them: the arm, driver,
+options and limits, the CooperBench commit and the dataset's tree hash,
+each task image's id and overlay label, the driver's departures from
+CooperBench's adapter, and the Claude Code versions, models, tools and
+MCP servers the agents reported. result.json holds the fields
+CooperBench's coop.py, team.py and solo.py write, in their order (per
+agent the status, cost, steps, the token counts, patch_lines and error;
+total_cost, total_steps, messages_sent and log_dir for the run; team's
+lead_agent and team_role; solo's one agent under "agent", its files named
+solo_*), with error CooperBench's (an exception's message) and
+coordbench's account of how an agent ended in end_reason, and then the
+arm, the driver, agents_seconds, the isolation, the provenance, the
+image and the hub's metrics. The team arm's pairs go under team/ with
+the setting "team", as CooperBench's team runner writes them. Beside
+result.json are each agent's agent<feature>_traj.json (or solo_traj.json)
+in CooperBench's shape, the conversation files, and what the arm hands
+back at close. A driver that cannot measure usage (drivers.py,
+measures_usage) writes null, not 0, for an agent's cost, steps and token
+counts, and null totals when no agent was measured; report.py takes a
+null as unknown, leaves such a pair out of "Tokens per pair", and shows
+'-' when no pair of the arm was measured.
 
 Each agent's record also carries duration_ms and api_duration_ms, Claude
 Code's own wall time for the agent and the part of it spent waiting on
 the API, read from its result event; the session driver, which sees no
-stream, writes null for both. result.json's "timings" is the harness's
+stream, writes null for both. result.json's duration_seconds runs from
+the pair's plan to the agents' end, so it holds the run's creation on the
+hub and the provisioning, where CooperBench's holds each agent's
+container start, install and cleanup; agents_seconds is the agents' phase
+alone, from the first start to the last end. result.json's "timings" is the harness's
 own clock: one record per phase of the pair, with the phase, the agent it
 was for (null for the run's own phases), its start and end as ISO 8601
 and its seconds. The phases are hub (starting or connecting to the hub;
@@ -458,8 +501,8 @@ in every pair), run_create (POST /api/runs), git_remote, shared_volume,
 provision (one per agent, from its docker run through its wrappers),
 agent (one per agent, from the driver's start to its wait's return; for
 the session driver, from prepare's start to the marker finish sees),
-close (close and release on the hub), score (CooperBench's evaluation)
-and teardown. Only the phases that happened are recorded, and run and
+close (close and release on the hub), score (CooperBench's evaluation),
+cascade (the merge cascade beside it in eval.json) and teardown. Only the phases that happened are recorded, and run and
 finish end with one line such as `timings: provision 42 s, agents 1040 s
 (agent1 1030 s, agent2 980 s), score 95 s, teardown 6.0 s`, where the
 agents' figure is the span from the first start to the last end, since
