@@ -73,8 +73,12 @@ itself only drives shell scripts, so it spends almost none of the usage.
 A subscription token for the agents. Run `claude setup-token` on your own
 machine, signed in to the Pro or Max account whose usage the run should
 draw on, and add the token to the cloud environment's settings as the
-environment variable CLAUDE_CODE_OAUTH_TOKEN; never put it in the
-repository or in a chat. A session sees only the variables that existed
+environment variable COORDBENCH_CLAUDE_TOKEN (a line
+COORDBENCH_CLAUDE_TOKEN=<token> under Environment variables, not under
+Network secrets); never put it in the repository or in a chat. The cloud
+environment withholds a variable named CLAUDE_CODE_OAUTH_TOKEN from the
+session, since it runs the session's own Claude Code; run_arms.sh and
+run.py copy the alias to that name for the agents. A session sees only the variables that existed
 when it started, so start a new session on this repository afterwards.
 Keep ANTHROPIC_API_KEY unset: the adapter prefers it, and it bills the API.
 

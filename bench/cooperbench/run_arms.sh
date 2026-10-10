@@ -21,7 +21,10 @@ task=$2
 shift 2
 arms=("$@")
 [ ${#arms[@]} -gt 0 ] || arms=(solo coop coop-git team)
-: "${CLAUDE_CODE_OAUTH_TOKEN:?set CLAUDE_CODE_OAUTH_TOKEN in the environment settings first}"
+# A cloud environment withholds CLAUDE_CODE_OAUTH_TOKEN from the session,
+# so the token may come as COORDBENCH_CLAUDE_TOKEN instead.
+export CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-${COORDBENCH_CLAUDE_TOKEN:-}}"
+: "${CLAUDE_CODE_OAUTH_TOKEN:?set COORDBENCH_CLAUDE_TOKEN (or CLAUDE_CODE_OAUTH_TOKEN) in the environment settings first}"
 
 run() {
     local name=$1

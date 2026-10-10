@@ -101,7 +101,25 @@ ADMIN_TOKEN = "COORD_ADMIN_TOKEN"
 # inherits it from the container. One in the runner's own environment is
 # nobody's and is held back like the admin token.
 AGENT_TOKEN = "COORD_AGENT_TOKEN"
-HELD_BACK = (ADMIN_TOKEN, AGENT_TOKEN)
+# The subscription token may also arrive under this name. A Claude Code
+# cloud environment runs the session's own Claude Code on dozens of
+# CLAUDE_CODE_* variables of its own and withholds a user-supplied
+# CLAUDE_CODE_OAUTH_TOKEN, which would fight with the session's sign-in,
+# so there the owner sets COORDBENCH_CLAUDE_TOKEN and adopt_token_alias()
+# copies it to the name Claude Code reads, in the runner's process only.
+# The alias itself never reaches a container or the docker client.
+TOKEN_ALIAS = "COORDBENCH_CLAUDE_TOKEN"
+HELD_BACK = (ADMIN_TOKEN, AGENT_TOKEN, TOKEN_ALIAS)
+
+
+def adopt_token_alias(environ=None):
+    """Give CLAUDE_CODE_OAUTH_TOKEN the alias's value when only the alias
+    is set; a token set under its own name always wins. Returns whether
+    the token is now set."""
+    environ = os.environ if environ is None else environ
+    if not environ.get(PASSED_BY_NAME[0]) and environ.get(TOKEN_ALIAS):
+        environ[PASSED_BY_NAME[0]] = environ[TOKEN_ALIAS]
+    return bool(environ.get(PASSED_BY_NAME[0]))
 
 # The adapter's own exports beside the model and the config directory
 # (_build_claude_command), kept so the agent runs as the authors' did.

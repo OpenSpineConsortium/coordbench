@@ -393,7 +393,8 @@ benchmarked as coordination:
 - `claude-cli`: headless Claude Code in each agent's container, the arm
   loaded with --plugin-dir, as CooperBench's claude_code adapter runs it.
   It needs CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in the
-  runner's environment; the token reaches the container by name only and is
+  runner's environment, or COORDBENCH_CLAUDE_TOKEN in a cloud environment,
+  which withholds the first name and which run.py copies to it; the token reaches the container by name only and is
   never written anywhere. The runner asks the hub for a token per agent;
   it reaches the container as COORD_AGENT_TOKEN by name too, in the docker
   client's environment for the one `docker run` that starts the container,
