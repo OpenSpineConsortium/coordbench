@@ -1,0 +1,5 @@
+{
+  "name": "coordbench-sdlc-watch",
+  "version": "0.1.0",
+  "description": "The sdlc arm with each agent watching its peers' open pull requests: the files each changes, the files two agents both change, whether their branches merge cleanly, and the lines both added."
+}
