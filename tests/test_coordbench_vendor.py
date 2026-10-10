@@ -4,13 +4,14 @@ the copy, and its sync workflow lands each new one here as the pull
 request sdlc-protocol/sync; coordbench/vendor/VENDORED records it, the
 version and the commit on its first line and then the sha256 of every
 copied file. scripts/check.sh holds the copy to that record with the
-copy's own vendoring.py before any test runs. These tests hold the record
-to a release and a clean commit and to the files it lists, the copy to the
-library itself where a clone of it is at hand, and the arm to deciding
-with that copy, under the policy it states, and in its own words where the
-gate's leave the arm's commands unnamed. The library's own tests cover the
-gate itself; tests/test_coordbench_arm_sdlc.py shows the arm keeps every
-promise it made before the gate moved there.
+copy's own vendoring.py before any test runs. These tests hold check.sh
+to running that check first, the record to a release and a clean commit
+and to the files it lists, the copy to the library itself where a clone
+of it is at hand, and the arm to deciding with that copy, under the
+policy it states, and in its own words where the gate's leave the arm's
+commands unnamed. The library's own tests cover the gate itself;
+tests/test_coordbench_arm_sdlc.py shows the arm keeps every promise it
+made before the gate moved there.
 
 The record sits in this tree beside the copy, so a pull request that
 edits the copy can rewrite the file's line in VENDORED too, and the copy's
@@ -56,6 +57,12 @@ from arm import Call, Run, ToolError, find_arm  # noqa: E402
 # held to the record.
 FIRST_LINE = re.compile(r"sdlc-protocol ([0-9]+\.[0-9]+\.[0-9]+) ([0-9a-f]{40})")
 FILE_LINE = re.compile(r"([0-9a-f]{64})  (\S+)")
+
+# The line scripts/check.sh must run, from the repository's root, before
+# the tests: the sync pull request sdlc-protocol opens here tells its
+# reviewer that this check holds the copy to its record.
+CHECK_SH = ROOT / "scripts" / "check.sh"
+VERIFY = "python3 coordbench/vendor/sdlc_protocol/vendoring.py verify coordbench/vendor"
 
 
 def record_lines():
@@ -158,6 +165,12 @@ class VendoredCopyTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(done.stdout, f"vendored sdlc-protocol {version} at {commit[:7]}: "
                                       f"{len(package_files())} files match VENDORED\n")
+
+    def test_check_sh_verifies_the_copy_before_the_tests(self):
+        lines = [line.strip() for line in CHECK_SH.read_text(encoding="utf-8").splitlines()]
+        self.assertIn(VERIFY, lines, "scripts/check.sh must hold the copy to VENDORED")
+        tests = next(number for number, line in enumerate(lines) if line.startswith("python3 -m unittest"))
+        self.assertLess(lines.index(VERIFY), tests, "scripts/check.sh must verify the copy before any test runs")
 
     def test_the_copys_own_check_refuses_a_hand_edit(self):
         with tempfile.TemporaryDirectory() as tmp:
