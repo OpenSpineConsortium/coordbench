@@ -1615,8 +1615,15 @@ def abandon(plan, hub):
         teardown(plan)
 
 
+# The failures that come from the machine, not the pair: Docker, the hub,
+# the disk and the processes around them. A pair that hit one did not get
+# an answer to its question, so its record says so apart from a setup error.
+INFRASTRUCTURE_FAILURES = (drivers.DockerError, HubError, OSError, subprocess.SubprocessError)
+
+
 def record_failure(plan, hub, problem):
     plan["error"] = f"{type(problem).__name__}: {problem}"
+    plan["error_kind"] = "infrastructure" if isinstance(problem, INFRASTRUCTURE_FAILURES) else "setup"
     say(f"{plan['run_id']}: {plan['error']}")
     outcomes = {a["id"]: unmeasured_error(plan["error"]) for a in plan["agents"]}
     metrics, events, artifacts = close_run(plan, hub)
@@ -1760,11 +1767,21 @@ def cooperbench_result_fields(plan, records, metrics, started, ended):
     return record
 
 
+def error_kind(plan, outcomes):
+    """What stopped the pair, or null when nothing did: the runner's
+    failure as record_failure classed it, else an agent that ended in Error
+    with no failure of the runner's own."""
+    if plan.get("error_kind"):
+        return plan["error_kind"]
+    return "agent" if any(o.status == "Error" for o in outcomes.values()) else None
+
+
 def result_record(plan, outcomes, metrics, ended):
     started = datetime.fromisoformat(plan["started_at"])
     records = {a["id"]: agent_record(plan, a, outcomes[a["id"]]) for a in plan["agents"]}
     record = cooperbench_result_fields(plan, records, metrics, started, ended)
     record.update({
+        "error_kind": error_kind(plan, outcomes),
         "arm": plan["arm_name"], "driver": plan["driver"], "agents_seconds": agents_seconds(plan),
         "isolation": plan.get("isolation"), "options": plan.get("options") or {},
         "agent_models": plan.get("agent_models") or {}, "max_turns": plan["max_turns"],
@@ -2225,15 +2242,52 @@ def run_all(settings, hub, driver, pairs):
 
 def requested_pairs(args, settings):
     """The pairs the command line names: one --features pair of --repo and
-    --task, or every pair of --subset, narrowed by either when given."""
+    --task, or every pair of --subset, narrowed by either when given, and
+    by --reference-merge when that is given."""
     if args.features:
         if not args.repo or args.task is None:
             raise ValueError("--features needs --repo and --task")
-        return [(args.repo, args.task, args.features)]
-    pairs = subset_tasks(settings["dataset_dir"], args.subset, args.repo, args.task)
-    if not pairs:
-        raise ValueError(f"the {args.subset} subset names no pair" + (" of that task" if args.repo else ""))
+        pairs = [(args.repo, args.task, args.features)]
+    else:
+        pairs = subset_tasks(settings["dataset_dir"], args.subset, args.repo, args.task)
+        if not pairs:
+            raise ValueError(f"the {args.subset} subset names no pair" + (" of that task" if args.repo else ""))
+    if getattr(args, "reference_merge", None):
+        pairs = by_reference_merge(pairs, settings["dataset_dir"], args.reference_merge)
     return pairs
+
+
+def by_reference_merge(pairs, dataset_dir, merge):
+    """The pairs whose reference patches merge as merge asks, clean or
+    conflicting, by CooperBench's gold_conflict_report.json. The choice is
+    made on what the gold patches do, never on what an agent did."""
+    report = read_json(Path(dataset_dir) / "gold_conflict_report.json")
+    if not isinstance(report, dict) or not isinstance(report.get("all_results"), list):
+        raise ValueError(f"--reference-merge needs gold_conflict_report.json in {dataset_dir}")
+    conflicts = {(row["repo"], int(row["task_id"]), tuple(sorted((row["f1"], row["f2"])))): row["has_conflict"]
+                 for row in report["all_results"]}
+    kept = []
+    for repo, task_id, features in pairs:
+        key = (repo, int(task_id), tuple(sorted(features)))
+        if key not in conflicts:
+            raise ValueError(f"the reference report has no result for {repo}/{task_id} {feature_dir_name(features)}")
+        if conflicts[key] == (merge == "conflicting"):
+            kept.append((repo, task_id, features))
+    if not kept:
+        raise ValueError(f"no pair of the request merges {merge} with the reference patches")
+    return kept
+
+
+def check_docker():
+    """The Docker daemon must answer before a run makes any directory: with
+    it down every pair fails at network set-up and leaves an error record
+    to clear by hand, as the pilot's first batch did."""
+    try:
+        answer = drivers.docker("info", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        answer = None
+    if answer is None or answer.returncode != 0:
+        raise ValueError("the Docker daemon does not answer `docker info`; bash bench/cooperbench/setup.sh starts it")
 
 
 def check_agent_models(settings, pairs):
@@ -2282,7 +2336,9 @@ def summary_line(record):
     console's rate (passed over everything evaluated), the cost."""
     tally = record["eval"]
     cost = "unknown" if record["total_cost"] is None else f"${record['total_cost']:.2f}"
-    return (f"summary: {record['completed']} completed, {record['skipped']} skipped, {record['failed']} failed; "
+    infrastructure = record.get("infrastructure_errors", 0)
+    failed = f"{record['failed']} failed" + (f" ({infrastructure} infrastructure)" if infrastructure else "")
+    return (f"summary: {record['completed']} completed, {record['skipped']} skipped, {failed}; "
             f"evals: {tally['total_evaluated']} evaluated, {tally['passed']} passed, {tally['failed']} failed, "
             f"{tally['errors']} errors ({100 * record['pass_rate_over_evaluated']:.1f}%); cost: {cost}")
 
@@ -2321,6 +2377,7 @@ def warn_about_credentials(driver):
 def command_run(args):
     settings = settings_from(args, "claude-cli")
     pairs = requested_pairs(args, settings)
+    check_docker()
     check_concurrency(settings)
     check_agent_models(settings, pairs)
     driver = drivers.load_driver(settings["driver"])
@@ -2344,6 +2401,7 @@ def command_prepare(args):
     if not getattr(driver, "resumable", False):
         raise SystemExit(f"prepare needs a driver whose wait can run in another process, "
                          f"and {settings['driver']} is not one")
+    check_docker()
     check_agent_models(settings, [(args.repo, args.task, args.features)])
     with timed(settings, "hub"):
         hub, process = connect_hub(settings)
@@ -2447,6 +2505,9 @@ def add_pair_arguments(parser, subset):
     if subset:
         pairs.add_argument("--subset", help="every pair the subset names (as flash), of every task or of the "
                                             "--repo and --task given")
+        parser.add_argument("--reference-merge", choices=("clean", "conflicting"),
+                            help="only the pairs whose reference patches merge clean, or conflict, by "
+                                 "CooperBench's gold_conflict_report.json")
         parser.add_argument("--concurrency", type=int, default=1,
                             help="how many pairs run at once (default 1; CooperBench's runner runs 20)")
     parser.add_argument("--driver", help="claude-cli, session, or path/to/driver.py:Class")

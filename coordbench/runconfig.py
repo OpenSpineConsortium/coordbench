@@ -249,6 +249,8 @@ def pair_report(run_dir, task, status, eval_skipped=False):
     entry = {"task": task, "status": status, "cost": result.get("total_cost")}
     if status == "error":
         entry["error"] = result.get("error")
+    if result.get("error_kind"):
+        entry["error_kind"] = result["error_kind"]
     entry["eval"] = None if status == "error" else eval_status(read_json(Path(run_dir) / "eval.json"))
     # _process_eval_result checks an evaluation's error before its skipped
     # flag, so an errored evaluation found on disk is an error, never a skip.
@@ -281,6 +283,9 @@ def summary_record(run_name, reports, total_time_seconds, totals, extras):
         "total_tasks": len(reports), "completed": statuses.count("done"), "skipped": statuses.count("skip"),
         "failed": statuses.count("error"), "total_cost": total_cost(reports),
         "total_time_seconds": total_time_seconds, "results": [r["entry"] for r in reports],
+        # The errors that were the machine's (Docker, the hub), counted
+        # apart from setup and agent errors so a rerun can tell them apart.
+        "infrastructure_errors": sum(1 for r in reports if r["entry"].get("error_kind") == "infrastructure"),
         "eval": {"total_evaluated": tally["passed"] + tally["failed"] + tally["errors"], **tally, "pass_rate": rate},
         # CooperBench's console rate, beside _save_summary's above.
         "pass_rate_over_evaluated": tally["passed"] / max(tally["passed"] + tally["failed"] + tally["errors"], 1),

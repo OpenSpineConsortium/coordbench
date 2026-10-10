@@ -98,6 +98,11 @@ class ReportTest(unittest.TestCase):
     def test_arms_are_compared_on_the_pairs_both_scored(self):
         text = report.render(self.arms())
         self.assertIn("| solo vs team | 1 | 1 | 0 | 1.000 |", text)
+
+    def test_the_headline_says_which_verdict_passed_counts(self):
+        text = report.render(self.arms())
+        self.assertTrue(text.startswith("# Arms side by side\n\nPassed is eval.json's both_passed, CooperBench 63b9d44's verdict."))
+        self.assertIn("The paper-era rule (naive merge, union, resolver) is counted in the merge cascade's table.", text)
         self.assertIn("| pallets_click_task/2068/f2_f10 | fail | error |", text)
 
     def test_the_statistics(self):
