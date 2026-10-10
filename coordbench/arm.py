@@ -34,6 +34,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -89,6 +90,46 @@ def unmet_needs(arm, options):
             if not all(options.get(name) for name in NEED_OPTIONS.get(need, ()))]
 
 
+# Fields of a run's event that stay in the run's own record and off the
+# trace stream: the text the agents wrote to each other. The record is
+# the benchmark's data (conversation.py derives CooperBench's files from
+# it); the stream is logging, which the hub's --debug file and any
+# deployment's sink receive, and carries no message text.
+PRIVATE_FIELDS = frozenset({"content"})
+
+
+def public_fields(data):
+    return {key: value for key, value in data.items() if key not in PRIVATE_FIELDS}
+
+
+# How an agent reaches the arm's tools, the run option "tool_surface".
+# "mcp", the default, is coordbench's own: the arm loaded as a Claude Code
+# plugin, so its tools arrive over MCP and its skill rides along, beside
+# the shell commands. "bash" reproduces CooperBench's claude_code agent at
+# 63b9d44: no plugin, so no skill and no coordbench MCP server, the prompt
+# without the sentence naming the MCP tools, and the coop-* commands in
+# Bash, plus whatever MCP server CooperBench itself registered (team
+# mode's cooperbench-team, which serves wait_for_message alone).
+TOOL_SURFACES = ("mcp", "bash")
+DEFAULT_TOOL_SURFACE = "mcp"
+
+
+def tool_surface(options):
+    """The run's tool surface, refused when it names none of TOOL_SURFACES."""
+    surface = (options or {}).get("tool_surface") or DEFAULT_TOOL_SURFACE
+    if surface not in TOOL_SURFACES:
+        raise ValueError(f"tool_surface must be one of {', '.join(TOOL_SURFACES)}, not {surface!r}")
+    return surface
+
+
+def hub_mcp_server():
+    """The hub as one MCP server's config, the entry every built-in arm's
+    .mcp.json holds: Claude Code expands both variables from the agent's
+    environment, and the timeout outlasts the longest wait an arm allows."""
+    return {"type": "http", "url": "${COORD_MCP_URL}", "timeout": 330000,
+            "headers": {"Authorization": "Bearer ${COORD_AGENT_TOKEN:-}"}}
+
+
 @dataclass(frozen=True)
 class AgentSpec:
     """One agent of a run: its id, its role in the arm, and the features
@@ -118,7 +159,15 @@ class Call:
     response), which the handler books with waited(seconds) around each
     wait. The hub reports it beside the call's wall time in the
     "tool_done" event (Run), so a reader can tell a slow hub from an
-    agent that chose to wait."""
+    agent that chose to wait.
+
+    `tool_seq` is the seq of the "tool" event that opened this call, set
+    by the hub before the handler runs (None for a handler called
+    directly), so an event the handler emits can name the call that
+    produced it: a "message" event's send_id is its send's tool_seq.
+    `via` is the transport the call came by, "mcp" or "shell" (the /rpc
+    path the shell commands use), recorded in the "tool" event so a
+    reader can match the call to an MCP tool use or to a Bash command."""
 
     run: "Run"
     agent: str
@@ -126,6 +175,8 @@ class Call:
     cancelled: threading.Event = field(default_factory=threading.Event)
     undos: list = field(default_factory=list)
     blocked_s: float = 0.0
+    tool_seq: int | None = None
+    via: str = "mcp"
 
     def arg(self, name, default=None, required=False):
         value = self.arguments.get(name, default)
@@ -193,8 +244,9 @@ class Run:
     tool call, on the MCP path and the /rpc path alike, so a reader of
     events.jsonl can tell what the hub spent from what the agent chose:
 
-    - {"kind": "tool", "tool": name} when the call starts, before its
-      handler runs;
+    - {"kind": "tool", "tool": name, "via": "mcp" or "shell"} when the
+      call starts, before its handler runs; its seq is the call's
+      tool_seq, which the events the handler emits refer to;
     - {"kind": "tool_done", "tool": name, "duration_ms", "blocked_ms",
       "is_error", "cancelled"} when the handler has returned. duration_ms
       is the handler's wall time; blocked_ms is the part of it the tool
@@ -212,7 +264,12 @@ class Run:
     the arms share, as the same record under run=<this run's id> (so the
     field names seq, t, kind, agent and run are this class's, and no kind
     adds one of them), with trace's own "ts" beside it, for whoever
-    listens there: the hub's --debug log, a runner's sink. An arm adds an
+    listens there: the hub's --debug log, a runner's sink. The one
+    difference is the text agents wrote to each other: a field named in
+    PRIVATE_FIELDS ("content", a message's or a request's text) is kept
+    in the run's own record, which is the data a benchmark reads back,
+    and left off the stream, which is logging, so the stream carries no
+    message text at any level. An arm adds an
     event in one line, `run.emit("claim", agent, issue=7)`, and a timing
     in one, `with trace.span("rebase", run=run.id, agent=agent): ...`,
     whose two events reach the stream's listeners beside the run's but
@@ -239,19 +296,40 @@ class Run:
     def emit(self, kind, agent=None, **data):
         """Record one coordination event; the metrics come from these. The
         event goes into `events` and the log first, then out on the trace
-        stream under this run's id. The waiters are woken whatever happens
-        after the event is in, so a failure here never leaves a blocking
-        tool asleep."""
+        stream under this run's id, less its private fields. The waiters
+        are woken whatever happens after the event is in, so a failure
+        here never leaves a blocking tool asleep."""
         with self.lock:
             try:
                 seq, t = len(self.events), round(time.time() - self.started, 3)
                 event = {"seq": seq, "t": t, "kind": kind, "agent": agent, **data}
                 self.events.append(event)
                 self.log(event)
-                trace.event(kind, run=self.id, seq=seq, t=t, agent=agent, **data)
+                trace.event(kind, run=self.id, seq=seq, t=t, agent=agent, **public_fields(data))
             finally:
                 self.lock.notify_all()
         return event
+
+    def next_seq(self):
+        """The seq the next event will get. Read it under run.lock and emit
+        in the same hold, as kit.deliver does to give a message event its
+        own seq as message_id: no other emit can come between the two."""
+        with self.lock:
+            return len(self.events)
+
+    def emit_started(self):
+        """The run's first event, seq 0 when the hub emits it before the
+        arm's setup: the wall clock the run's t counts from (epoch, and
+        iso in UTC), the arm, the agents with their roles and features,
+        and the tool surface. A reader of events.jsonl alone can then put
+        every event at its absolute time (epoch + t) and every agent at
+        its feature."""
+        return self.emit("run_started", None, epoch=self.started,
+                         iso=datetime.fromtimestamp(self.started, timezone.utc).isoformat(),
+                         arm=self.arm.config.get("name") or self.arm.name,
+                         agents=[{"id": spec.id, "role": spec.role, "features": list(spec.features)}
+                                 for spec in self.agents.values()],
+                         tool_surface=tool_surface(self.options))
 
     def log(self, event):
         """Append the event to events.jsonl, best effort. The file is a side
@@ -315,6 +393,10 @@ class Arm:
       Claude Code puts into the system prompt; empty by default, because
       CooperBench's agents got none and a fair comparison keeps it so;
     - metrics(run): numbers worth keeping, from run.events and run.state;
+    - artifacts(run): files worth keeping, {file name: a JSON value or
+      text}, taken once when the run closes, before teardown, and handed
+      to the runner with the metrics (the team arm's task_log.json and
+      tasks.json); none by default;
     - teardown(run): free what setup or the tools took (a scratch clone, a
       thread), called once when the run closes, outside run.lock.
 
@@ -324,11 +406,22 @@ class Arm:
     repository every agent can push to and fetch from, as the remote
     `team`) and "shared_volume" (one directory mounted in every agent's
     container at /workspace/shared).
+
+    `tool_surfaces` are the run option tool_surface's values the arm
+    offers (TOOL_SURFACES says what each means); an arm whose prompt
+    names its MCP tools offers "mcp" alone, and the hub refuses a run
+    that asks for another. On the "bash" surface the MCP endpoint serves
+    only the tools named in `bash_mcp_tools`, and claude_surface names
+    the hub to the driver as `bash_mcp_server`, which is how
+    CooperBench's own agents met those tools.
     """
 
     name = "arm"
     description = ""
     needs = ()
+    tool_surfaces = (DEFAULT_TOOL_SURFACE,)
+    bash_mcp_server = ""
+    bash_mcp_tools = ()
 
     def __init__(self, root=None, config=None):
         self.root = Path(root) if root else None
@@ -356,16 +449,45 @@ class Arm:
     def teardown(self, run):
         pass
 
+    def artifacts(self, run):
+        return {}
+
     def metrics(self, run):
         kinds = {}
         for event in run.events:
             kinds[event["kind"]] = kinds.get(event["kind"], 0) + 1
-        return {"events": kinds}
+        return {"events": kinds, "tool_surface": run.options.get("tool_surface") or DEFAULT_TOOL_SURFACE}
 
     def tools_for(self, run, agent):
-        """The tools of this agent's role, by name."""
+        """The tools of this agent's role, by name: every tool it has, which
+        the shell commands (/rpc) always reach."""
         role = run.role_of(agent)
         return {t.name: t for t in self.tools(run, agent) if not t.roles or role in t.roles}
+
+    def mcp_tools_for(self, run, agent):
+        """The tools the MCP endpoint serves this agent: all of them on the
+        "mcp" surface, and on "bash" only those CooperBench served over
+        MCP itself (bash_mcp_tools), so an MCP client of a bash-surface
+        run sees what CooperBench's agent saw and no more."""
+        tools = self.tools_for(run, agent)
+        if tool_surface(run.options) == DEFAULT_TOOL_SURFACE:
+            return tools
+        return {name: tool for name, tool in tools.items() if name in self.bash_mcp_tools}
+
+    def claude_surface(self, options):
+        """What a driver hands Claude Code for this arm on the run's tool
+        surface: {"tool_surface", "plugin", "mcp_servers"}. plugin says
+        whether to load the arm's directory with --plugin-dir; mcp_servers
+        are the servers to hand over with --mcp-config, arm.json's own and,
+        on the bash surface, the hub under CooperBench's server name when
+        the arm has one (bash_mcp_server)."""
+        surface = tool_surface(options)
+        servers = dict(self.config.get("mcp_servers") or {})
+        if surface == DEFAULT_TOOL_SURFACE:
+            return {"tool_surface": surface, "plugin": True, "mcp_servers": servers}
+        if self.bash_mcp_server and self.bash_mcp_tools:
+            servers[self.bash_mcp_server] = hub_mcp_server()
+        return {"tool_surface": surface, "plugin": False, "mcp_servers": servers}
 
 
 def load_arm_class(path):

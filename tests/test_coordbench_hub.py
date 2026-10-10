@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 from urllib.parse import urlsplit
@@ -258,8 +259,9 @@ class ApiTest(HubServerCase):
         self.create()
         self.rpc("send_message", {"to": "agent2", "text": "hi"})
         events = self.request("GET", "/api/runs/pair1/events").json["events"]
-        self.assertEqual([event["kind"] for event in events], ["tool", "message", "tool_done"])
-        done = events[2]
+        self.assertEqual([event["kind"] for event in events], ["run_started", "tool", "message", "tool_done"])
+        self.assertEqual(events[1]["via"], "shell")
+        done = events[3]
         self.assertEqual((done["agent"], done["tool"], done["is_error"], done["cancelled"]),
                          ("agent1", "send_message", False, False))
         self.assertEqual(done["blocked_ms"], 0)
@@ -303,9 +305,9 @@ class ApiTest(HubServerCase):
         self.rpc("send_message", {"to": "agent2", "text": "hello"})
         path = self.dir / "logs" / "pair1" / "events.jsonl"
         events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual([e["kind"] for e in events], ["tool", "message", "tool_done"])
-        self.assertEqual(events[1]["to"], "agent2")
-        self.assertIn("duration_ms", events[2])
+        self.assertEqual([e["kind"] for e in events], ["run_started", "tool", "message", "tool_done"])
+        self.assertEqual((events[2]["to"], events[2]["content"]), ("agent2", "hello"))
+        self.assertIn("duration_ms", events[3])
 
     def test_delete_releases_the_run(self):
         # A released run is gone from the hub: its events, prompts and
@@ -736,10 +738,11 @@ class McpTest(HubServerCase):
         dozer.join(timeout=10)
         self.assertFalse(dozer.is_alive())
         self.assertEqual(outcome["answer"]["result"]["content"][0]["text"], "dozed")
-        events = self.hub.events("pair1")
+        events = self.hub.events("pair1")[1:]
         framed = [(e["kind"], e["agent"], e["tool"]) for e in events]
         self.assertEqual(framed, [("tool", "agent2", "doze"), ("tool", "agent1", "poke"),
                                   ("tool_done", "agent1", "poke"), ("tool_done", "agent2", "doze")])
+        self.assertEqual([e["via"] for e in events[:2]], ["mcp", "shell"])
         poked, dozed = events[2], events[3]
         self.assertEqual(set(dozed), {"seq", "t", "kind", "agent", "tool", "duration_ms", "blocked_ms",
                                       "is_error", "cancelled"})
@@ -756,7 +759,7 @@ class McpTest(HubServerCase):
             self.call_tool("refuse")
             self.call_tool("crash")
         kinds = [e["kind"] for e in self.hub.events("pair1")]
-        self.assertEqual(kinds, ["tool", "tool_done", "tool", "tool_crash", "tool_done"])
+        self.assertEqual(kinds, ["run_started", "tool", "tool_done", "tool", "tool_crash", "tool_done"])
         done = [(e["tool"], e["is_error"], e["cancelled"]) for e in self.hub.events("pair1")
                 if e["kind"] == "tool_done"]
         self.assertEqual(done, [("refuse", True, False), ("crash", True, False)])
@@ -772,7 +775,7 @@ class McpTest(HubServerCase):
         self.assertEqual(answer.json["error"]["code"], -32602)
         self.assertIn("'timeout'", answer.json["error"]["message"])
         self.assertIn("timeout_ms", answer.json["error"]["message"])
-        self.assertEqual(self.hub.events("pair1"), [])
+        self.assertEqual([e["kind"] for e in self.hub.events("pair1")], ["run_started"])
         # A schema open to other names, or one naming none, takes any name.
         anything = self.call_tool("anything", {"known": "k", "other": 1}).json["result"]
         self.assertEqual(json.loads(anything["content"][0]["text"]), {"known": "k", "other": 1})
@@ -863,9 +866,10 @@ class TraceTest(HubServerCase):
     def test_a_tool_and_tool_done_pair_is_whole_as_before(self):
         self.create()
         self.rpc("poke")
-        started, done = self.hub.events("pair1")
-        self.assertEqual(started, {"seq": 0, "t": started["t"], "kind": "tool", "agent": "agent1", "tool": "poke"})
-        self.assertEqual(done, {"seq": 1, "t": done["t"], "kind": "tool_done", "agent": "agent1", "tool": "poke",
+        _, started, done = self.hub.events("pair1")
+        self.assertEqual(started, {"seq": 1, "t": started["t"], "kind": "tool", "agent": "agent1", "tool": "poke",
+                                   "via": "shell"})
+        self.assertEqual(done, {"seq": 2, "t": done["t"], "kind": "tool_done", "agent": "agent1", "tool": "poke",
                                 "duration_ms": done["duration_ms"], "blocked_ms": 0, "is_error": False,
                                 "cancelled": False})
         self.assertEqual(list(done), ["seq", "t", "kind", "agent", "tool", "duration_ms", "blocked_ms",
@@ -883,7 +887,8 @@ class TraceTest(HubServerCase):
         written = read_jsonl(self.dir / "logs" / "pair1" / "events.jsonl")
         self.assertEqual(written, events)
         self.assertEqual([list(line) for line in written], [list(event) for event in events])
-        self.assertEqual([e["kind"] for e in written], ["tool", "message", "tool_done", "tool", "tool_done"])
+        self.assertEqual([e["kind"] for e in written],
+                         ["run_started", "tool", "message", "tool_done", "tool", "tool_done"])
         for event in written:
             self.assertEqual(list(event)[:4], ["seq", "t", "kind", "agent"])
             self.assertNotIn("ts", event)
@@ -894,13 +899,14 @@ class TraceTest(HubServerCase):
         memory = listen_in_test(self)
         self.create()
         self.rpc("poke")
-        self.assertEqual([(e["kind"], e["run"]) for e in memory], [("tool", "pair1"), ("tool_done", "pair1")],
+        self.assertEqual([(e["kind"], e["run"]) for e in memory],
+                         [("run_started", "pair1"), ("tool", "pair1"), ("tool_done", "pair1")],
                          "in prod the stream carries the runs' events and nothing of the hub's own")
-        started = memory[0]
-        self.assertEqual(set(started), {"kind", "t", "ts", "run", "seq", "agent", "tool"})
-        self.assertEqual((started["seq"], started["agent"], started["tool"]), (0, "agent1", "poke"))
-        self.assertEqual(started["t"], self.hub.events("pair1")[0]["t"], "t is the run's clock, not trace's")
-        self.assertEqual(memory[1]["duration_ms"], self.hub.events("pair1")[1]["duration_ms"])
+        started = memory[1]
+        self.assertEqual(set(started), {"kind", "t", "ts", "run", "seq", "agent", "tool", "via"})
+        self.assertEqual((started["seq"], started["agent"], started["tool"]), (1, "agent1", "poke"))
+        self.assertEqual(started["t"], self.hub.events("pair1")[1]["t"], "t is the run's clock, not trace's")
+        self.assertEqual(memory[2]["duration_ms"], self.hub.events("pair1")[2]["duration_ms"])
 
     def test_debug_records_one_http_request_per_request_with_its_fields(self):
         memory = listen_in_test(self, "debug")
@@ -937,7 +943,8 @@ class TraceTest(HubServerCase):
         self.assertEqual([(e["run"], e["agent"], e["tool"], e["bytes"]) for e in sizes],
                          [("pair1", "agent1", "send_message", len(json.dumps(arguments)))])
         self.assertNotIn("hi", json.dumps(sizes[0]), "the arguments' size is recorded, never their content")
-        self.assertEqual([e["kind"] for e in self.hub.events("pair1")], ["tool", "message", "tool_done"],
+        self.assertEqual([e["kind"] for e in self.hub.events("pair1")],
+                         ["run_started", "tool", "message", "tool_done"],
                          "debug adds to the hub's stream, never to the run's record")
         self.assertEqual(read_jsonl(self.dir / "logs" / "pair1" / "events.jsonl"), self.hub.events("pair1"))
 
@@ -953,18 +960,19 @@ class TraceTest(HubServerCase):
         self.assertEqual([(e["request_id"], e["found"]) for e in cancels], [(99, False)])
 
     def test_the_log_is_held_open_from_the_first_event_and_closed_when_the_run_is_released(self):
+        # The run's first event, run_started, comes as the run is made, so
+        # the file is open from the create on.
         self.create()
         run = self.hub.hosted("pair1").run
         path = self.dir / "logs" / "pair1" / "events.jsonl"
-        self.assertEqual(path.read_text(encoding="utf-8"), "")
-        self.assertFalse(run.log_file.opened)
-        self.rpc("poke")
+        self.assertEqual([e["kind"] for e in read_jsonl(path)], ["run_started"])
         self.assertTrue(run.log_file.opened)
+        self.rpc("poke")
         self.assertEqual(self.request("DELETE", "/api/runs/pair1").status, 200)
         self.assertFalse(run.log_file.opened)
-        self.assertEqual([e["kind"] for e in read_jsonl(path)], ["tool", "tool_done"])
+        self.assertEqual([e["kind"] for e in read_jsonl(path)], ["run_started", "tool", "tool_done"])
         run.emit("late")
-        self.assertEqual([e["kind"] for e in read_jsonl(path)], ["tool", "tool_done", "late"])
+        self.assertEqual([e["kind"] for e in read_jsonl(path)], ["run_started", "tool", "tool_done", "late"])
         run.close_log()
 
 
@@ -1102,7 +1110,7 @@ class RpcTest(HubServerCase):
         self.assertIn("'timeout'", answer.json["error"])
         self.assertIn("timeout_ms", answer.json["error"])
         self.assertEqual(self.rpc("send_message", {"to": "agent2", "text": "hi", "cc": "agent3"}).status, 400)
-        self.assertEqual(self.hub.events("pair1"), [])
+        self.assertEqual([e["kind"] for e in self.hub.events("pair1")], ["run_started"])
         self.assertEqual(self.rpc("wait_for_message", {"timeout_ms": 100}).json["text"], kit.NO_MESSAGE)
 
     def test_unknown_run_or_agent_is_404(self):
@@ -1192,7 +1200,7 @@ class InProcessTest(unittest.TestCase):
         self.assertFalse(hub.get_run("x1")["closed"])
         self.assertIn("events", hub.close_run("x1"))
         self.assertTrue(hub.get_run("x1")["closed"])
-        self.assertEqual(hub.events("x1"), [])
+        self.assertEqual([e["kind"] for e in hub.events("x1")], ["run_started"])
 
     def test_a_failed_create_frees_its_run_id(self):
         class BrokenArm(Arm):
@@ -1223,6 +1231,176 @@ class InProcessTest(unittest.TestCase):
         self.assertEqual(first.root, second.root)
         self.assertIs(type(hub.hosted("c1").run.arm), type(hub.hosted("c2").run.arm))
         self.assertEqual(len(hub.arm_classes), 2)
+
+
+class RunStartedTest(unittest.TestCase):
+    """The run's first event anchors every other: the wall clock its t
+    counts from and who the agents are, before the arm's setup records."""
+
+    def test_the_first_event_names_the_clock_the_arm_and_the_agents(self):
+        hub = hub_module.Hub()
+        hub.create_run("team", [7, 3], {"3": "a", "7": "b"}, {"shared_dir": "/workspace/shared"}, "t1")
+        events = hub.events("t1")
+        started = events[0]
+        run = hub.hosted("t1").run
+        self.assertEqual((started["seq"], started["kind"], started["agent"]), (0, "run_started", None))
+        self.assertEqual(started["epoch"], run.started)
+        self.assertAlmostEqual(datetime.fromisoformat(started["iso"]).timestamp(), run.started, places=5)
+        self.assertTrue(started["iso"].endswith("+00:00"))
+        self.assertEqual((started["arm"], started["tool_surface"]), ("team", "mcp"))
+        self.assertEqual(started["agents"], [{"id": "agent1", "role": "lead", "features": [3]},
+                                             {"id": "agent2", "role": "member", "features": [7]}])
+        self.assertEqual(events[1]["kind"], "task_create", "the arm's setup comes after")
+
+    def test_a_run_made_directly_has_none(self):
+        self.assertEqual(Run("r1", Arm(), []).events, [])
+
+
+class ToolSurfaceTest(unittest.TestCase):
+    """The run option tool_surface: refused when unknown or not the arm's,
+    and on "bash" the MCP endpoint serves only what CooperBench did."""
+
+    def test_an_unknown_surface_is_refused_before_the_run_exists(self):
+        hub = hub_module.Hub()
+        with self.assertRaises(hub_module.HubError) as refused:
+            hub.create_run("coop", [1, 2], SPECS, {"tool_surface": "telepathy"}, "s1")
+        self.assertEqual(refused.exception.status, 400)
+        self.assertIn("mcp, bash", refused.exception.message)
+        self.assertEqual(hub.run_count(), 0)
+
+    def test_an_arm_that_offers_only_mcp_refuses_bash(self):
+        hub = hub_module.Hub()
+        with self.assertRaises(hub_module.HubError) as refused:
+            hub.create_run(Arm(), [1], {"1": "spec"}, {"tool_surface": "bash"}, "s2")
+        self.assertEqual(refused.exception.status, 400)
+        self.assertIn("offers tool_surface mcp", refused.exception.message)
+
+    def test_on_bash_mcp_lists_only_the_arms_mcp_tools_and_the_shell_keeps_all(self):
+        hub = hub_module.Hub()
+        hub.create_run("coop", [1, 2], SPECS, {"tool_surface": "bash"}, "s3")
+        run = hub.hosted("s3").run
+        listed = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, run, "agent1")
+        self.assertEqual(listed["result"]["tools"], [])
+        called = mcp.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                             "params": {"name": "send_message", "arguments": {"to": "agent2"}}}, run, "agent1")
+        self.assertEqual(called["error"]["code"], mcp.INVALID_PARAMS)
+        self.assertIn("send_message", [t["name"] for t in hub.describe_tools(run, "agent1")])
+        self.assertFalse(hub.call(run, "agent1", "send_message", {"to": "agent2", "text": "hi"})["isError"])
+        self.assertEqual(hub.close_run("s3")["tool_surface"], "bash")
+
+    def test_the_surface_is_what_a_driver_hands_claude_code(self):
+        self.assertEqual(Arm().claude_surface({}), {"tool_surface": "mcp", "plugin": True, "mcp_servers": {}})
+        with self.assertRaises(ValueError):
+            Arm().claude_surface({"tool_surface": "carrier pigeon"})
+
+
+class TraceFieldsTest(unittest.TestCase):
+    def test_a_private_field_stays_in_the_record_and_off_the_stream(self):
+        memory = listen_in_test(self)
+        run = Run("r1", Arm(), [])
+        run.emit("message", "agent1", to="agent2", content="the text", chars=8)
+        self.assertEqual(run.events[0]["content"], "the text")
+        self.assertEqual(set(memory[0]), {"kind", "t", "ts", "run", "seq", "agent", "to", "chars"})
+
+    def test_next_seq_is_the_seq_the_next_emit_gets(self):
+        run = Run("r1", Arm(), [])
+        run.emit("first")
+        with run.lock:
+            expected = run.next_seq()
+            self.assertEqual(run.emit("second")["seq"], expected)
+
+
+class ArtifactArm(Arm):
+    """Leaves one file of each kind, and says when it was torn down."""
+
+    name = "artifacts"
+
+    def artifacts(self, run):
+        run.state.setdefault("order", []).append("artifacts")
+        return {"notes.json": {"closed": run.closed}, "notes.txt": "plain text\n"}
+
+    def teardown(self, run):
+        run.state.setdefault("order", []).append("teardown")
+
+
+class BrokenArtifactArm(Arm):
+    name = "broken"
+
+    def artifacts(self, run):
+        raise RuntimeError("a bug in the arm")
+
+
+class ArtifactsTest(unittest.TestCase):
+    """The close answers the files a run leaves beside its metrics, taken
+    once, before teardown, and never at the cost of the close."""
+
+    def test_the_close_answer_carries_the_arms_artifacts_taken_once_before_teardown(self):
+        hub = hub_module.Hub()
+        hub.create_run(ArtifactArm(), [1], {"1": "spec"}, run_id="a1")
+        answer = hub.close_answer("a1")
+        self.assertEqual(set(answer), {"metrics", "artifacts"})
+        self.assertEqual(answer["artifacts"], {"notes.json": {"closed": True}, "notes.txt": "plain text\n"})
+        self.assertEqual(hub.close_answer("a1")["artifacts"], answer["artifacts"])
+        self.assertEqual(answer["metrics"]["events"], {"run_started": 1})
+
+    def test_teardown_comes_after_the_artifacts(self):
+        hub = hub_module.Hub()
+        hub.create_run(ArtifactArm(), [1], {"1": "spec"}, run_id="a2")
+        run = hub.hosted("a2").run
+        hub.close_run("a2")
+        hub.close_run("a2")
+        self.assertEqual(run.state["order"], ["artifacts", "teardown"])
+
+    def test_an_arm_whose_artifacts_fail_still_closes(self):
+        hub = hub_module.Hub()
+        hub.create_run(BrokenArtifactArm(), [1], {"1": "spec"}, run_id="a3")
+        with contextlib.redirect_stderr(io.StringIO()) as log:
+            answer = hub.close_answer("a3")
+        self.assertEqual(answer["artifacts"], {})
+        self.assertIn("RuntimeError", log.getvalue())
+
+    def test_a_run_with_a_shared_remote_leaves_its_git_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = Path(tmp) / "remote.git"
+            subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+            hub = hub_module.Hub()
+            hub.create_run(Arm(), [1], {"1": "spec"}, {"git_remote_host": str(remote)}, "g1")
+            with mock.patch.object(kit, "git_log", return_value="commit abc\n") as logged:
+                answer = hub.close_answer("g1")
+        self.assertEqual(answer["artifacts"], {"git_log.txt": "commit abc\n"})
+        logged.assert_called_once_with(str(remote), None)
+
+    def test_the_remotes_directory_on_this_host_is_read_before_its_url(self):
+        hub = hub_module.Hub()
+        options = {"git_remote_host": "git://127.0.0.1:9418/g/repo.git", "git_remote_dir": "/srv/git/g/repo.git",
+                   "base_ref": "abc"}
+        hub.create_run(Arm(), [1], {"1": "spec"}, options, "g3")
+        with mock.patch.object(kit, "git_log", return_value="") as logged:
+            hub.close_answer("g3")
+        logged.assert_called_once_with("/srv/git/g/repo.git", "abc")
+
+    def test_a_git_log_that_fails_costs_only_its_file(self):
+        hub = hub_module.Hub()
+        hub.create_run(ArtifactArm(), [1], {"1": "spec"}, {"git_remote_host": "git://127.0.0.1:1/none.git",
+                                                           "base_ref": "abc"}, "g2")
+        with mock.patch.object(kit, "git_log", side_effect=RuntimeError("git clone failed: refused")), \
+                contextlib.redirect_stderr(io.StringIO()) as log:
+            answer = hub.close_answer("g2")
+        self.assertEqual(set(answer["artifacts"]), {"notes.json", "notes.txt"})
+        self.assertIn("keeps no git_log.txt", log.getvalue())
+
+    def test_the_close_endpoint_answers_both(self):
+        hub = hub_module.Hub()
+        server = hub_module.serve_in_background(hub, "127.0.0.1", 0)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        hub.create_run(ArtifactArm(), [1], {"1": "spec"}, run_id="h1")
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=30)
+        connection.request("POST", "/api/runs/h1/close", body=b"{}", headers={"Content-Type": "application/json"})
+        answer = json.loads(connection.getresponse().read())
+        connection.close()
+        self.assertEqual(answer["artifacts"]["notes.txt"], "plain text\n")
+        self.assertIn("events", answer["metrics"])
 
 
 class EmitTest(unittest.TestCase):
@@ -1576,7 +1754,7 @@ class CommandLineTest(unittest.TestCase):
             finally:
                 process.terminate()
                 _, stderr = process.communicate(timeout=10)
-            self.assertEqual([e["kind"] for e in listed["events"]], ["tool", "message", "tool_done"])
+            self.assertEqual([e["kind"] for e in listed["events"]], ["run_started", "tool", "message", "tool_done"])
             self.assertEqual(stderr, "")
 
 
