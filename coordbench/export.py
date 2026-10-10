@@ -1519,9 +1519,23 @@ def coordbench_metadata(pair, metas, found_by_agent, steps, cooperbench_dir, cau
     info = features_info(result, cooperbench_dir or cooperbench_home(pair))
     if info:
         block["features_info"] = info
+    cause = cause or judged_cause(pair["judge"])
     if cause:
         block["cause"] = cause
     return block
+
+
+def judged_cause(judge):
+    """The human cause label annotate.py's tally --apply wrote into
+    judge.json, in the shape a labels file gives: {cause, note}."""
+    data = judge[1] if judge is not None else None
+    label = data.get("cause") if isinstance(data, dict) else None
+    if not isinstance(label, dict):
+        return None
+    name = label.get("label") or label.get("cause")
+    if isinstance(name, str) and name.lower() in CAUSES:
+        return {"cause": name.lower(), "note": label.get("note") or None}
+    return None
 
 
 def arm_of(result):
@@ -1848,10 +1862,13 @@ def load_causes(path):
     """A labels file as {key: {"cause", "note"}}: a JSON object mapping a
     pair (its directory, its run_id, or "<repo>/task<N>/<features>") to a
     cause name or to {cause or label, note}, or a list of such objects
-    naming the pair by pair_dir, run_id or repo, task_id and features."""
+    naming the pair by pair_dir, run_id or repo, task_id and features;
+    annotate.py's labels.json is such a list under "pairs"."""
     value = read_json(path)
     if value is None:
         return {}
+    if isinstance(value, dict) and isinstance(value.get("pairs"), list):
+        value = value["pairs"]  # annotate.py's labels.json (coordbench-cause-labels/1)
     items = value.items() if isinstance(value, dict) else ((pair_name(item), item) for item in value or []
                                                           if isinstance(item, dict))
     labels = {}

@@ -520,6 +520,21 @@ class TheEntryPoint(unittest.TestCase):
             self.assertIn(reason, block["reason"])
         self.assertEqual(sorted(p.name for p in self.run_dir.iterdir()), ["agent1.patch", "agent6.patch"])
 
+    def test_it_reads_the_tests_from_the_dataset_the_scorer_was_given(self):
+        """run.py's --dataset-dir hands test_merged another dataset (a
+        59bbf65 worktree); the cascade judges by the same tests."""
+        other = self.scratch / "dataset-59bbf65"
+        for feature in FEATURES:
+            tests = other / "r_task" / "task7" / f"feature{feature}" / "tests.patch"
+            tests.parent.mkdir(parents=True)
+            tests.write_text(f"paper-era tests for {feature}\n", encoding="utf-8")
+        for settings, plan in (({"dataset_dir": str(other)}, self.plan),
+                               ({}, {**self.plan, "dataset_dir": str(other)})):
+            sandbox = FakeSandbox(tests=alone_runs())
+            with mock.patch.object(cascade, "opened_sandbox", contextlib.contextmanager(lambda p: (yield sandbox))):
+                cascade.run(plan, merged_record("clean", clean_feature(PASS), clean_feature(PASS)), settings)
+            self.assertEqual(sandbox.patches["tests1.patch"], "paper-era tests for 1\n")
+
     def test_it_names_the_basis_by_cooperbench_s_commit(self):
         with mock.patch.object(cascade, "cooperbench_commit", return_value="63b9d44" + "f" * 33):
             block = self.run_with(FakeSandbox(tests=alone_runs()),

@@ -281,6 +281,10 @@ class AgentJob:
     prompt: str
     env: dict
     arm_dir: str
+    # Whether Claude Code loads the arm itself as a plugin (--plugin-dir):
+    # false on the bash tool surface, where CooperBench's agents had no
+    # plugin and no skill (Arm.claude_surface).
+    arm_plugin: bool = True
     plugins: list = field(default_factory=list)
     # Plugin .zip URLs, handed to Claude Code as they are (--plugin-url).
     plugin_urls: list = field(default_factory=list)
@@ -635,8 +639,9 @@ def put_container_file(container, path, text):
 
 
 def claude_flags(job):
-    flags = ["--verbose", "--output-format=stream-json", "--permission-mode=bypassPermissions",
-             "--plugin-dir", container_arm_dir(job.arm_dir)]
+    flags = ["--verbose", "--output-format=stream-json", "--permission-mode=bypassPermissions"]
+    if job.arm_plugin:
+        flags += ["--plugin-dir", container_arm_dir(job.arm_dir)]
     for plugin in job.plugins:
         flags += ["--plugin-dir", plugin]
     for url in job.plugin_urls:
@@ -771,8 +776,9 @@ def save_session_transcript(job):
 # claude_code adapter at 63b9d44, so a comparison knows them without
 # reading the code.
 CLI_DIFFERENCES = (
-    "the arm loads as a plugin (--plugin-dir), its extra plugins too, and arm.json's MCP servers through "
-    "--mcp-config; the adapter loads none",
+    "on the default tool surface (mcp) the arm loads as a plugin (--plugin-dir), its extra plugins too, and "
+    "arm.json's MCP servers through --mcp-config; the adapter loads none. tool_surface=bash loads no arm plugin, "
+    "and for team only the cooperbench-team server the adapter registers",
     "MCP_TOOL_TIMEOUT=330000 in the agent's environment, so a long-polling coordination call is not cut at "
     "Claude Code's 60 s default",
     "claude runs under coreutils timeout inside the container, so the time limit holds without the docker client",
@@ -1067,7 +1073,8 @@ def record_session_outcome(handle, outcome, transcript):
     stream without a result event, an Error."""
     entry = {"type": "coordbench_session", "agent": handle["agent"], "status": outcome.status,
              "error": outcome.error, "end_reason": outcome.end_reason, "patch_lines": len(outcome.patch.splitlines()),
-             "at": time.time(), "run_token": handle.get("run_token"), "transcript": transcript,
+             "at": time.time(), "ended_at": outcome.ended_at, "run_token": handle.get("run_token"),
+             "transcript": transcript,
              "model_requested": handle.get("model") or None, "model": outcome.model,
              "claude_code_version": outcome.claude_code_version,
              "tokens": {name: getattr(outcome, name) for name in TOKEN_FIELDS if name in (outcome.measured or ())},

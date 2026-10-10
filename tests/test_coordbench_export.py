@@ -547,6 +547,24 @@ class Site(unittest.TestCase):
         self.assertTrue(comm["details"])
 
 
+    def test_annotate_s_labels_file_and_its_applied_label_both_reach_the_metadata(self):
+        """annotate.py writes labels.json as {format, pairs: [...]} and
+        tally --apply writes the label into judge.json as its cause; the
+        exporter reads either, so a labelled pair shows its cause."""
+        labels = self.out / "labels.json"
+        labels.write_text(json.dumps({"format": "coordbench-cause-labels/1", "pairs": [
+            {"key": "k", "pair_dir": str(FIXTURE), "packet": 1, "cause": "Expectation", "note": "n"}]}))
+        result = json.loads((FIXTURE / "result.json").read_text())
+        self.assertEqual(export.cause_for(export.load_causes(labels), FIXTURE, result),
+                         {"cause": "expectation", "note": "n"})
+        with PairCopy() as pair:
+            judged = json.loads((pair / "judge.json").read_text())
+            judged["cause"] = {"label": "Commitment", "note": "said it would, did not", "source": "human"}
+            (pair / "judge.json").write_text(json.dumps(judged))
+            block = export.build_trajectory(pair, NO_DATASET)["metadata"]["coordbench"]
+        self.assertEqual(block["cause"], {"cause": "commitment", "note": "said it would, did not"})
+
+
 def generate_coop_index_passed(item):
     """The cascade generate_coop_index.py's parse_aggregated_results runs
     over a detailed_results entry (website scripts, lines 38-65)."""

@@ -787,12 +787,14 @@ def new_plan(settings, driver, repo, task_id, features):
     layout = arm.layout(features)
     setting = pair_setting(arm, layout)
     dataset_dir = dataset_dir_of(settings)
+    surface = arm.claude_surface(settings["options"])
     return {
         "repo": repo, "task_id": int(task_id), "features": list(features), "setting": setting,
         "run_name": settings["run_name"], "run_id": new_run_id(arm_name(arm), task_id, features),
         "arm": arm_request(settings["arm"]), "arm_name": arm_name(arm), "arm_dir": str(arm.root),
         "needs": arm_needs(arm, settings["options"]), "plugin_entries": list(arm.config.get("plugins") or []),
-        "mcp_servers": dict(arm.config.get("mcp_servers") or {}),
+        "mcp_servers": surface["mcp_servers"], "arm_plugin": surface["plugin"],
+        "tool_surface": surface["tool_surface"],
         "driver": settings["driver"], "agent_framework": getattr(driver, "framework", settings["driver"]),
         "host_workspace": bool(getattr(driver, "host_workspace", False)),
         "measures_usage": bool(getattr(driver, "measures_usage", False)),
@@ -891,10 +893,14 @@ def wait_for_git_daemon(tries=60):
 
 
 def init_repository_script(path):
-    """DockerGitServer.create's per-run init (git_servers/docker.py)."""
+    """DockerGitServer.create's per-run init (git_servers/docker.py), plus
+    a reflog: a bare repository keeps none by default, and without one a
+    force-push leaves no trace of what it replaced, so git_log.txt could
+    not show it. The reflog changes nothing an agent sees."""
     quoted = shlex.quote(path)
     return (f"set -e && mkdir -p {quoted} && cd {quoted} && git init -q --bare && "
-            "git config receive.denyCurrentBranch ignore && touch git-daemon-export-ok")
+            "git config receive.denyCurrentBranch ignore && git config core.logAllRefUpdates always && "
+            "touch git-daemon-export-ok")
 
 
 def seed_script(url):
@@ -921,8 +927,30 @@ def create_git_repository(plan):
     seeded = checked(drivers.docker("run", "--rm", "--network", NETWORK, "--entrypoint", "sh", plan["image"],
                                     "-c", seed_script(url)),
                      "seeding the shared repository from the task image")
-    return {"git_remote": url, "git_remote_host": f"git://127.0.0.1:{GIT_PORT}/{run_id}/repo.git",
-            "base_ref": base_commit(seeded.stdout or "")}
+    options = {"git_remote": url, "git_remote_host": f"git://127.0.0.1:{GIT_PORT}/{run_id}/repo.git",
+               "base_ref": base_commit(seeded.stdout or "")}
+    on_host = repository_on_host(run_id)
+    if on_host:
+        options["git_remote_dir"] = on_host
+    return options
+
+
+def repository_on_host(run_id):
+    """The run's bare repository as a directory of this host, when the git
+    server's volume is one this process owns and can read: the hub then
+    reads it in place for git_log.txt, reflog included, which a fetch over
+    git:// never carries. None otherwise (docker in a VM, a volume of
+    another user), and the hub fetches from git_remote_host instead."""
+    mount = drivers.docker("volume", "inspect", "-f", "{{.Mountpoint}}", GIT_DATA_VOLUME)
+    root = (mount.stdout or "").strip() if mount.returncode == 0 else ""
+    if not root:
+        return None
+    path = Path(root) / run_id / "repo.git"
+    try:
+        owned = path.is_dir() and path.stat().st_uid == os.getuid() and os.access(path, os.R_OK | os.X_OK)
+    except OSError:
+        return None
+    return str(path) if owned else None
 
 
 def add_agent_branches(plan):
@@ -1291,7 +1319,8 @@ def agent_job(plan, agent):
         run_id=plan["run_id"], agent=agent["id"], role=agent["role"], features=tuple(agent["features"]),
         container=agent["container"], prompt=Path(agent["prompt_file"]).read_text(encoding="utf-8"),
         env={"COORD_MCP_URL": agent["mcp_url"], "COORD_RPC_URL": agent["rpc_url"]},
-        arm_dir=plan["arm_dir"], plugins=[p["container"] for p in copied_plugins(plan)],
+        arm_dir=plan["arm_dir"], arm_plugin=plan.get("arm_plugin", True),
+        plugins=[p["container"] for p in copied_plugins(plan)],
         plugin_urls=plugin_urls(plan),
         mcp_servers=plan["mcp_servers"], model=agent_model(plan, agent), timeout_s=plan["timeout_s"],
         max_turns=plan["max_turns"], log_path=agent["log_path"], workspace=agent.get("workspace", ""),
@@ -1486,7 +1515,22 @@ def conclude(plan):
     if result is not None:
         result["timings"] = plan.get("timings") or []
         write_json(path, result)
+        export_pair(plan)
     say(f"{plan['run_id']}: {timings_summary(plan)}")
+
+
+def export_pair(plan):
+    """The pair's trajectory.json.gz for CooperBench's viewer and
+    coordbench's (export.py's write_pair), made once eval.json and the
+    timings are in, since the trajectory carries the outcome. It is a
+    derived file: a failure is said and costs the pair nothing."""
+    module = sibling_module("export")
+    if module is None:
+        return
+    try:
+        module.write_pair(Path(plan["run_dir"]), plan.get("cooperbench_dir"))
+    except Exception as problem:  # a derived file must not cost the pair its score
+        say(f"{plan['run_id']}: exporting the trajectory failed: {type(problem).__name__}: {problem}")
 
 
 def abandon(plan, hub):

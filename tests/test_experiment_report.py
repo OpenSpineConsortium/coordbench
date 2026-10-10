@@ -307,7 +307,9 @@ def write_experiment(logs):
         "symptoms": {"level": "coordination", "primary": "Work overlap", "secondary": ["Repetition"],
                      "family": "Structural", "evidence": []}})
     write_json(logs / "coop-m1" / "coop" / KEYS[3] / "judge.json", {
-        "backend": "fake", "model": "judge-1", "prompt_variant": "appF-7",
+        "backend": "fake", "model": "judge-1", "prompt_variant": "symptoms-r1",
+        "calls": {"symptoms": {"backend": "fake", "model": "judge-1", "prompt_variant": "symptoms-r1"},
+                  "commerrors": {"backend": "fake", "model": "judge-0", "prompt_variant": "appF-8"}},
         "symptoms": {"level": "implementation", "primary": None, "secondary": [], "evidence": []}})
 
 
@@ -395,6 +397,9 @@ class ExperimentTest(unittest.TestCase):
     def test_the_judges_labels(self):
         failures = self.sections["Failure modes"]
         self.assertIn("fake / judge-1 / appF-7", failures)
+        # judge.py's calls name each section's judge, which the top level does not.
+        self.assertIn("commerrors: fake / judge-0 / appF-8;", failures)
+        self.assertIn("symptoms: fake / judge-1 / symptoms-r1.", failures)
         self.assertIn("| coop | m1 | 2 | 1 (50.0%) | 0 (0.0%) | 0 (0.0%) | 1 (50.0%, 9.5-90.5%) | 1/2 (50.0%) |",
                       failures)
         self.assertIn("| coop | m1 | 2 | 1 | 1 | 50.0% |", failures)

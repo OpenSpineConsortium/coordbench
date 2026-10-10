@@ -201,10 +201,10 @@ def run(plan, evaluation, settings=None):
     reason = skip_reason(plan, evaluation, settings)
     if reason:
         return {"cascade_version": CASCADE_VERSION, "ran": False, "reason": reason}
-    block, artifacts = new_block(plan, evaluation), {}
+    block, artifacts = new_block(plan, evaluation, settings), {}
     with trace.span("cascade", repo=plan["repo"], task_id=plan["task_id"]):
         try:
-            inputs = pair_inputs(plan)
+            inputs = pair_inputs(plan, settings)
             with opened_sandbox(plan) as sandbox:
                 fill(block, artifacts, sandbox, inputs, evaluation, resolver_config(settings))
         except Exception as problem:
@@ -227,13 +227,16 @@ def skip_reason(plan, evaluation, settings):
     return None
 
 
-def new_block(plan, evaluation):
+def new_block(plan, evaluation, settings=None):
     """The block's keys in reading order, the verdicts first; the steps
-    fill the rest, and a step that never ran leaves its keys null."""
+    fill the rest, and a step that never ran leaves its keys null. The
+    basis names the dataset's commit, which differs from the code's when
+    run.py was given another dataset (a 59bbf65 worktree)."""
     commit = cooperbench_commit(plan["cooperbench_dir"])
+    data = cooperbench_commit(dataset_dir(plan, settings or {}))
     return {
         "cascade_version": CASCADE_VERSION, "ran": True,
-        "basis": f"the paper's cascade on the CooperBench {commit[:7] if commit else '(unknown commit)'} dataset",
+        "basis": f"the paper's cascade on the CooperBench {data[:7] if data else '(unknown commit)'} dataset",
         "cooperbench_commit": commit,
         "verdict_63b9d44": bool(evaluation.get("both_passed")),
         "verdict_paper_era": None, "verdict_paper_era_regex": None,
@@ -247,15 +250,22 @@ def new_block(plan, evaluation):
     }
 
 
-def pair_inputs(plan):
+def pair_inputs(plan, settings=None):
     """The two agents' patches as run.py hands them to test_merged (agent1
-    is the lower feature), and the two features' hidden tests."""
+    is the lower feature), and the two features' hidden tests, from the
+    dataset test_merged was handed (run.py's --dataset-dir, else the
+    checkout's own), so both verdicts judge the same tests."""
     run_dir, features = Path(plan["run_dir"]), list(plan["features"])
-    task_dir = Path(plan["cooperbench_dir"]) / "dataset" / plan["repo"] / f"task{plan['task_id']}"
+    task_dir = dataset_dir(plan, settings or {}) / plan["repo"] / f"task{plan['task_id']}"
     return {"features": features,
             "patches": [read_text(run_dir / f"agent{feature}.patch") for feature in features],
             "tests": [(task_dir / f"feature{feature}" / "tests.patch").read_text(encoding="utf-8")
                       for feature in features]}
+
+
+def dataset_dir(plan, settings):
+    given = settings.get("dataset_dir") or plan.get("dataset_dir")
+    return Path(given) if given else Path(plan["cooperbench_dir"]) / "dataset"
 
 
 def read_text(path):

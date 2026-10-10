@@ -1371,13 +1371,24 @@ class ArtifactsTest(unittest.TestCase):
         logged.assert_called_once_with(str(remote), None)
 
     def test_the_remotes_directory_on_this_host_is_read_before_its_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = hub_module.Hub()
+            options = {"git_remote_host": "git://127.0.0.1:9418/g/repo.git", "git_remote_dir": tmp, "base_ref": "abc"}
+            hub.create_run(Arm(), [1], {"1": "spec"}, options, "g3")
+            with mock.patch.object(kit, "git_log", return_value="") as logged:
+                hub.close_answer("g3")
+        logged.assert_called_once_with(tmp, "abc")
+
+    def test_a_directory_this_host_lacks_falls_back_to_the_url(self):
+        """A hub on another host than the runner's cannot read the
+        directory the runner named, so it fetches as before."""
         hub = hub_module.Hub()
-        options = {"git_remote_host": "git://127.0.0.1:9418/g/repo.git", "git_remote_dir": "/srv/git/g/repo.git",
+        options = {"git_remote_host": "git://127.0.0.1:9418/g/repo.git", "git_remote_dir": "/nonexistent/g/repo.git",
                    "base_ref": "abc"}
-        hub.create_run(Arm(), [1], {"1": "spec"}, options, "g3")
+        hub.create_run(Arm(), [1], {"1": "spec"}, options, "g4")
         with mock.patch.object(kit, "git_log", return_value="") as logged:
-            hub.close_answer("g3")
-        logged.assert_called_once_with("/srv/git/g/repo.git", "abc")
+            hub.close_answer("g4")
+        logged.assert_called_once_with("git://127.0.0.1:9418/g/repo.git", "abc")
 
     def test_a_git_log_that_fails_costs_only_its_file(self):
         hub = hub_module.Hub()

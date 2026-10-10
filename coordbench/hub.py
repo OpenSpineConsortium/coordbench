@@ -501,12 +501,12 @@ def collect_artifacts(run):
     hub's, so every arm with a git remote gets it), then whatever the arm
     adds (Arm.artifacts). The remote is read where the options say:
     git_remote_dir, the bare repository's directory on this host, when
-    the runner can name it, which gives git's reflog as well, and
-    otherwise git_remote_host, the URL the hub fetches from. Either
-    failing costs its own files and a complaint on stderr, never the
-    close."""
+    the runner can name it and it is a directory here, which gives git's
+    reflog as well, and otherwise git_remote_host, the URL the hub
+    fetches from. Either failing costs its own files and a complaint on
+    stderr, never the close."""
     artifacts = {}
-    remote = run.options.get("git_remote_dir") or run.options.get("git_remote_host")
+    remote = shared_remote(run.options)
     if remote:
         try:
             artifacts["git_log.txt"] = kit.git_log(remote, run.options.get("base_ref"))
@@ -517,6 +517,16 @@ def collect_artifacts(run):
     except Exception:
         complain(f"the {arm_name(run.arm)} arm's artifacts of run {run.id} failed")
     return artifacts
+
+
+def shared_remote(options):
+    """Where the hub reads the run's shared remote from: the directory the
+    runner named when this host has it (a hub on another host does not),
+    else the URL."""
+    directory = options.get("git_remote_dir")
+    if directory and Path(directory).is_dir():
+        return directory
+    return options.get("git_remote_host") or None
 
 
 def parse_features(features):

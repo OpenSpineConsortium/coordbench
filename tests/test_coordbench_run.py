@@ -6,6 +6,7 @@ ephemeral port; CooperBench's scorer is a fake with the shape of its
 results. Nothing here starts a container or a Claude."""
 
 import contextlib
+import gzip
 import importlib.util
 import io
 import json
@@ -728,6 +729,27 @@ class Provisioning(RunnerCase):
                 self.prepare("coop-git")
         self.assertEqual(self.hub.run_count(), 0)
 
+    def test_the_bash_tool_surface_loads_no_arm_plugin_and_gives_team_cooperbench_s_one_server(self):
+        """tool_surface=bash is the surface CooperBench's claude_code agents
+        had: no arm plugin, so no skill, and for team the cooperbench-team
+        server alone (Arm.claude_surface); the default keeps the plugin."""
+        _, _, driver = self.prepare("coop", options={"tool_surface": "bash"})
+        flags = drivers.claude_flags(driver.jobs[0])
+        self.assertFalse(driver.jobs[0].arm_plugin)
+        self.assertNotIn("--plugin-dir", flags)
+        self.assertNotIn("--mcp-config", flags)
+        plan, _, driver = self.prepare("team", options={"tool_surface": "bash"})
+        self.assertEqual(plan["tool_surface"], "bash")
+        for job in driver.jobs:
+            self.assertEqual(list(job.mcp_servers), ["cooperbench-team"])
+            self.assertIn("--mcp-config", drivers.claude_flags(job))
+            self.assertNotIn("--plugin-dir", drivers.claude_flags(job))
+        _, _, driver = self.prepare("coop")
+        self.assertTrue(driver.jobs[0].arm_plugin)
+        self.assertIn("/opt/coordbench/arms/coop", drivers.claude_flags(driver.jobs[0]))
+        with self.assertRaisesRegex(ValueError, "tool_surface must be one of"):
+            self.prepare("coop", options={"tool_surface": "carrier pigeon"})
+
     def test_an_option_naming_a_need_gets_it_provisioned_as_cooperbench_s_git_gives_team_a_remote(self):
         plan, _, driver = self.prepare("team", options={"git_remote": True, "note": "kept"})
         self.assertEqual(plan["needs"], ["shared_volume", "git_remote"])
@@ -1105,6 +1127,8 @@ class TheSessionDriver(RunnerCase):
         self.assertFalse(Path(job.log_path).exists(), "no file named like a stream that is not one")
         logged = json.loads((self.tmp / "run" / "agent1_session_outcome.json").read_text())
         self.assertEqual((logged["type"], logged["status"], logged["patch_lines"]), ("coordbench_session", "Submitted", 6))
+        # The marker's time, which export.py takes for the agent's end.
+        self.assertEqual(logged["ended_at"], 1_700_000_000)
         self.assertEqual(logged["transcript"], {"source": None, "matches": 0,
                                                 "note": "no subagent transcript carried the run token"})
         # Without a transcript nothing is measured, so result.json writes null.
@@ -1186,6 +1210,12 @@ class Runs(RunnerCase):
                      "conversation_store.json", "events.jsonl", "metrics.json"):
             self.assertTrue((pair / name).is_file(), name)
         self.assertFalse((pair / "agent2_sent.jsonl").exists(), "a sender's log is written only when it sent")
+        # export.py's trajectory for the viewers, made once the pair was scored.
+        self.assertNotIn("exporting the trajectory failed", err)
+        with gzip.open(pair / "trajectory.json.gz", "rt", encoding="utf-8") as exported:
+            trajectory = json.load(exported)
+        self.assertEqual(trajectory["metadata"]["coordbench"]["outcome"]["both_passed"], True)
+        self.assertEqual(trajectory["metadata"]["coordbench"]["anchor"], "run_started")
         self.assertEqual((pair / "agent1.patch").read_text(), PATCHES["agent1"])
         self.assertEqual((pair / "agent6.patch").read_text(), PATCHES["agent2"])
         result = json.loads((pair / "result.json").read_text())
@@ -2426,6 +2456,33 @@ class TheGitSetUp(unittest.TestCase):
     def unkept(self, agent, repository):
         promises = runner.git_promises(agent, {"git_remote": self.remote, "base_ref": self.base})
         return runner.unkept_promises(promises, self.shell(runner.git_read_script(promises, repository)).stdout)
+
+    def test_the_runs_repository_keeps_a_reflog_so_the_git_log_shows_a_force_push(self):
+        """The git server's per-run init, run by real git, keeps a reflog,
+        and the hub's git_log of that directory (kit.git_log, read in place
+        through git_remote_dir) still names the commit a force-push threw
+        away, which a fetch over git:// could not carry."""
+        import kit
+        remote = str(self.tmp / "server" / "run" / "repo.git")
+        self.assertEqual(self.shell(runner.init_repository_script(remote)).returncode, 0)
+        self.git("-C", str(self.task), "push", "-q", remote, "HEAD:refs/heads/agent1")
+        (self.task / "README.md").write_text("work an agent pushed\n")
+        self.git("-C", str(self.task), "-c", "user.name=agent1", "-c", "user.email=a@example.invalid",
+                 "commit", "-q", "-am", "the pushed work")
+        lost = self.git("-C", str(self.task), "rev-parse", "HEAD").strip()
+        self.git("-C", str(self.task), "push", "-q", remote, "HEAD:refs/heads/agent1")
+        self.git("-C", str(self.task), "push", "-q", "--force", remote, f"{self.base}:refs/heads/agent1")
+        self.assertIn(f"commit {lost}", kit.git_log(remote, self.base))
+
+    def test_the_repository_is_named_to_the_hub_only_where_this_host_owns_it(self):
+        volume = self.tmp / "volume"
+        (volume / "run-1" / "repo.git").mkdir(parents=True)
+        inspected = subprocess.CompletedProcess([], 0, stdout=f"{volume}\n", stderr="")
+        with mock.patch.object(drivers, "docker", return_value=inspected):
+            self.assertEqual(runner.repository_on_host("run-1"), str(volume / "run-1" / "repo.git"))
+            self.assertIsNone(runner.repository_on_host("run-2"))
+        with mock.patch.object(drivers, "docker", return_value=subprocess.CompletedProcess([], 1, "", "no volume")):
+            self.assertIsNone(runner.repository_on_host("run-1"))
 
     def test_the_setup_command_keeps_every_promise_of_the_git_block(self):
         for agent in ("agent1", "agent2"):

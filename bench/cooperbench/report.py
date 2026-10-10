@@ -1459,13 +1459,25 @@ def error_rows(groups):
 
 
 def judge_provenance(groups):
+    """Who judged, as backend / model / prompt variant: per section from
+    judge.json's calls, where judge.py records every call it made, since
+    its top-level fields name only the latest; the top level for a
+    judge.json without calls."""
     seen = set()
     for pair in (p for g in groups for p in g.pairs):
         judge = pair_judge(pair)
-        if judge:
-            seen.add(f"{judge.get('backend') or '-'} / {judge.get('model') or '-'} / "
-                     f"{judge.get('prompt_variant') or '-'}")
+        if not judge:
+            continue
+        calls = judge.get("calls")
+        if isinstance(calls, dict) and any(isinstance(c, dict) for c in calls.values()):
+            seen.update(f"{name}: {judged_by(call)}" for name, call in calls.items() if isinstance(call, dict))
+        else:
+            seen.add(judged_by(judge))
     return sorted(seen)
+
+
+def judged_by(record):
+    return f"{record.get('backend') or '-'} / {record.get('model') or '-'} / {record.get('prompt_variant') or '-'}"
 
 
 @dataclass
