@@ -1,0 +1,71 @@
+{
+  "repo": "pallets_click_task",
+  "task_id": 2068,
+  "features": [
+    1,
+    6
+  ],
+  "setting": "coop",
+  "apply_status": {
+    "agent1": "applied",
+    "agent2": "applied"
+  },
+  "merge": {
+    "status": "conflicts",
+    "strategy": "solo-agent1",
+    "diff": ""
+  },
+  "feature1": {
+    "feature_id": 1,
+    "passed": true,
+    "tests_passed": 3,
+    "tests_failed": 0
+  },
+  "feature2": {
+    "feature_id": 6,
+    "passed": false,
+    "tests_passed": 0,
+    "tests_failed": 2
+  },
+  "both_passed": false,
+  "error": null,
+  "cascade": {
+    "verdict_63b9d44": false,
+    "verdict_paper_era": true,
+    "route": "union",
+    "has_naive_merge_conflict": true,
+    "naive": {
+      "conflict": true,
+      "conflict_sections": 1,
+      "conflict_lines": 6,
+      "avg_lines_per_conflict": 6.0,
+      "f1": null,
+      "f2": null,
+      "f1_regex": null,
+      "f2_regex": null
+    },
+    "union": {
+      "ran": true,
+      "clean": true,
+      "f1": true,
+      "f2": true,
+      "f1_regex": true,
+      "f2_regex": true
+    },
+    "llm": {
+      "ran": false,
+      "needed": false,
+      "reason": "not needed: the union merge passed both suites"
+    },
+    "agent_alone": {
+      "agent1": {
+        "f1": true,
+        "f2": false
+      },
+      "agent2": {
+        "f1": false,
+        "f2": true
+      }
+    }
+  }
+}

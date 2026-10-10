@@ -1,0 +1,53 @@
+{
+  "backend": "fake",
+  "model": "fake-judge",
+  "prompt_variant": "appF-7",
+  "created_at": "2026-10-10T00:00:00Z",
+  "commerrors": {
+    "issue": {
+      "code": "C1a",
+      "group": "Unresponsiveness",
+      "description": "agent2's question about core.py lines is never answered"
+    },
+    "evidence": [
+      "Which lines of core.py do you need?",
+      "done with core"
+    ],
+    "verified": [
+      true,
+      true
+    ]
+  },
+  "symptoms": {
+    "level": "coordination",
+    "primary": "Unresponsiveness",
+    "secondary": [
+      "Work overlap"
+    ],
+    "family": "Communication",
+    "evidence": [
+      "I take src/util.py for feature 6. Which lines of core.py do you need?"
+    ]
+  },
+  "speech_acts": {
+    "1": "Plan"
+  },
+  "emergent": {
+    "role_division": {
+      "present": true,
+      "evidence": [
+        "I take src/core.py lines 10-40 for feature 1."
+      ]
+    },
+    "resource_division": {
+      "present": true,
+      "evidence": [
+        "I take src/util.py"
+      ]
+    },
+    "negotiation": {
+      "present": false,
+      "evidence": []
+    }
+  }
+}

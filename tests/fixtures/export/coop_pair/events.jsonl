@@ -1,0 +1,27 @@
+{"seq": 0, "t": 0.0, "kind": "run_started", "agent": null, "epoch": 1791580000.0, "iso": "2026-10-09T21:06:40+00:00", "arm": "coop", "agents": [{"id": "agent1", "role": "agent", "features": [1]}, {"id": "agent2", "role": "agent", "features": [6]}], "tool_surface": "mcp"}
+{"seq": 1, "t": 4.0, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "mcp"}
+{"seq": 2, "t": 4.05, "kind": "message", "agent": "agent1", "to": "agent2", "chars": 45, "content": "I take src/core.py lines 10-40 for feature 1.", "timestamp": 1791580004.05, "timestamp_iso": "2026-10-09T21:06:44.050000", "message_id": 2, "send_id": 1}
+{"seq": 3, "t": 4.06, "kind": "tool_done", "agent": "agent1", "tool": "send_message", "duration_ms": 60, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 4, "t": 5.0, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "mcp"}
+{"seq": 5, "t": 5.05, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 69, "content": "I take src/util.py for feature 6. Which lines of core.py do you need?", "timestamp": 1791580005.05, "timestamp_iso": "2026-10-09T21:06:45.050000", "message_id": 5, "send_id": 4}
+{"seq": 6, "t": 5.06, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 60, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 7, "t": 7.0, "kind": "tool", "agent": "agent2", "tool": "broadcast", "via": "mcp"}
+{"seq": 8, "t": 7.05, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 31, "content": "Status update: util.py is done.", "timestamp": 1791580007.05, "timestamp_iso": "2026-10-09T21:06:47.050000", "message_id": 8, "send_id": 7}
+{"seq": 9, "t": 7.06, "kind": "tool_done", "agent": "agent2", "tool": "broadcast", "duration_ms": 60, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 10, "t": 14.1, "kind": "tool", "agent": "agent1", "tool": "receive_messages", "via": "mcp"}
+{"seq": 11, "t": 14.12, "kind": "receive", "agent": "agent1", "count": 2, "message_ids": [5, 8], "call_id": 10}
+{"seq": 12, "t": 14.14, "kind": "tool_done", "agent": "agent1", "tool": "receive_messages", "duration_ms": 40, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 13, "t": 15.05, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "mcp"}
+{"seq": 14, "t": 15.07, "kind": "receive", "agent": "agent2", "count": 1, "message_ids": [2], "call_id": 13}
+{"seq": 15, "t": 15.09, "kind": "tool_done", "agent": "agent2", "tool": "receive_messages", "duration_ms": 40, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 16, "t": 16.1, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "shell"}
+{"seq": 17, "t": 16.15, "kind": "message", "agent": "agent1", "to": "agent2", "chars": 14, "content": "done with core", "timestamp": 1791580016.15, "timestamp_iso": "2026-10-09T21:06:56.150000", "message_id": 17, "send_id": 16}
+{"seq": 18, "t": 16.17, "kind": "tool_done", "agent": "agent1", "tool": "send_message", "duration_ms": 70, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 19, "t": 19.05, "kind": "tool", "agent": "agent1", "tool": "wait_for_message", "via": "mcp"}
+{"seq": 20, "t": 20.06, "kind": "tool_done", "agent": "agent1", "tool": "wait_for_message", "duration_ms": 1010, "blocked_ms": 1000.0, "is_error": false, "cancelled": false}
+{"seq": 21, "t": 20.45, "kind": "tool", "agent": "agent1", "tool": "peek_messages", "via": "shell"}
+{"seq": 22, "t": 20.47, "kind": "tool_done", "agent": "agent1", "tool": "peek_messages", "duration_ms": 20, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 23, "t": 20.55, "kind": "tool", "agent": "agent1", "tool": "list_agents", "via": "shell"}
+{"seq": 24, "t": 20.57, "kind": "tool_done", "agent": "agent1", "tool": "list_agents", "duration_ms": 20, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 25, "t": 30.0, "kind": "tool", "agent": "agent1", "tool": "list_agents", "via": "shell"}
+{"seq": 26, "t": 30.02, "kind": "tool_done", "agent": "agent1", "tool": "list_agents", "duration_ms": 20, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
