@@ -186,7 +186,7 @@ CAUSE_VARIANTS = {"causes-v1": {"file": "causes-v1.txt"}}
 GIT_BLOG_NAMES = {"impatience": "The Real-Time Interaction Problem", "destructive": "Uncooperative Behaviors",
                   "broken": "The Commitment Problem", "git_disasters": "Misuse of Cooperation Tools",
                   "blame": "Hallucination in Communication", "sagas": "Hallucination in Communication"}
-GIT_ARMS = ("coop-git", "sdlc")
+GIT_ARMS = ("coop-git", "sdlc", "sdlc-watch")
 
 # Input sizes. The spec's: a conversation above 100,000 characters keeps
 # its first and last 50,000; the last 4,000 characters of a test output.
