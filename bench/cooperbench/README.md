@@ -91,17 +91,30 @@ Keep ANTHROPIC_API_KEY unset: the adapter prefers it, and it bills the API.
    image (`docker rmi akhatua/cooperbench-...`) to free the disk. A
    session's background command stops after two hours, so the session
    drives one task per command.
-3. `python3 bench/cooperbench/report.py` sets the four arms side by side: each
-   arm's pass rate with a 95% interval next to the authors' number, every
-   two arms compared on the pairs both scored (exact McNemar), and one row
-   per pair. A pair an agent left in Error is counted apart, not as a
-   failure, in CooperBench's own runs and coordbench's alike (CooperBench's
-   eval scores the errored agent's empty patch as a failure; the report
-   sets it apart in both). A pair whose token counts are null, from a
-   coordbench driver that could not measure usage, is left out of "Tokens
-   per pair", which reads '-' when no pair of the arm was measured. The
-   raw results are under `~/cooperbench/logs/<run name>/`,
-   and `cooperbench eval -n <run name> --backend docker -c 1` scores a run
+3. `python3 bench/cooperbench/report.py` sets the four arms side by side,
+   per arm and model with a pooled row, each figure beside the paper's or
+   CooperBench's own. The first rate is the paper's: eval.json both_passed
+   over every attempted pair, as CooperBench scores an errored agent's
+   patch; beside it are CooperBench's three rates (summary.json, the
+   console and ablation page, the website) and coordbench's rate on the
+   pairs the agents finished, where a pair an agent left in Error is set
+   apart rather than failed. Every rate has a Wilson interval and a
+   bootstrap over task sets. Then the paired comparisons (exact McNemar),
+   the coordination gap against Solo, the git ablation, the pass route (N
+   and L as in CooperBench's BENCHMARK_RESULTS.md), the naive-merge
+   conflict rate, the merge cascade's Naive, +Union and +LLM success when
+   eval.json has it, turns, the overhead of messaging, concrete line and
+   file references, the speech acts and failure modes once judge.json
+   holds them, the difficulty curves of App C, the dataset split (the
+   pairs unamended since the paper's dataset, the spec audit's classes,
+   the gold-conflict share) and one row per pair. A measure whose input a
+   run did not record says "not recorded". A pair whose token counts are
+   null, from a coordbench driver that could not measure usage, is left
+   out of "Tokens per pair", which reads '-' when no pair of the arm was
+   measured. `--published <website>/static/data/coop/index.json` also
+   compares each arm with CooperBench's published runs on the same
+   pairs. The raw results are under `~/cooperbench/logs/<run name>/`, and
+   `cooperbench eval -n <run name> --backend docker -c 1` scores a run
    again.
 
 Start with a pilot on pallets_click/2068: six pairs, so 6 solo sessions
@@ -153,6 +166,13 @@ which is why the steps take one task at a time.
 - run_arms.sh: runs the four arms on one task.
 - report.py: the arms side by side, from CooperBench's logs; tested in
   tests/test_experiment_report.py.
+- difficulty.py: App C's relative difficulty, the ten-bucket curves, AUC
+  and retention, which report.py prints and which also writes
+  difficulty.json on its own; tested in tests/test_experiment_difficulty.py.
+- dataset_stats.py: the dataset beside the paper's Tables 3 and 4, the
+  gold-conflict share, what changed since the paper's dataset, the spec
+  audit and the gradeability checks; tested in
+  tests/test_experiment_dataset_stats.py.
 - overlay_task_image.sh, build_task_image.sh: the image steps on their own.
 - cooperbench-claude-code-setup.patch: the adapter's installer skips the
   install when claude is already in the image.
