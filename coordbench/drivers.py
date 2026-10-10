@@ -46,6 +46,13 @@ driver without the attribute is taken not to measure them, and
 result.json then holds null in their place rather than zeros).
 
 Every docker command goes through docker() below, so tests swap in a fake.
+In debug (trace.py; run.py's --debug) each one leaves a "docker" event
+naming its subcommand, the argument it acted on, its exit code, its
+duration and the bytes of output it produced, never its command line; a
+file written here or by the runner (write_text) leaves a "wrote" event
+with its name and size; and the session driver's every look for its
+marker leaves a "marker_poll". In prod each of those is one comparison,
+and for a docker command the clock read before it.
 """
 
 import importlib.util
@@ -59,6 +66,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import trace
 from arm import builtin_arms_dir
 
 CONTAINER_REPO = "/workspace/repo"
@@ -121,9 +129,22 @@ def docker(*args, input=None, timeout=None, output=None, extra_env=None):
     captured, which is how a long agent run is teed to its log. With
     `extra_env`, names to values, the docker client's environment holds
     those for this one call and no other, which is how a value that
-    `-e NAME` names by itself reaches a container and no command line."""
+    `-e NAME` names by itself reaches a container and no command line.
+    In debug the command leaves a "docker" event (docker_record), however
+    it ended, a timeout included; in prod that costs a clock read before
+    the command and one comparison after it."""
     command = ["docker", *(str(arg) for arg in args)]
     environment = {**docker_environment(), **(extra_env or {})}
+    started, done = time.monotonic(), None
+    try:
+        done = run_docker(command, input, timeout, output, environment)
+        return done
+    finally:
+        if trace.level == "debug":
+            trace.event("docker", **docker_record(command, done, output, started))
+
+
+def run_docker(command, input, timeout, output, environment):
     if output is not None:
         with open(output, "w", encoding="utf-8") as stream:
             return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream,
@@ -133,6 +154,59 @@ def docker(*args, input=None, timeout=None, output=None, extra_env=None):
     if input is None:
         return subprocess.run(command, stdin=subprocess.DEVNULL, **text)
     return subprocess.run(command, input=input, **text)
+
+
+# The options the runner passes docker that take a value, so that the
+# argument a "docker" event names is the thing acted on (a container, an
+# image, a path) and not -w's directory or -e's variable name.
+VALUED_OPTIONS = {"-w", "-e", "-v", "-p", "-f", "--name", "--label", "--network", "--add-host", "--entrypoint",
+                  "--restart"}
+
+
+def docker_argument(words):
+    """The first word that is neither an option nor an option's value."""
+    skip = False
+    for word in words:
+        if skip:
+            skip = False
+        elif word in VALUED_OPTIONS:
+            skip = True
+        elif not word.startswith("-"):
+            return word
+    return None
+
+
+def docker_record(command, done, output, started):
+    """The debug record of one docker command: its subcommand and the
+    argument it acted on, never the whole line, which names a secret's
+    variable even when it carries no value; its exit code (None when it
+    did not end, as on a timeout); its duration; and the bytes of output
+    it produced, the captured text's as UTF-8 or the teed file's size."""
+    return {"subcommand": command[1] if len(command) > 1 else None, "argument": docker_argument(command[2:]),
+            "exit_code": None if done is None else done.returncode,
+            "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            "output_bytes": output_size(done, output)}
+
+
+def output_size(done, output):
+    if output is None:
+        return 0 if done is None else sum(len((text or "").encode("utf-8")) for text in (done.stdout, done.stderr))
+    try:
+        return os.path.getsize(output)
+    except OSError:
+        return 0
+
+
+def write_text(path, text, append=False):
+    """Write a text file, as everything the runner and the drivers leave
+    under a run directory is written, so that in debug each one is a
+    "wrote" event with the file's name and its bytes, never its text; a
+    file holding a credential is made private by its caller first."""
+    path = Path(path)
+    with open(path, "a" if append else "w", encoding="utf-8") as stream:
+        stream.write(text)
+    if trace.level == "debug":
+        trace.event("wrote", file=path.name, bytes=len(text.encode("utf-8")))
 
 
 def docker_environment():
@@ -422,8 +496,7 @@ def save_session_transcript(job):
                    f"find {CONTAINER_CLAUDE_CONFIG_DIR}/projects -name '*.jsonl' -type f 2>/dev/null "
                    "| xargs -r cat")
     if found.returncode == 0 and found.stdout:
-        Path(job.log_path).with_name(f"{safe_name(job.agent)}_session.jsonl").write_text(
-            found.stdout, encoding="utf-8")
+        write_text(Path(job.log_path).with_name(f"{safe_name(job.agent)}_session.jsonl"), found.stdout)
 
 
 class ClaudeCliDriver:
@@ -518,18 +591,23 @@ class SessionDriver:
         if not job.workspace:
             raise ValueError(f"the session driver needs a host workspace for {job.agent}")
         prompt_file = session_prompt_path(job)
-        prompt_file.write_text(session_preface(job) + SECTION_RULE + job.prompt, encoding="utf-8")
+        write_text(prompt_file, session_preface(job) + SECTION_RULE + job.prompt)
         (Path(job.workspace) / DONE_MARKER).unlink(missing_ok=True)
         return {"agent": job.agent, "workspace": str(job.workspace), "log_path": str(job.log_path),
                 "prompt_file": str(prompt_file), "timeout_s": job.timeout_s,
                 "deadline": time.time() + job.timeout_s}
 
     def wait(self, handle):
+        """Look for the marker every poll_seconds until it is there or the
+        deadline passes; the last look comes after the last sleep, so a
+        marker that appeared as the deadline passed is still found."""
         marker = Path(handle["workspace"]) / DONE_MARKER
-        while not marker.exists() and time.time() < handle["deadline"]:
+        found = poll_marker(handle["agent"], marker)
+        while not found and time.time() < handle["deadline"]:
             time.sleep(max(0.0, min(self.poll_seconds, handle["deadline"] - time.time())))
+            found = poll_marker(handle["agent"], marker)
         outcome = AgentOutcome(status="Submitted")
-        if not marker.exists():
+        if not found:
             minutes = handle.get("timeout_s", 0) / 60
             outcome = AgentOutcome(status="Error", error=f"no {DONE_MARKER} within {minutes:.0f} minutes")
         else:
@@ -541,12 +619,20 @@ class SessionDriver:
         return outcome
 
 
+def poll_marker(agent, marker):
+    """One look for the agent's marker; in debug each look is a
+    "marker_poll" event, so a trace shows how long finish waited and how
+    often it asked."""
+    found = marker.exists()
+    trace.debug("marker_poll", agent=agent, found=found)
+    return found
+
+
 def record_session_outcome(handle, outcome):
     """A subagent leaves no stream on the host; its log says how it ended."""
     entry = {"type": "coordbench_session", "agent": handle["agent"], "status": outcome.status,
              "error": outcome.error, "patch_lines": len(outcome.patch.splitlines()), "at": time.time()}
-    with open(handle["log_path"], "a", encoding="utf-8") as log:
-        log.write(json.dumps(entry) + "\n")
+    write_text(handle["log_path"], json.dumps(entry) + "\n", append=True)
 
 
 DRIVERS = {"claude-cli": ClaudeCliDriver, "session": SessionDriver}

@@ -54,20 +54,37 @@ exits 2 for a task another agent holds); a hub that cannot be reached or
 answers with an HTTP error, or a command used wrongly, one line on stderr
 and exit 2.
 
-The file imports nothing from coordbench, so it can be copied alone into
-an agent's container and run by whatever Python 3 is there.
+In debug (trace.py's level, COORD_TRACE=debug in the command's
+environment) every request to the hub is an "rpc_call" span: method, path,
+tool and request_bytes as it starts, and status, response_bytes,
+duration_ms and ok on its rpc_call_done; every alias-run is also one
+"command" event with the command the agent typed, the tool, its exit code
+and duration_ms. They go as JSON lines to stderr, the agent's own stream,
+so a debug run's shell commands show their timings beside their output,
+or to the file COORD_TRACE_FILE names when it is set; a message's text,
+a tool's arguments and the agent's token are never among them. In prod,
+the default, nothing is registered and nothing is written, so what a
+command prints is exactly what is said above.
+
+The file imports nothing from coordbench but trace.py, which it takes
+from beside itself when the directory was copied whole and does without
+otherwise (a stand-in that records nothing), so it can be copied alone
+into an agent's container and run by whatever Python 3 is there.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
 import shlex
 import sys
+import time
 import urllib.error
 import urllib.request
 from http.client import HTTPException
 from pathlib import Path
+from urllib.parse import urlsplit
 
 OK, TOOL_ERROR, FAILURE = 0, 1, 2
 
@@ -89,6 +106,83 @@ TOKEN_VARIABLE = "COORD_AGENT_TOKEN"
 
 TYPES_PARSED_AS_JSON = {"integer", "number", "boolean", "array", "object", "null"}
 NUMBER_TYPES = {"integer", "number"}
+
+# Where a debug run's events go instead of stderr, when set.
+TRACE_FILE_VARIABLE = "COORD_TRACE_FILE"
+
+
+class NoSpan:
+    """What the stand-in's debug_span gives: a block that is not timed and
+    a decorator that leaves its function alone. fields is where the caller
+    puts what it learns on the way, read by nobody here."""
+
+    def __init__(self, fields):
+        self.fields = fields
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exception):
+        return False
+
+    def __call__(self, function):
+        return function
+
+
+class NoTrace:
+    """What stands in for trace.py when the file is not beside this one:
+    the level off and the three calls this file makes, each doing nothing,
+    so a copy of cli.py alone works as before and debug is never a
+    dependency of the agent's commands."""
+
+    level = "off"
+
+    @staticmethod
+    def event(kind, **fields):
+        return None
+
+    @staticmethod
+    def debug(kind, **fields):
+        return None
+
+    @staticmethod
+    def debug_span(name, **fields):
+        return NoSpan(fields)
+
+
+def same_file(module, path):
+    try:
+        return Path(module.__file__).resolve() == path
+    except (AttributeError, TypeError, OSError):
+        return False
+
+
+def load_trace():
+    """coordbench's trace.py, beside this file when the directory was
+    copied whole (drivers put it at /opt/coordbench), loaded by its
+    location: the standard library has a module named trace too, and
+    `import trace` would take that one whenever this directory is not
+    first on sys.path. A process that imported coordbench's already
+    (run.py calls cli.main in-process) shares it, so a --debug run sees
+    these events on its own stream; a fresh process registers the module
+    under its name when no module holds it yet, so the rest of coordbench
+    imported later finds the same one, and leaves another's alone. With
+    no trace.py beside this file, the stand-in."""
+    path = Path(__file__).resolve().with_name("trace.py")
+    known = sys.modules.get("trace")
+    if same_file(known, path):
+        return known
+    if not path.is_file():
+        return NoTrace
+    spec = importlib.util.spec_from_file_location("trace", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if known is None:
+        sys.modules["trace"] = module
+    return module
+
+
+coordtrace = load_trace()
 
 
 class Failure(Exception):
@@ -135,19 +229,40 @@ def request_headers(token):
 
 def exchange(url, body=None, token=None):
     """GET the url, or POST body to it as JSON, with the agent's bearer
-    token when there is one; the answer as JSON."""
+    token when there is one; the answer as JSON. In debug the request is
+    one "rpc_call" span: what is asked and how big, then, once the hub
+    has answered, its status and the answer's size, which fetch puts on
+    the span's fields so that the closing event, rpc_call_done, carries
+    them with the duration. The tool's name goes in, never its arguments;
+    in prod the span is one comparison on enter and a flag on exit."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="GET" if data is None else "POST",
                                      headers=request_headers(token))
-    try:
-        with OPENER.open(request, timeout=TIMEOUT_SECONDS) as response:
-            raw = response.read()
-    except (OSError, HTTPException) as problem:
-        raise Failure(explain(url, problem))
+    tool = body.get("tool") if isinstance(body, dict) else None
+    with coordtrace.debug_span("rpc_call", method=request.get_method(), path=urlsplit(url).path,
+                               tool=tool, request_bytes=len(data or b"")) as span:
+        raw = fetch(request, url, span.fields)
     try:
         return json.loads(raw)
     except ValueError:
         raise Failure(f"the coordbench hub at {url} answered something that is not JSON")
+
+
+def fetch(request, url, fields):
+    """The hub's raw answer to one request, or Failure. fields, the
+    rpc_call span's, learn the status when the hub answered at all and
+    the answer's size when it was read; an unreachable hub leaves both
+    out, which is the honest shape of that event."""
+    try:
+        with OPENER.open(request, timeout=TIMEOUT_SECONDS) as response:
+            raw = response.read()
+            fields.update(status=response.status, response_bytes=len(raw))
+            return raw
+    except urllib.error.HTTPError as problem:
+        fields["status"] = problem.code
+        raise Failure(explain(url, problem))
+    except (OSError, HTTPException) as problem:
+        raise Failure(explain(url, problem))
 
 
 def describe_agent(url, token=None):
@@ -440,8 +555,23 @@ def call(args):
 
 
 def alias_run(args):
-    tool = find_tool(describe_agent(args.url, args.token), args.tool)
-    return report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words), args.token), tool)
+    """A tool by its shell command's words. In debug, one "command" event
+    closes the invocation: the command the agent typed (the tool's alias,
+    or coord-<tool>; the tool's name alone when the hub could not even be
+    asked for it), the tool, the exit code the shell sees and the whole
+    duration, so a debug run's commands show their timings beside the
+    hub's own calls. In prod that is one comparison."""
+    began = time.monotonic() if coordtrace.level == "debug" else None
+    command, code = args.tool, FAILURE
+    try:
+        tool = find_tool(describe_agent(args.url, args.token), args.tool)
+        command = command_name(tool)
+        code = report(run_tool(args.url, args.tool, words_to_arguments(tool, args.words), args.token), tool)
+        return code
+    finally:
+        if began is not None:
+            coordtrace.debug("command", command=command, tool=args.tool, exit_code=code,
+                             duration_ms=round((time.monotonic() - began) * 1000, 3))
 
 
 def wrapper_script(tool_name, python, url=None, token_file=None):
@@ -543,6 +673,28 @@ def agent_token(args):
         raise Failure(f"cannot read the token file {path}: {problem}")
 
 
+def configure_trace():
+    """Where this process's debug events go when the command is the
+    process (python3 cli.py ...; a caller that imports cli, as run.py
+    does, has listeners of its own and gets none here): one JsonLines on
+    the file COORD_TRACE_FILE names, appended, else on stderr, the agent's
+    own stream. In prod, and with the stand-in, nothing is registered and
+    every event stays one check. Returns the listener, for release_trace,
+    or None."""
+    if coordtrace.level != "debug":
+        return None
+    path = os.environ.get(TRACE_FILE_VARIABLE, "").strip()
+    return coordtrace.listen(coordtrace.JsonLines(path or sys.stderr))
+
+
+def release_trace(sink):
+    """Take configure_trace's listener off again and close its file; a
+    stream it was given stays open, since it is the process's own."""
+    if sink is not None:
+        coordtrace.unlisten(sink)
+        sink.close()
+
+
 def main(argv=None):
     try:
         args = parser().parse_args(argv)
@@ -561,4 +713,9 @@ if __name__ == "__main__":
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
-    sys.exit(main())
+    sink = configure_trace()
+    try:
+        code = main()
+    finally:
+        release_trace(sink)
+    sys.exit(code)

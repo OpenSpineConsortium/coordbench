@@ -139,27 +139,28 @@ through the stdio bridge for clients that only speak stdio:
 
 The bridge reads COORD_AGENT_TOKEN from its environment as well, when the
 run wants one. When the hub refuses a message it cannot read as a request
-(an id that is null or a boolean, say) with a 400 carrying a JSON-RPC
-error that names no id, the bridge writes that error, the hub's code and
-message, to the stdio client under each id of the message, as the hub
-would have answered on stdio; a 400 whose body is no JSON-RPC error
-reaches the client as an internal error (-32603) quoting the status and
-the body, like any other HTTP error. Any shell reaches the tools as
-commands: `python3 cli.py install /usr/local/bin` writes one wrapper per
-tool, under the tool's alias (coop-send) and as coord-<tool>, and the
-wrappers send the same token on every request; `install --token-file
-PATH` writes PATH absolute into the wrappers, so they read the token from
-any directory. A command's last positional word comes from stdin when it
-is missing and the tool's schema does not require it (coop-send's text
-and coop-request's body, as coop_msg.py and coop_task.py read theirs), so
-`coop-send agent2 < note.txt` works; a required one left missing
-(coop-task-create's title, coop-task-claim's task_id, coop-task-update's
-status) is sent as missing and the hub refuses it with exit 2 in
-argparse's words, so the stdin at /dev/null every command gets from the
-drivers never becomes a task titled "". A word for an argument the schema
-types as a number is refused with exit 2 and argparse's wording when it
-is true, false or null, as coop_task.py's --wait (type=float) refuses
-them.
+(an id that is null or a boolean, say) with a 400 carrying a JSON-RPC error
+that names no id, the bridge writes that error, the hub's code and message,
+to the stdio client under each id of the message, as the hub would have
+answered on stdio; a 400 whose body is no JSON-RPC error reaches the client
+as an internal error (-32603) quoting the status and the body, like any
+other HTTP error. Any shell reaches the tools as commands: `python3 cli.py
+install /usr/local/bin` writes one wrapper per tool, under the tool's alias
+(coop-send) and as coord-<tool>, and the wrappers send the same token on
+every request; `install --token-file PATH` writes PATH absolute into the
+wrappers, so they read the token from any directory. Both read COORD_TRACE
+and COORD_TRACE_FILE from their environment, as "Running" describes under
+the agent's side of a debug run; in prod they write nothing. A command's
+last positional word comes from stdin when it is missing and the tool's
+schema does not require it (coop-send's text and coop-request's body, as
+coop_msg.py and coop_task.py read theirs), so `coop-send agent2 < note.txt`
+works; a required one left missing (coop-task-create's title,
+coop-task-claim's task_id, coop-task-update's status) is sent as missing
+and the hub refuses it with exit 2 in argparse's words, so the stdin at
+/dev/null every command gets from the drivers never becomes a task titled
+"". A word for an argument the schema types as a number is refused with
+exit 2 and argparse's wording when it is true, false or null, as
+coop_task.py's --wait (type=float) refuses them.
 
 .mcp.json and skills/ are optional. An arm with no tools has no .mcp.json,
 since there is nothing for the MCP server to list, and an arm whose prompt
@@ -275,16 +276,18 @@ What the base class gives and what an arm may override:
   whose options do not provide what its arm needs.
 
 run.lock is a re-entrant condition that guards run.state; every change
-under it, and every emit, wakes the tools waiting on it, so a blocking
-tool is `run.wait_until(lambda: <condition on run.state>, timeout)`. kit.py
+under it, and every emit, wakes the tools waiting on it, so a blocking tool
+is `run.wait_until(lambda: <condition on run.state>, timeout)`. kit.py
 holds the blocks most arms share: CooperBench's messaging, the long-poll
 wait_for_message, the schema helper and message metrics, and
 marked_for_stderr, which marks a tool's input schema
 ("x-coordbench-prints": "stderr") so that its shell command prints the
-tool's text on stderr, as coop-send does. The events log under --log-dir
-is written best effort: a write the disk refuses is complained about once
-per run on the hub's stderr, and the event stays in memory, where the
-runner reads it.
+tool's text on stderr, as coop-send does. The events log under --log-dir is
+written best effort: the file is opened at the run's first event and held
+open until the runner releases the run, and a write the disk refuses, or a
+log directory that is not there when the first event comes, is complained
+about once per run on the hub's stderr while the event stays in memory,
+where the runner reads it; later writes are still tried.
 
 A tool that blocks has three more things to do, all on the Call it is
 given. Its wait predicate reads `call.cancelled`, a threading.Event the
@@ -315,6 +318,37 @@ for a wait, with count the number of messages put back at the head of
 the inbox in their order; the "receive" stays, so a reader subtracts the
 one from the other rather than count the messages twice when the next
 call takes them.
+
+Every event and timing, the hub's, the runner's and an arm's, goes through
+trace.py, one module that imports nothing else from coordbench, so it can
+be copied alone into a container or another repository, and one stream with
+one shape, so a reader adds logging in one line. `run.emit(kind, agent,
+**fields)` is the run's own event: kept in run.events and events.jsonl as
+before, and put on the stream under the run's id (the field names seq, t,
+kind, agent and run are the run's; a kind adds none of them).
+`trace.event("kind", run=run.id, agent=agent, ...)` records one event of
+the stream alone; `with trace.span("rebase", run=run.id, agent=agent): ...`
+around a block, or `@trace.span("rebase")` on a function, records two, the
+start and `rebase_done` with duration_ms (a float, three decimals) and ok
+(False when the block raised; the exception propagates), which the hub's
+--debug log sees beside the run's events and the run's metrics do not.
+`trace.debug(kind, **fields)` and `trace.debug_span(...)` are the same but
+recorded in debug mode only, at one comparison's cost in prod. Fields are
+JSON values the caller already has: trace computes nothing the caller did
+not pass, so a field that costs to compute goes behind `if trace.level ==
+"debug":`. A tool that waits through `run.wait_until(ready, timeout,
+agent=call.agent)`, as kit.py's wait_for_message and the team arm's request
+do, is recorded in debug as a "lock_wait" with waited_ms and whether it
+woke or timed out. Listeners, registered with `trace.listen(callable)`
+(which gives the callable back) and removed with `trace.unlisten`, receive
+each event as a dict {"kind", "t", "ts", **fields}, t seconds since
+trace.started (a monotonic reference) unless the caller passed its own, as
+a run's record does, and ts epoch seconds, and must not raise: one that
+raises is dropped after one complaint on the hub's stderr, so a bad sink
+cannot break a tool call. `trace.JsonLines(path or stream)` is the
+production listener, one line per event, flushed, appended to a file it
+opens on the first event; `trace.Memory()` is a list that is also a
+listener, for tests and for a run's in-memory events.
 
 ## Bringing in existing Claude extensions
 
@@ -426,28 +460,94 @@ directory: `--arm path/to/my-arm`, and the hub is started with that
 directory allowed.
 
 Reading the time. result.json's timings, each agent's duration_ms and
-api_duration_ms, and the hub's tool_done events (every call's
-duration_ms, its blocked_ms, whether it was an error or cancelled) are
-read into one page by `python3 experiment/coordbench/timeline.py
-<run_dir>` (the pair's directory, the one holding result.json; `--json`
-for the same as data). Infrastructure is the harness's cost: the phases
-around the agents, summed as recorded, plus the hub's handling time,
-duration less blocked over every call. The Agents table gives each agent
-its wall time, the seconds it was blocked waiting on a peer, which is the
-arm's coordination cost rather than a slow hub, its seconds in hub calls,
-its call, error and cancellation counts, Claude Code's model time when
-the driver reported it, and what is left, the agent's own shell commands,
-edits and thinking. Idle stretches lists each agent's three longest gaps
-between one call's end and its next call: a long gap with no coordination
-is the agent working or thinking alone, where a long blocked time is the
-agent waiting. A run from before these fields (the pilots) prints "not
-recorded" in their place and measures its idle stretches from one call's
-start to the next; a run with no events.jsonl still prints what
-result.json holds.
+api_duration_ms, and the hub's tool_done events (every call's duration_ms,
+its blocked_ms, whether it was an error or cancelled) are read into one
+page by `python3 experiment/coordbench/timeline.py <run_dir>` (the pair's
+directory, the one holding result.json; `--json` for the same as data).
+Every duration but a phase's is taken on one monotonic clock, the one
+trace.py's trace.now_ms reads, so the hub's tool_done figures, the runner's
+docker and hub_call durations and a span's duration_ms are comparable to
+the millisecond; a phase's seconds are the difference of its ISO 8601 start
+and end, the wall clock, since those two stamps are what result.json keeps.
+Infrastructure is the harness's cost: the phases around the agents, summed
+as recorded, plus the hub's handling time, duration less blocked over every
+call. The Agents table gives each agent its wall time, the seconds it was
+blocked waiting on a peer, which is the arm's coordination cost rather than
+a slow hub, its seconds in hub calls, its call, error and cancellation
+counts, Claude Code's model time when the driver reported it, and what is
+left, the agent's own shell commands, edits and thinking. Idle stretches
+lists each agent's three longest gaps between one call's end and its next
+call: a long gap with no coordination is the agent working or thinking
+alone, where a long blocked time is the agent waiting. A run from before
+these fields (the pilots) prints "not recorded" in their place and measures
+its idle stretches from one call's start to the next; a run with no
+events.jsonl still prints what result.json holds.
+
+Debug mode. The trace level is read once from the environment variable
+COORD_TRACE, "off", "prod" or "debug", prod by default. Off records nothing
+and costs one check per event. Prod is the passive production level: one
+check per event when nobody listens, which is the runner's and the hub's
+own state, and otherwise one dict handed to each listener a deployment
+registered (trace.JsonLines writes and flushes one line of it), with no
+computation beyond what the caller passed, so it rides along in a
+deployment. Debug, switched on with `--debug` on run.py's run, prepare and
+finish (run and prepare pass it on to the hub they start; hub.py takes the
+same flag for a hub started by hand), or with COORD_TRACE=debug in the
+environment, and never a default, records everything the playground needs
+to find where time goes; it adds events and never changes the ones
+result.json and events.jsonl hold today (tool, tool_done with duration_ms
+and blocked_ms, the timings with phase, agent, started, ended and seconds),
+so a reader of a debug run reads the same fields plus more kinds. The flag
+does not reach the agents' containers: an agent's side records when its own
+environment carries COORD_TRACE, as the paragraph on it below says.
+
+Tracing. The timings are also events on trace.py's one stream as they
+happen: a `phase` event when a phase begins (with `phase` and `agent`) and
+a `phase_done` when it ends (with `duration_ms`, `ok`, `phase` and
+`agent`), one for every record result.json gets, the agents' phase among
+them though prepare records its start and finish its end. A deployment (the
+App, an Actions job) attaches its own sink with `run.listen(callable)`,
+which is trace.listen for everything the runner emits and gives the
+callable back; `run.unlisten` takes it off. In prod that is the phases and
+nothing else: no file is written for the trace, and each event the runner
+could emit costs one comparison, with a clock read before a docker command
+or a hub call. `--debug` (or `COORD_TRACE=debug` in the environment) is the
+playground's mode: it adds every docker command (`docker`: `subcommand`,
+`argument`, the thing it acted on, `exit_code`, null for one that timed
+out, `duration_ms` and `output_bytes`; never the command line), every hub
+call (`hub_call`: `method`, `path`, `status`, null when nothing answered,
+`duration_ms`), every file the runner or a driver writes (`wrote`: `file`
+and `bytes`, never the text) and the session driver's every look for its
+marker (`marker_poll`: `agent`, `found`), and the runner writes every event
+of the process to `<run_dir>/trace.jsonl`, one JSON object per line, which
+finish appends to after prepare. The hub phase of a `run` command comes
+before any run directory exists, so it reaches the listeners but no
+trace.jsonl. result.json, events.jsonl and the summary line are what they
+were: debug adds events and changes none.
+
+The agent's side of a debug run. cli.py and bridge.py read COORD_TRACE too,
+from the environment the agent's commands and its MCP server run in. With
+COORD_TRACE=debug every request a shell command makes to /rpc is an
+"rpc_call" span (method, path, tool and request_bytes as it starts; status,
+response_bytes, duration_ms and ok on rpc_call_done), every alias-run one
+"command" event (command, tool, exit_code, duration_ms), every POST the
+stdio bridge makes a "bridge_post" span (ids, request_bytes; status,
+response_bytes, duration_ms and ok, a streamed answer's bytes counted as
+they arrive) and every session the bridge reopens after a 404 a
+"bridge_reinit" event (session, reopened). They are written as JSON lines
+to the process's stderr, the agent's own stream, so a command's timing
+shows beside its output, or appended to the file COORD_TRACE_FILE names
+when it is set; a message's text, a tool's arguments and the agent's token
+are never in them. In prod, the default, the two files register no listener
+and write nothing, and their stdout and stderr are what they were. Both
+load trace.py from beside themselves when the directory was copied whole,
+never the standard library's module of that name, and a process that
+already imported coordbench's trace shares it; a copy of cli.py or
+bridge.py alone records nothing and works as before.
 
 ## The hub, for other harnesses
 
-`python3 hub.py --host 0.0.0.0 --port 8765 [--log-dir DIR] [--arm-dir DIR]`
+`python3 hub.py --host 0.0.0.0 --port 8765 [--log-dir DIR] [--arm-dir DIR] [--debug]`
 serves:
 
 - `POST /api/runs` {"arm", "features", "specs", "options", "run_id",
@@ -481,6 +581,20 @@ serves:
   initialize are the arm's (Arm.instructions), none by default;
 - `GET` and `POST /rpc/{run}/{agent}`: the tools as plain JSON for shell
   commands.
+
+In prod (the default, COORD_TRACE=prod) the hub keeps each run's events and
+records nothing of its own: an event outside a run costs one check. With
+--debug, or COORD_TRACE=debug in its environment, the hub says so once on
+stderr and writes every event of the stream, its own and every run's with
+the run's id, to <log_dir>/hub-trace.jsonl with --log-dir and to stderr
+without: "http_request" per request (method, path, status, request_bytes,
+response_bytes, duration_ms, thread), "lock_wait" per Run.wait_until
+(agent, waited_ms, woke), "tool_arguments" per tool call (the size in bytes
+of its arguments, never their content), "session_opened" per MCP session
+and "cancel" per notifications/cancelled (request_id, found). Debug is
+never on by default. COORD_TRACE=off silences the stream; a run's events
+and events.jsonl are kept at every level, since they are the hub's data,
+not its logging.
 
 A run created with "agent_tokens": true wants each agent's own token on
 its /mcp (POST) and /rpc (GET and POST), as `Authorization: Bearer <token>`,

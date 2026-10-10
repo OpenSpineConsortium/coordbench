@@ -47,15 +47,20 @@ reached nobody goes back where the next call finds it.
 
 Every tools/call that runs is framed by two of the run's events, "tool"
 before its handler and "tool_done" after, the second with the handler's
-wall time and the part of it spent waiting for another agent; Run's
-docstring in arm.py has the fields.
+wall time (on trace.py's clock, trace.now_ms, the one every timing here
+is taken on) and the part of it spent waiting for another agent; Run's
+docstring in arm.py has the fields. In debug (trace.level) two more go
+to the hub's own log, never into the run's events: "tool_arguments"
+before each call, with the size in bytes of its JSON arguments and never
+their content, and "cancel" for each notifications/cancelled, with the
+id it named and whether that call was still in flight.
 """
 
 import json
 import sys
-import time
 import traceback
 
+import trace
 from arm import Call, ToolError
 
 # Newest first; a client asking for one of these gets it back, any other
@@ -153,6 +158,14 @@ def milliseconds(seconds):
     return round(seconds * 1000, 3)
 
 
+def debug_arguments(run, agent, name, arguments):
+    """In debug, how much an agent sent a tool, never what: an agent that
+    pastes a file into a message shows here as bytes. The size is a
+    computation of this module's own, so it is made in debug only."""
+    if trace.level == "debug":
+        trace.debug("tool_arguments", run=run.id, agent=agent, tool=name, bytes=len(json.dumps(arguments)))
+
+
 def call_tool(run, agent, tools, params, started=None, finished=None):
     """Run one tools/call; returns (result, None) or (None, (code, message)).
     The name, the arguments and their names are checked first, so a call
@@ -187,12 +200,13 @@ def call_tool(run, agent, tools, params, started=None, finished=None):
     call = Call(run, agent, arguments)
     if started is not None:
         started(call)
+    debug_arguments(run, agent, name, arguments)
     run.emit("tool", agent, tool=name)
-    began = time.monotonic()
+    began = trace.now_ms()
     result, is_error = run_handler(run, tool, call)
-    duration = time.monotonic() - began
+    duration_ms = round(trace.now_ms() - began, 3)
     cancelled = settle(call, finished)
-    run.emit("tool_done", agent, tool=name, duration_ms=milliseconds(duration),
+    run.emit("tool_done", agent, tool=name, duration_ms=duration_ms,
              blocked_ms=milliseconds(call.blocked_s), is_error=is_error, cancelled=cancelled)
     return result, None
 
@@ -248,11 +262,14 @@ def cancel(params, in_flight):
         return
     call = in_flight.get(request_id)
     if call is None:
+        trace.debug("cancel", request_id=request_id, found=False)
         return
     with call.run.lock:
-        if in_flight.get(request_id) is call:
+        found = in_flight.get(request_id) is call
+        if found:
             call.cancelled.set()
             call.run.lock.notify_all()
+    trace.debug("cancel", run=call.run.id, agent=call.agent, request_id=request_id, found=found)
 
 
 def handle(message, run, agent, instructions="", sink=None, in_flight=None):

@@ -251,8 +251,8 @@ class Board:
         gone = call.cancelled.is_set if call is not None else (lambda: False)
         with run.lock:
             started = time.monotonic()
-            run.lock.wait_for(lambda: run.closed or gone() or bool(self.responses.get(request_id)),
-                              timeout=seconds)
+            run.wait_until(lambda: run.closed or gone() or bool(self.responses.get(request_id)),
+                           seconds, agent=call.agent if call is not None else None)
             if call is not None:
                 call.waited(time.monotonic() - started)
             queue = self.responses.get(request_id)

@@ -3,10 +3,10 @@
     python3 run.py run --arm coop --repo pallets_click_task --task 2068 --features 1,6
         [--driver claude-cli|session|path/to/driver.py:Class] [--model M] [--name RUN]
         [--log-dir DIR] [--hub URL] [--arm-dir DIR ...] [--timeout-min 120] [--max-turns N]
-        [--keep] [--force] [--option KEY=VALUE ...] [--cooperbench-dir DIR]
+        [--keep] [--force] [--option KEY=VALUE ...] [--cooperbench-dir DIR] [--debug]
     python3 run.py run ... --subset flash     instead of --features: every flash pair of the task
     python3 run.py prepare ... --features 1,6  provision one pair for the session driver
-    python3 run.py finish --run-dir DIR        wait for it, score it, write its logs, tear it down
+    python3 run.py finish --run-dir DIR [--debug]  wait for it, score it, write its logs, tear it down
 
 For each pair the runner reads the features' specs from CooperBench's
 dataset, provisions what the arm needs (a shared git remote, a shared
@@ -80,6 +80,25 @@ That hub's token is in no file, so finish, a process of its own, reads it
 back from the hub's environment (/proc/<pid>/environ, Linux's, which only
 the hub's own user can read).
 
+The timings are also events on trace.py's one stream, as they happen: a
+"phase" event when a phase begins (phase, agent) and a "phase_done" when
+it ends (duration_ms, ok, phase, agent), so a deployment watching the
+runner sees each phase live while result.json keeps the records. A
+deployment (the App, an Actions job) attaches its sink with
+run.listen(callable), which is trace.listen for everything the runner
+emits. --debug on run, prepare and finish (trace.set_level("debug"); the
+environment variable COORD_TRACE=debug does the same) adds what the
+playground needs to find where the time goes, never on by default: every
+docker command (drivers.docker: "docker", with its subcommand, the
+argument it acted on, its exit code, duration and output bytes, never its
+command line), every hub call ("hub_call": method, path, status,
+duration_ms), every file written under the run directory ("wrote": its
+name and bytes, never its text) and the session driver's every look for
+its marker ("marker_poll"); and the runner writes every event of the
+process to <run_dir>/trace.jsonl (open_debug_sink). In prod no listener
+is registered for the file, and each of those costs one comparison, with
+a clock read before a docker command or a hub call.
+
 Every docker command goes through drivers.docker, so tests swap in a fake.
 The subscription token reaches agents by name only (drivers.PASSED_BY_NAME)
 and the hub's token reaches no agent; neither is ever on a command line,
@@ -119,8 +138,9 @@ if str(HERE) not in sys.path:
 
 import cli  # noqa: E402
 import drivers  # noqa: E402
+import trace  # noqa: E402
 from arm import NEED_OPTIONS, find_arm  # noqa: E402
-from drivers import CONTAINER_REPO, arm_is_builtin, checked, safe_name  # noqa: E402
+from drivers import CONTAINER_REPO, arm_is_builtin, checked, safe_name, write_text  # noqa: E402
 
 NETWORK = "coordbench"
 # Named apart from CooperBench's own cooperbench-git, which publishes no
@@ -165,30 +185,53 @@ def now():
 # Timings: when each phase of a pair began and ended, kept on the plan
 # (and before the plan exists, for the hub, on the settings) and written to
 # result.json, so a reader can tell the harness's time from the agents'.
+# Each is also two events on trace's stream, "phase" as it begins and
+# "phase_done" as it ends, for whoever listens (listen) while it happens.
 
 # The phases in the order the summary names them; "agent" reads "agents".
 PHASES = ("hub", "run_create", "git_remote", "shared_volume", "provision", "agent", "close", "score", "teardown")
 
 
-def record_timing(holder, phase, agent, started, ended):
+def listen(listener):
+    """Where a deployment (the App, an Actions job) attaches its sink: the
+    callable gets every event the runner emits, the phases in prod and
+    the rest in debug, as trace.py describes them, and is given back, so
+    it works as a decorator; unlisten takes it off. It is trace.listen,
+    named here so a deployment imports run alone."""
+    return trace.listen(listener)
+
+
+def unlisten(listener):
+    trace.unlisten(listener)
+
+
+def record_timing(holder, phase, agent, started, ended, ok=True):
     """One phase's record under holder["timings"]: the phase, the agent it
     was for (None for the run's own phases), when it started and ended as
     ISO 8601, and its seconds, which is what the summary and timeline.py
-    read."""
-    holder.setdefault("timings", []).append({
-        "phase": phase, "agent": agent, "started": started.isoformat(), "ended": ended.isoformat(),
-        "seconds": (ended - started).total_seconds()})
+    read. The record is also the "phase_done" event, with the seconds as
+    duration_ms and ok False for a phase that failed, so every record
+    result.json gets was seen live by the listeners."""
+    record = {"phase": phase, "agent": agent, "started": started.isoformat(), "ended": ended.isoformat(),
+              "seconds": (ended - started).total_seconds()}
+    holder.setdefault("timings", []).append(record)
+    trace.event("phase_done", duration_ms=round(record["seconds"] * 1000, 3), ok=ok, phase=phase, agent=agent)
 
 
 @contextlib.contextmanager
 def timed(holder, phase, agent=None):
     """Record the phase the block is, however the block ends: a phase that
-    failed still took its time, and the record says where the pair was."""
+    failed still took its time, and the record says where the pair was.
+    The block's start is the "phase" event, its end the "phase_done" the
+    record emits, the pair trace.span would emit."""
     started = now()
+    trace.event("phase", phase=phase, agent=agent)
+    ok = False
     try:
         yield
+        ok = True
     finally:
-        record_timing(holder, phase, agent, started, now())
+        record_timing(holder, phase, agent, started, now(), ok)
 
 
 def phase_records(plan, phase):
@@ -275,7 +318,7 @@ def read_json(path, default=None):
 
 
 def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
+    write_text(path, json.dumps(value, indent=2, default=str) + "\n")
 
 
 def write_private_text(path, text):
@@ -284,7 +327,7 @@ def write_private_text(path, text):
     path = Path(path)
     path.touch(mode=0o600, exist_ok=True)
     path.chmod(0o600)
-    path.write_text(text, encoding="utf-8")
+    write_text(path, text)
 
 
 def pair_finished(run_dir):
@@ -322,11 +365,29 @@ class HubClient:
         return headers
 
     def request(self, method, path, body=None, timeout=120):
+        """The hub's JSON answer, or HubError. In debug each call is one
+        "hub_call" event with its method, path, HTTP status (None when
+        nothing answered) and duration; in prod that costs a clock read
+        before the call and one comparison after it."""
+        started, status = time.monotonic(), None
+        try:
+            status, answer = self.exchange(method, path, body, timeout)
+            return answer
+        except HubError as problem:
+            status = problem.status
+            raise
+        finally:
+            if trace.level == "debug":
+                trace.event("hub_call", method=method, path=path, status=status,
+                            duration_ms=round((time.monotonic() - started) * 1000, 3))
+
+    def exchange(self, method, path, body, timeout):
+        """One HTTP exchange: the status and the JSON answer, or HubError."""
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(self.base_url + path, data=data, method=method, headers=self.headers())
         try:
             with OPENER.open(request, timeout=timeout) as response:
-                return json.loads(response.read() or b"{}")
+                return response.status, json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as problem:
             raise HubError(f"{method} {path}: HTTP {problem.code}: {cli.hub_error_text(problem)}",
                            problem.code) from None
@@ -399,10 +460,15 @@ def wait_for_first_line(path, process, timeout):
 
 
 def hub_command(host, port, hub_dir, arm_dirs):
+    """hub.py's command line. A runner in debug (--debug, or COORD_TRACE)
+    starts its hub in debug too, so one flag traces both sides: the hub
+    writes its hub-trace.jsonl beside its events logs under hub_dir."""
     command = [sys.executable, str(HERE / "hub.py"), "--host", host, "--port", str(port),
                "--public-url", f"http://host.docker.internal:{port}", "--log-dir", str(hub_dir)]
     for directory in arm_dirs:
         command += ["--arm-dir", str(Path(directory).resolve())]
+    if trace.level == "debug":
+        command.append("--debug")
     return command
 
 
@@ -773,7 +839,7 @@ def adopt_agents(plan, answer):
     plan["agents"] = []
     for agent in agents:
         prompt_file = run_dir / f"{safe_name(agent['id'])}_prompt.md"
-        prompt_file.write_text(agent.get("prompt") or "", encoding="utf-8")
+        write_text(prompt_file, agent.get("prompt") or "")
         plan["agents"].append({"id": agent["id"], "role": agent["role"], "features": list(agent["features"]),
                                "mcp_url": agent["mcp_url"], "rpc_url": agent["rpc_url"],
                                "token": agent.get("token"), "prompt_file": str(prompt_file),
@@ -805,8 +871,7 @@ def keep_marker_out_of_git(workspace):
     info = Path(workspace) / ".git" / "info"
     if (Path(workspace) / ".git").is_dir():
         info.mkdir(parents=True, exist_ok=True)
-        with open(info / "exclude", "a", encoding="utf-8") as exclude:
-            exclude.write(f"\n{drivers.DONE_MARKER}\n")
+        write_text(info / "exclude", f"\n{drivers.DONE_MARKER}\n", append=True)
 
 
 def container_arguments(plan, agent):
@@ -1029,7 +1094,34 @@ def start_agents(plan, driver):
             continue
         handles[agent["id"]] = handle
         agent["handle"] = handle if isinstance(handle, dict) else None
+        # The agent's phase begins here and ends in wait_agents, which may
+        # be another process; the record there emits its "phase_done".
+        trace.event("phase", phase="agent", agent=agent["id"])
     return handles
+
+
+# The debug sinks this process opened, by run directory (open_debug_sink).
+DEBUG_SINKS = {}
+
+
+def open_debug_sink(run_dir):
+    """In debug, <run_dir>/trace.jsonl takes every event of this process
+    from here until close_debug_sinks: the phases, every docker command,
+    hub call and file written, the session driver's polls. Opened where
+    the run directory is made (prepare_pair) and by finish, which comes to
+    a directory prepare made and appends to the file prepare left. In prod
+    nothing is registered, so each event is one check (trace.event)."""
+    key = str(run_dir)
+    if trace.level == "debug" and key not in DEBUG_SINKS:
+        DEBUG_SINKS[key] = trace.listen(trace.JsonLines(Path(run_dir) / "trace.jsonl"))
+
+
+def close_debug_sinks():
+    """Once a pair is over, so the next pair of a --subset run gets a
+    trace.jsonl of its own; nothing to do in prod."""
+    for sink in [DEBUG_SINKS.pop(key) for key in list(DEBUG_SINKS)]:
+        trace.unlisten(sink)
+        sink.close()
 
 
 def prepare_pair(settings, hub, driver, repo, task_id, features):
@@ -1037,6 +1129,7 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
     plan = new_plan(settings, driver, repo, task_id, features)
     plan["hub_url"] = hub.base_url
     Path(plan["run_dir"]).mkdir(parents=True, exist_ok=True)
+    open_debug_sink(plan["run_dir"])
     try:
         specs = read_specs(Path(settings["cooperbench_dir"]) / "dataset", repo, task_id, features)
         resolve_plugins(plan)
@@ -1264,11 +1357,10 @@ def write_outputs(plan, outcomes, metrics, events, ended):
     run_dir = Path(plan["run_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)
     for name, text in patch_files(plan, outcomes).items():
-        (run_dir / name).write_text(text, encoding="utf-8")
+        write_text(run_dir / name, text)
     write_json(run_dir / "result.json", result_record(plan, outcomes, metrics, ended))
     write_json(run_dir / "metrics.json", metrics)
-    (run_dir / "events.jsonl").write_text("".join(json.dumps(e, default=str) + "\n" for e in events),
-                                          encoding="utf-8")
+    write_text(run_dir / "events.jsonl", "".join(json.dumps(e, default=str) + "\n" for e in events))
     for warning in plan["warnings"]:
         say(f"{plan['run_id']}: {warning}")
 
@@ -1433,6 +1525,14 @@ def run_one(settings, hub, driver, repo, task_id, features):
             return "skipped"
         return verdict({}, score(plan))
     try:
+        return run_pair(settings, hub, driver, repo, task_id, features)
+    finally:
+        close_debug_sinks()
+
+
+def run_pair(settings, hub, driver, repo, task_id, features):
+    """Provision a pair, run its agents and finish it; returns its verdict."""
+    try:
         plan, handles = prepare_pair(settings, hub, driver, repo, task_id, features)
     except PairFailed:
         return "error"
@@ -1481,6 +1581,8 @@ def command_prepare(args):
             stop_hub(process)
         say(f"prepare failed: {failure}")
         return 1
+    finally:
+        close_debug_sinks()
     if process is not None:
         plan["hub_pid"] = process.pid
         save_plan(plan)
@@ -1492,12 +1594,14 @@ def command_finish(args):
     plan = load_plan(args.run_dir)
     driver = drivers.load_driver(plan["driver"])
     handles = {a["id"]: a["handle"] for a in plan["agents"] if a.get("handle") is not None}
+    open_debug_sink(plan["run_dir"])
     try:
         outcome = finish_pair(plan, driver, handles, finish_client(plan))
     finally:
         if plan.get("hub_pid"):
             stop_hub_pid(plan["hub_pid"], plan["hub_url"])
     save_plan(plan)
+    close_debug_sinks()
     print(json.dumps({"run_dir": plan["run_dir"], "verdict": outcome}), flush=True)
     return 0 if outcome != "error" else 1
 
@@ -1530,6 +1634,13 @@ def add_pair_arguments(parser, subset):
                              "provisions and sets the options of itself")
     parser.add_argument("--keep", action="store_true", help="leave containers, volume and repository in place")
     parser.add_argument("--force", action="store_true", help="run a pair again even when it is finished")
+    add_debug_argument(parser)
+
+
+def add_debug_argument(parser):
+    parser.add_argument("--debug", action="store_true",
+                        help="trace every docker command, hub call, file written and marker poll besides the "
+                             "phases, to <run_dir>/trace.jsonl and the listeners (trace.py's debug level)")
 
 
 def parser():
@@ -1543,12 +1654,15 @@ def parser():
     preparing.set_defaults(func=command_prepare)
     finishing = commands.add_parser("finish", help="wait for a prepared pair, score it and tear it down")
     finishing.add_argument("--run-dir", required=True)
+    add_debug_argument(finishing)
     finishing.set_defaults(func=command_finish)
     return top
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.debug:
+        trace.set_level("debug")
     try:
         return args.func(args)
     except (HubError, FileNotFoundError, ValueError) as problem:

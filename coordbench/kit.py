@@ -201,8 +201,8 @@ def wait_for_message(call):
     run, me = call.run, call.agent
     with run.lock:
         started = time.monotonic()
-        run.lock.wait_for(lambda: run.closed or call.cancelled.is_set() or bool(inbox(run, me)),
-                          timeout=seconds)
+        run.wait_until(lambda: run.closed or call.cancelled.is_set() or bool(inbox(run, me)),
+                       seconds, agent=me)
         call.waited(time.monotonic() - started)
         if call.cancelled.is_set() or not inbox(run, me):
             return NO_MESSAGE

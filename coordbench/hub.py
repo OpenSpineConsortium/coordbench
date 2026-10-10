@@ -59,10 +59,33 @@ connection dropped, the hub runs the undo each of its calls registered
 message or a response taken for a reply that reached nobody goes back
 where the next call finds it, and once only, however the reply was lost.
 
+Timings and events, the hub's own and every run's, go through trace.py,
+one stream with one shape, so a reader adds a measurement anywhere in one
+line: `trace.event("kind", run=run.id, agent=agent, ...)` records an
+event, `with trace.span("kind", run=run.id): ...` records two, the start
+and `kind_done` with duration_ms and ok; a Run's emit puts the same
+record on that stream under the run's id (arm.py, Run), beside keeping it
+as the run's own events and events.jsonl. In prod that is all that is
+kept: the hub registers no listener of its own, so an event outside a
+run costs one check. With --debug (or COORD_TRACE=debug in the
+environment) the hub also records, to <log_dir>/hub-trace.jsonl with
+--log-dir and to stderr without, every run's events with the run's id
+beside its own:
+"http_request" per request (method, path, status, request_bytes,
+response_bytes, duration_ms, thread), "lock_wait" per Run.wait_until
+(agent, waited_ms, woke), "tool_arguments" per tool call (the arguments'
+size in bytes, never their content), "session_opened" per MCP session
+and "cancel" per notifications/cancelled; `trace.debug(...)` and
+`trace.debug_span(...)` add more at one comparison's cost in prod. Debug
+is never on by default, and the hub says on stderr once when it is.
+COORD_TRACE=off silences the stream; a run's own events and its
+events.jsonl are kept at every level, since they are the hub's data,
+not its logging.
+
 Command line:
 
     python3 hub.py --host 0.0.0.0 --port 8765 [--log-dir DIR] [--public-url URL]
-        [--arm-dir DIR ...]
+        [--arm-dir DIR ...] [--debug]
 
 prints the base URL agents should use as its first line, then serves.
 
@@ -104,6 +127,7 @@ from urllib.parse import quote, unquote, urlsplit
 import os
 
 import mcp
+import trace
 from arm import Arm, Run, builtin_arms_dir, load_arm_class, unmet_needs
 
 MAX_BODY = 1024 * 1024
@@ -219,10 +243,17 @@ class Hub:
         return run_id
 
     def build(self, arm, run_id, features, specs, options):
+        """The run, seeded, with each agent's prompt. A run whose arm fails
+        to set it up or prompt for it has its log closed before the
+        failure goes up, since nobody will release it."""
         agents = arm.layout(features)
         run = Run(run_id, arm, agents, options, self.events_path(run_id), specs)
-        arm.setup(run)
-        prompts = {agent: arm.prompt(run, agent, specs) for agent in run.agents}
+        try:
+            arm.setup(run)
+            prompts = {agent: arm.prompt(run, agent, specs) for agent in run.agents}
+        except BaseException:
+            run.close_log()
+            raise
         return Hosted(run, prompts)
 
     def events_path(self, run_id):
@@ -286,6 +317,7 @@ class Hub:
         with self.lock:
             if self.runs.get(run_id) is hosted:
                 del self.runs[run_id]
+        hosted.run.close_log()
         return {"run_id": run_id, "released": True}
 
     def events(self, run_id):
@@ -340,6 +372,7 @@ class Hub:
         session = uuid.uuid4().hex
         with self.lock:
             hosted.sessions.setdefault(agent, set()).add(session)
+        trace.debug("session_opened", run=hosted.run.id, agent=agent, session=session)
         return session
 
     def knows_session(self, hosted, agent, session):
@@ -601,7 +634,8 @@ class HubHandler(BaseHTTPRequestHandler):
         return self.server.hub
 
     def dispatch(self, method):
-        self.replied = False
+        self.replied, self.status_sent, self.bytes_sent, self.body = False, None, 0, b""
+        began = trace.now_ms() if trace.level == "debug" else None
         try:
             self.body = self.read_body()
             self.route(method)
@@ -613,6 +647,18 @@ class HubHandler(BaseHTTPRequestHandler):
             complain(f"{method} {self.path} failed")
             if not self.replied:
                 self.reply(500, {"error": FAILED})
+        finally:
+            if began is not None:
+                self.debug_request(method, began)
+
+    def debug_request(self, method, began):
+        """One "http_request" event per request, in debug: what was asked,
+        what went back (status None and no bytes when the connection
+        dropped first) and how long it took, with the thread that served
+        it, so a slow request is laid at its own door."""
+        trace.debug("http_request", method=method, path=self.path, status=self.status_sent,
+                    request_bytes=len(self.body), response_bytes=self.bytes_sent,
+                    duration_ms=round(trace.now_ms() - began, 3), thread=threading.current_thread().name)
 
     def route(self, method):
         if not origin_allowed(self.headers.get("Origin")):
@@ -664,8 +710,9 @@ class HubHandler(BaseHTTPRequestHandler):
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
-        self.replied = True
+        self.replied, self.status_sent = True, status
         self.wfile.write(body)
+        self.bytes_sent = len(body)
 
     def reply_or_undo(self, status, payload, headers, calls):
         """reply(), for an answer that holds tool calls' results: when the
@@ -817,6 +864,26 @@ def serve_in_background(hub, host="127.0.0.1", port=0):
     return server
 
 
+def configure_trace(debug, log_dir=None):
+    """The hub's trace level and where its own events go. --debug sets
+    debug; otherwise the level is the environment's (COORD_TRACE). In
+    debug the hub's events, and every run's with the run's id, go to
+    <log_dir>/hub-trace.jsonl, or to stderr without a log directory, and
+    the hub says so once; at any other level it registers no listener of
+    its own. Returns the listener registered, or None."""
+    if debug:
+        trace.set_level("debug")
+    if trace.level != "debug":
+        return None
+    if log_dir:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        where = Path(log_dir) / "hub-trace.jsonl"
+    else:
+        where = sys.stderr
+    print(f"coordbench hub: tracing at debug to {where if log_dir else 'stderr'}", file=sys.stderr, flush=True)
+    return trace.listen(trace.JsonLines(where))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Serve coordbench arms to agents over MCP and HTTP.")
     parser.add_argument("--host", default="127.0.0.1", help="address to bind (0.0.0.0 for containers)")
@@ -826,7 +893,11 @@ def main(argv=None):
     parser.add_argument("--arm-dir", action="append", default=[],
                         help="a directory whose arms (in it or below it) the hub may load; repeatable")
     parser.add_argument("--verbose", action="store_true", help="log every request to stderr")
+    parser.add_argument("--debug", action="store_true",
+                        help="trace every request, wait and cancel to <log-dir>/hub-trace.jsonl "
+                             "(stderr without --log-dir); never on by default")
     args = parser.parse_args(argv)
+    configure_trace(args.debug, args.log_dir)
     hub = Hub(args.log_dir, args.public_url, args.arm_dir, os.environ.get("COORD_ADMIN_TOKEN"))
     server = make_server(hub, args.host, args.port, args.verbose)
     print(hub.base_url, flush=True)

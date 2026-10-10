@@ -11,11 +11,24 @@ an HTTP client would. An agent's MCP configuration for it:
     {"command": "python3", "args": ["/opt/coordbench/bridge.py"],
      "env": {"COORD_MCP_URL": "http://host.docker.internal:8765/mcp/<run>/<agent>"}}
 
-The file imports nothing from coordbench, so it can be copied alone into
-an agent's container and run by whatever Python 3 is there. A run the
-hub made with agent tokens wants this agent's bearer token on every
+The file imports nothing from coordbench but trace.py, which it takes
+from beside itself when the directory was copied whole and does without
+otherwise (a stand-in that records nothing), so it can be copied alone
+into an agent's container and run by whatever Python 3 is there. A run
+the hub made with agent tokens wants this agent's bearer token on every
 request, so every POST carries "Authorization: Bearer <COORD_AGENT_TOKEN>"
 when that variable is set and not empty.
+
+In debug (trace.py's level, COORD_TRACE=debug in the bridge's
+environment) every POST to the hub is a "bridge_post" span: the ids of
+the requests it carries and request_bytes as it starts, and status,
+response_bytes, duration_ms and ok on its bridge_post_done, the bytes of
+a streamed answer counted as they arrive; each new session the bridge
+opens after a 404 is a "bridge_reinit" event with the session the hub
+forgot and how many times that has happened. They go as JSON lines to
+stderr, the agent's own stream, or to the file COORD_TRACE_FILE names
+when it is set; no message's content and no token is ever among them.
+In prod, the default, nothing is registered and nothing is written.
 
 Requests run on threads of their own, because a coordination tool may
 block (wait_for_message waits up to 30 seconds) and a client that calls
@@ -41,6 +54,7 @@ is a hub failure like any other HTTP error, an internal error (-32603)
 that quotes the status and the body.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -48,8 +62,12 @@ import threading
 import urllib.error
 import urllib.request
 from http.client import HTTPException
+from pathlib import Path
 
 PARSE_ERROR, INTERNAL_ERROR = -32700, -32603
+
+# Where a debug run's events go instead of stderr, when set.
+TRACE_FILE_VARIABLE = "COORD_TRACE_FILE"
 
 # Generous, because a tool may block for a while by design; the hub, not
 # this timeout, decides how long a call lasts.
@@ -59,6 +77,81 @@ TIMEOUT_SECONDS = 600
 # a proxy configured for the container's outbound traffic must not carry
 # these requests: an empty ProxyHandler ignores HTTP_PROXY and its kin.
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+class NoSpan:
+    """What the stand-in's debug_span gives: a block that is not timed and
+    a decorator that leaves its function alone. fields is where the caller
+    puts what it learns on the way, read by nobody here."""
+
+    def __init__(self, fields):
+        self.fields = fields
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exception):
+        return False
+
+    def __call__(self, function):
+        return function
+
+
+class NoTrace:
+    """What stands in for trace.py when the file is not beside this one:
+    the level off and the three calls this file makes, each doing nothing,
+    so a copy of bridge.py alone works as before and debug is never a
+    dependency of the agent's MCP server. The same stand-in is in cli.py,
+    by design: each file has to stand alone in a container."""
+
+    level = "off"
+
+    @staticmethod
+    def event(kind, **fields):
+        return None
+
+    @staticmethod
+    def debug(kind, **fields):
+        return None
+
+    @staticmethod
+    def debug_span(name, **fields):
+        return NoSpan(fields)
+
+
+def same_file(module, path):
+    try:
+        return Path(module.__file__).resolve() == path
+    except (AttributeError, TypeError, OSError):
+        return False
+
+
+def load_trace():
+    """coordbench's trace.py, beside this file when the directory was
+    copied whole (drivers put it at /opt/coordbench), loaded by its
+    location: the standard library has a module named trace too, and
+    `import trace` would take that one whenever this directory is not
+    first on sys.path. A process that imported coordbench's already
+    shares it, so its events and the bridge's are one stream; a fresh
+    process registers the module under its name when no module holds it
+    yet, so the rest of coordbench imported later finds the same one, and
+    leaves another's alone. With no trace.py beside this file, the
+    stand-in."""
+    path = Path(__file__).resolve().with_name("trace.py")
+    known = sys.modules.get("trace")
+    if same_file(known, path):
+        return known
+    if not path.is_file():
+        return NoTrace
+    spec = importlib.util.spec_from_file_location("trace", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if known is None:
+        sys.modules["trace"] = module
+    return module
+
+
+coordtrace = load_trace()
 
 
 class HubFailure(Exception):
@@ -175,6 +268,15 @@ def http_error_text(problem, body):
     return f"HTTP {problem.code} {problem.reason}{detail}"
 
 
+def counted_lines(response, fields):
+    """The lines of a streamed response, their bytes summed into the
+    bridge_post span's fields as they are read, so response_bytes is
+    right however the stream ends."""
+    for raw in iter(response.readline, b""):
+        fields["response_bytes"] += len(raw)
+        yield raw
+
+
 def jsonrpc_error_in(body):
     """The error of a lone JSON-RPC error message, when the body is one
     (an integer code and a string message under "error"); else None."""
@@ -277,17 +379,27 @@ class Bridge:
         sent_with = self.session_id
         body = json.dumps(message).encode("utf-8")
         request = urllib.request.Request(self.url, data=body, headers=self.headers(), method="POST")
-        try:
-            with OPENER.open(request, timeout=self.timeout) as response:
-                self.session_id = response.headers.get("Mcp-Session-Id") or self.session_id
-                yield from self.answers_in(response)
-        except urllib.error.HTTPError as problem:
-            if reopen and problem.code == 404 and sent_with:
-                problem.close()
-                raise SessionLost(sent_with) from None
-            raise self.refusal(problem)
-        except (OSError, HTTPException) as problem:
-            raise HubFailure(self.explain(problem))
+        # In debug, one bridge_post span per POST: the ids and the size on
+        # the way out, and on the way back the status and the answer's
+        # size, which answers_in puts on the span's fields once the hub
+        # has answered, so the closing event, bridge_post_done, says it
+        # all. The span sits in a generator, so it closes when the answers
+        # have been read and its duration is the whole exchange; an
+        # unreachable hub leaves status out. In prod it is one comparison
+        # on enter and a flag on exit.
+        with coordtrace.debug_span("bridge_post", ids=request_ids(message), request_bytes=len(body)) as span:
+            try:
+                with OPENER.open(request, timeout=self.timeout) as response:
+                    self.session_id = response.headers.get("Mcp-Session-Id") or self.session_id
+                    yield from self.answers_in(response, span.fields)
+            except urllib.error.HTTPError as problem:
+                span.fields["status"] = problem.code
+                if reopen and problem.code == 404 and sent_with:
+                    problem.close()
+                    raise SessionLost(sent_with) from None
+                raise self.refusal(problem)
+            except (OSError, HTTPException) as problem:
+                raise HubFailure(self.explain(problem))
 
     def refusal(self, problem):
         """What an HTTP error from the hub is to the client: the hub's own
@@ -313,6 +425,7 @@ class Bridge:
                 raise HubFailure(f"the coordbench hub at {self.url} forgot the session "
                                  "and no initialize was sent to repeat")
             self.reopened += 1
+            coordtrace.debug("bridge_reinit", session=lost, reopened=self.reopened)
             initialize = {"jsonrpc": "2.0", "id": f"coordbench-bridge-initialize-{self.reopened}",
                           "method": "initialize", "params": self.initialize_params}
             for answer in self.exchange(initialize, reopen=False):
@@ -340,13 +453,18 @@ class Bridge:
             headers["MCP-Protocol-Version"] = self.protocol_version
         return headers
 
-    def answers_in(self, response):
+    def answers_in(self, response, fields):
+        """Yield the JSON-RPC messages in the hub's response. fields, the
+        bridge_post span's, learn the status and the bytes that came
+        back, counted line by line for a stream."""
+        fields["status"], fields["response_bytes"] = response.status, 0
         if response.status == 202:
             return
         if response.headers.get_content_type() == "text/event-stream":
-            yield from messages_in_stream(iter(response.readline, b""))
+            yield from messages_in_stream(counted_lines(response, fields))
             return
         body = response.read()
+        fields["response_bytes"] = len(body)
         if not body.strip():
             return
         try:
@@ -375,6 +493,26 @@ class Bridge:
             self.out.flush()
 
 
+def configure_trace():
+    """Where this process's debug events go: one JsonLines on the file
+    COORD_TRACE_FILE names, appended, else on stderr, the agent's own
+    stream. In prod, and with the stand-in, nothing is registered and
+    every event stays one check. Returns the listener, for release_trace,
+    or None."""
+    if coordtrace.level != "debug":
+        return None
+    path = os.environ.get(TRACE_FILE_VARIABLE, "").strip()
+    return coordtrace.listen(coordtrace.JsonLines(path or sys.stderr))
+
+
+def release_trace(sink):
+    """Take configure_trace's listener off again and close its file; a
+    stream it was given stays open, since it is the process's own."""
+    if sink is not None:
+        coordtrace.unlisten(sink)
+        sink.close()
+
+
 def main():
     url = os.environ.get("COORD_MCP_URL", "").strip()
     if not url:
@@ -382,7 +520,11 @@ def main():
               file=sys.stderr)
         return 2
     token = os.environ.get("COORD_AGENT_TOKEN", "").strip()
-    Bridge(url, token=token).serve(iter(sys.stdin.buffer.readline, b""))
+    sink = configure_trace()
+    try:
+        Bridge(url, token=token).serve(iter(sys.stdin.buffer.readline, b""))
+    finally:
+        release_trace(sink)
     return 0
 
 

@@ -23,8 +23,8 @@ they leave with CooperBench's own evaluation. An arm therefore says only
 how agents coordinate; tasks, agents and scoring stay the same across arms,
 which is what makes two arms comparable.
 
-Everything here is the Python standard library, so the hub runs anywhere
-Python 3.11 does.
+Everything here is the Python standard library, plus trace.py beside it,
+which is standard library too, so the hub runs anywhere Python 3.11 does.
 """
 
 import importlib.util
@@ -36,6 +36,8 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+import trace
 
 SUBMISSION_BLOCK = """## Submission protocol
 
@@ -202,7 +204,22 @@ class Run:
       client had cancelled the call by then.
 
     A call refused before its handler runs (an unknown tool, an argument
-    the tool does not take) leaves no event: nothing ran."""
+    the tool does not take) leaves no event: nothing ran.
+
+    Each event is kept twice: in `events` (a trace.Memory) and, with an
+    events_path, in events.jsonl (a trace.JsonLines), in the shape above;
+    and it goes out on trace.py's stream, the one the hub, the runner and
+    the arms share, as the same record under run=<this run's id> (so the
+    field names seq, t, kind, agent and run are this class's, and no kind
+    adds one of them), with trace's own "ts" beside it, for whoever
+    listens there: the hub's --debug log, a runner's sink. An arm adds an
+    event in one line, `run.emit("claim", agent, issue=7)`, and a timing
+    in one, `with trace.span("rebase", run=run.id, agent=agent): ...`,
+    whose two events reach the stream's listeners beside the run's but
+    are not the run's own. In debug (trace.level) wait_until records a
+    "lock_wait" per wait there as well. The run's own record does not
+    depend on the stream, so it is whole at every trace level and
+    whoever listens."""
 
     def __init__(self, run_id, arm, agents, options=None, events_path=None, specs=None):
         self.id = run_id
@@ -212,22 +229,26 @@ class Run:
         self.specs = dict(specs or {})
         self.state = {}
         self.lock = threading.Condition()
-        self.events = []
+        self.events = trace.Memory()
         self.events_path = Path(events_path) if events_path else None
+        self.log_file = trace.JsonLines(self.events_path) if self.events_path else None
         self.log_complained = False
         self.started = time.time()
         self.closed = False
 
     def emit(self, kind, agent=None, **data):
         """Record one coordination event; the metrics come from these. The
-        waiters are woken whatever happens after the event is in, so a
-        failure here never leaves a blocking tool asleep."""
+        event goes into `events` and the log first, then out on the trace
+        stream under this run's id. The waiters are woken whatever happens
+        after the event is in, so a failure here never leaves a blocking
+        tool asleep."""
         with self.lock:
             try:
-                event = {"seq": len(self.events), "t": round(time.time() - self.started, 3),
-                         "kind": kind, "agent": agent, **data}
+                seq, t = len(self.events), round(time.time() - self.started, 3)
+                event = {"seq": seq, "t": t, "kind": kind, "agent": agent, **data}
                 self.events.append(event)
                 self.log(event)
+                trace.event(kind, run=self.id, seq=seq, t=t, agent=agent, **data)
             finally:
                 self.lock.notify_all()
         return event
@@ -235,26 +256,43 @@ class Run:
     def log(self, event):
         """Append the event to events.jsonl, best effort. The file is a side
         record (the runner reads the events from memory), so a disk that
-        refuses the write, or a log directory cleaned away, costs one
-        complaint on stderr per run and never the tool call that emitted;
-        later writes are still tried, so a disk that fills and empties
-        again loses only the events in between."""
-        if not self.events_path:
+        refuses the write, or a log directory not there when the run's
+        first event comes, costs one complaint on stderr per run and never
+        the tool call that emitted; later writes are still tried, so a
+        disk that fills and empties again loses only the events in
+        between. The file is opened at the first event and kept open
+        until close_log()."""
+        if self.log_file is None:
             return
         try:
-            with self.events_path.open("a", encoding="utf-8") as out:
-                out.write(json.dumps(event) + "\n")
+            self.log_file(event)
         except OSError as problem:
             if not self.log_complained:
                 self.log_complained = True
                 print(f"coordbench run {self.id}: cannot write {self.events_path} ({problem}); "
                       "the events stay in memory", file=sys.stderr, flush=True)
 
-    def wait_until(self, ready, timeout):
+    def close_log(self):
+        """Close events.jsonl, once the hub forgets the run, so a long-lived
+        hub holds no file for a run it no longer hosts; an event emitted
+        after this opens it again, so none is lost."""
+        if self.log_file is not None:
+            self.log_file.close()
+
+    def wait_until(self, ready, timeout, agent=None):
         """Block until ready() holds or the timeout (seconds) passes;
-        ready() runs under the lock."""
+        ready() runs under the lock. In debug a "lock_wait" event records
+        the wait: the run, the agent when the caller names one, waited_ms,
+        and woke, true when ready() held and false when the timeout
+        passed."""
+        debugging = trace.level == "debug"
+        began = trace.now_ms() if debugging else 0.0
         with self.lock:
-            return self.lock.wait_for(ready, timeout=max(0.0, timeout))
+            woke = self.lock.wait_for(ready, timeout=max(0.0, timeout))
+        if debugging:
+            trace.debug("lock_wait", run=self.id, agent=agent,
+                        waited_ms=round(trace.now_ms() - began, 3), woke=bool(woke))
+        return woke
 
     def peers(self, agent):
         return [a for a in self.agents if a != agent]
