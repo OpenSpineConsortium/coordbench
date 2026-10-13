@@ -1,16 +1,25 @@
 #!/bin/bash
-# Build one CooperBench task image here: the task's own Dockerfile, with the
-# proxy's CA bundle trusted so git, pip and uv can reach the network, and the
-# base image taken from mirror.gcr.io since Docker Hub rate-limits this host.
-# The proxy serves HTTPS only (a plain-HTTP request gets 405), so no
-# HTTP_PROXY is passed.
+# Build one CooperBench task image here from the task's own Dockerfile.
+# In a Claude Code cloud session, whose outbound traffic goes through an
+# egress proxy with a CA of its own (/root/.ccr/ca-bundle.crt), the
+# Dockerfile is rewritten first: the proxy's CA is trusted so git, pip and
+# uv can reach the network, the base image is taken from mirror.gcr.io
+# since Docker Hub rate-limits that host, and the apt step is dropped
+# since deb.debian.org is outside the session's egress policy (the full
+# image already holds what it installs). The proxy serves HTTPS only (a
+# plain-HTTP request gets 405), so no HTTP_PROXY is passed. On a host with
+# no such CA file (a GitHub-hosted runner, a machine of the owner's) the
+# Dockerfile builds as the dataset wrote it.
+# Usage: build_task_image.sh <task directory> <image tag>
 set -euo pipefail
 task_dir=$1
 tag=$2
 ctx=$(mktemp -d)
 cp -r "$task_dir"/. "$ctx"/
-cp /root/.ccr/ca-bundle.crt "$ctx"/proxy-ca.crt
-python3 - "$ctx/Dockerfile" <<'PY'
+ca=${COORDBENCH_PROXY_CA:-/root/.ccr/ca-bundle.crt}
+if [ -f "$ca" ]; then
+    cp "$ca" "$ctx"/proxy-ca.crt
+    python3 - "$ctx/Dockerfile" <<'PY'
 import re, sys
 path = sys.argv[1]
 text = open(path).read()
@@ -36,8 +45,11 @@ def mirror(match):
 text = re.sub(r"^FROM\s+(\S+)(.*)$", mirror, text, count=1, flags=re.M)
 open(path, "w").write(text)
 PY
-docker build --network host \
-  --build-arg HTTPS_PROXY="$HTTPS_PROXY" --build-arg https_proxy="$HTTPS_PROXY" \
-  --build-arg NO_PROXY="$NO_PROXY" \
-  -t "$tag" "$ctx"
+    docker build --network host \
+      --build-arg HTTPS_PROXY="${HTTPS_PROXY:-}" --build-arg https_proxy="${HTTPS_PROXY:-}" \
+      --build-arg NO_PROXY="${NO_PROXY:-}" \
+      -t "$tag" "$ctx"
+else
+    docker build -t "$tag" "$ctx"
+fi
 rm -rf "$ctx"

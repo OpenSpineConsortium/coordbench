@@ -243,6 +243,9 @@ class FakeDocker:
         self.git_setups = {}
         self.git_breaks = False
         self.environments = {}
+        # What the agent's session transcript holds, as the driver reads
+        # it back from the container's config directory.
+        self.transcript = ""
 
     def __call__(self, *args, input=None, timeout=None, output=None, extra_env=None):
         args = [str(arg) for arg in args]
@@ -273,6 +276,8 @@ class FakeDocker:
             return (0, "/usr/bin/python3\n") if self.python else (1, "")
         if args[0] == "exec" and args[-2:] == ["cat", "/workspace/repo/patch.txt"]:
             return self.patch_of(args[1])
+        if args[0] == "exec" and args[-2] == "-c" and "projects -name '*.jsonl'" in args[-1]:
+            return 0, self.transcript
         if args[0] == "exec" and args[-2] == "-lc" and "git remote add team" in args[-1]:
             return self.set_up_git(args[-4], args[-1])
         if args[0] == "exec" and args[-2] == "-lc" and runner.GIT_READ_MARK in args[-1]:
@@ -1244,6 +1249,39 @@ class TheSessionDriver(RunnerCase):
 
 
 class Runs(RunnerCase):
+    def test_a_credential_an_agent_printed_is_scrubbed_from_every_file_the_pair_left(self):
+        """An agent that prints its environment writes the subscription
+        token into its stream, its transcript and what it told its peer;
+        a pair's files may be published (a workflow's artifact), so the
+        exact value is replaced wherever it landed, the gzip trajectory
+        included, once the pair's last file is written."""
+        confession = json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": f"my environment: CLAUDE_CODE_OAUTH_TOKEN={SECRET}"}]}})
+        self.docker.stream = confession + "\n" + SAMPLE_STREAM
+        self.docker.transcript = json.dumps({"type": "assistant", "uuid": "u1", "timestamp": "2026-01-01T00:00:00Z",
+                                             "message": {"role": "assistant", "content": [
+                                                 {"type": "text", "text": f"token {SECRET} here"}]}}) + "\n"
+
+        def agent_tells_its_peer(arguments, environment):
+            if env_value(arguments, "COORD_RPC_URL").endswith("/agent1"):
+                call_tool(env_value(arguments, "COORD_RPC_URL"), "send_message",
+                          {"to": "agent2", "text": f"use {SECRET}"}, token=environment["COORD_AGENT_TOKEN"])
+
+        self.docker.on_claude = agent_tells_its_peer
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        pair = self.pair()
+        stream = (pair / "agent1_stream.jsonl").read_text()
+        self.assertIn(runner.SCRUBBED, stream)
+        self.assertIn(runner.SCRUBBED, (pair / "events.jsonl").read_text())
+        self.assertIn(runner.SCRUBBED, (pair / "agent1_session.jsonl").read_text())
+        self.assertIn("is scrubbed out", err)
+        for path in self.logs.rglob("*"):
+            if path.is_file():
+                data = gzip.open(path, "rb").read() if path.suffix == ".gz" else path.read_bytes()
+                self.assertNotIn(SECRET.encode(), data, str(path))
+        self.assert_secret_nowhere()
+
     def test_a_coop_pair_leaves_cooperbench_s_layout(self):
         def agent_sends_a_message(arguments, environment):
             # As claude in the container would: the hub's token from the
@@ -2745,3 +2783,58 @@ class MachineFailuresAndReferenceMerges(RunnerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Scrubbing(unittest.TestCase):
+    """scrub_credentials on its own: every file under the directories, a
+    gzip file through gzip, the longest value first, a short placeholder
+    left alone, and a symlink never followed."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-scrub-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_every_file_under_the_directories_is_rewritten_and_the_rest_left_alone(self):
+        deep = self.tmp / "pair" / "deep"
+        deep.mkdir(parents=True)
+        (deep / "stream.jsonl").write_text(f"a {SECRET} b\n")
+        (self.tmp / "pair" / "clean.txt").write_text("nothing here\n")
+        with gzip.open(self.tmp / "pair" / "trajectory.json.gz", "wb") as packed:
+            packed.write(f'{{"text": "{SECRET}"}}'.encode())
+        (self.tmp / "hub").mkdir()
+        (self.tmp / "hub" / "events.log").write_bytes(b"\x00" + SECRET.encode() + b"\xff")
+        (self.tmp / "elsewhere.txt").write_text(SECRET + "\n")
+        before = (self.tmp / "pair" / "clean.txt").stat().st_mtime_ns
+        rewritten = runner.scrub_credentials([self.tmp / "pair", self.tmp / "hub", self.tmp / "missing"],
+                                             values=[SECRET])
+        self.assertEqual(sorted(str(path.relative_to(self.tmp)) for path in rewritten),
+                         ["hub/events.log", "pair/deep/stream.jsonl", "pair/trajectory.json.gz"])
+        self.assertEqual((deep / "stream.jsonl").read_text(), f"a {runner.SCRUBBED} b\n")
+        self.assertEqual(gzip.open(self.tmp / "pair" / "trajectory.json.gz", "rb").read(),
+                         f'{{"text": "{runner.SCRUBBED}"}}'.encode())
+        self.assertEqual((self.tmp / "hub" / "events.log").read_bytes(),
+                         b"\x00" + runner.SCRUBBED.encode() + b"\xff")
+        self.assertEqual((self.tmp / "pair" / "clean.txt").stat().st_mtime_ns, before)
+        self.assertEqual((self.tmp / "elsewhere.txt").read_text(), SECRET + "\n")
+
+    def test_the_values_come_from_the_token_s_names_longest_first_and_short_ones_are_ignored(self):
+        environ = {"CLAUDE_CODE_OAUTH_TOKEN": SECRET, "COORDBENCH_CLAUDE_TOKEN": SECRET + "-longer",
+                   "COORD_ADMIN_TOKEN": ADMIN_SECRET}
+        self.assertEqual(runner.credential_values(environ), [SECRET + "-longer", SECRET])
+        self.assertEqual(runner.credential_values({"CLAUDE_CODE_OAUTH_TOKEN": "short"}), [])
+        self.assertEqual(runner.credential_values({}), [])
+        (self.tmp / "file.txt").write_text("short text\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "short"}, clear=False):
+            self.assertEqual(runner.scrub_credentials([self.tmp]), [])
+        self.assertEqual((self.tmp / "file.txt").read_text(), "short text\n")
+        self.assertEqual(runner.scrub_bytes(b"x" + SECRET.encode() + b"-longer", [SECRET + "-longer", SECRET]),
+                         b"x" + runner.SCRUBBED.encode())
+
+    def test_a_symlink_is_not_followed(self):
+        outside = self.tmp / "outside.txt"
+        outside.write_text(SECRET + "\n")
+        inside = self.tmp / "pair"
+        inside.mkdir()
+        (inside / "link.txt").symlink_to(outside)
+        self.assertEqual(runner.scrub_credentials([inside], values=[SECRET]), [])
+        self.assertEqual(outside.read_text(), SECRET + "\n")

@@ -199,6 +199,7 @@ alone (mode 0o600).
 
 import argparse
 import contextlib
+import gzip
 import importlib
 import importlib.util
 import json
@@ -613,6 +614,78 @@ def environment_without_secrets():
     """For the hub, the scorer and git: none of them needs the agents'
     credentials or the runner's hub token, so none of them gets them."""
     return {name: value for name, value in os.environ.items() if name not in SECRET_NAMES}
+
+
+# What the agents' credential reads as wherever a file held it.
+SCRUBBED = "[credential scrubbed by coordbench]"
+# A credential shorter than this is a placeholder, not a token, and is
+# left alone: replacing a few characters everywhere would damage the
+# files the scrub is meant to keep.
+SHORTEST_CREDENTIAL = 12
+
+
+def credential_values(environ=None):
+    """The subscription token's value under every name it may carry, the
+    longest first, so one that contains another is replaced whole."""
+    environ = os.environ if environ is None else environ
+    values = {environ.get(name) or "" for name in (*drivers.PASSED_BY_NAME, drivers.TOKEN_ALIAS)}
+    return sorted((value for value in values if len(value) >= SHORTEST_CREDENTIAL), key=len, reverse=True)
+
+
+def scrub_bytes(data, values):
+    for value in values:
+        data = data.replace(value.encode("utf-8"), SCRUBBED.encode("utf-8"))
+    return data
+
+
+def scrub_file(path, values):
+    """True when the file held a credential and was rewritten in place,
+    with its mode kept; a gzip file (export.py's trajectory.json.gz) is
+    read and written through gzip."""
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as source:
+        data = source.read()
+    cleaned = scrub_bytes(data, values)
+    if cleaned == data:
+        return False
+    with opener(path, "wb") as target:
+        target.write(cleaned)
+    return True
+
+
+def scrub_credentials(directories, values=None):
+    """Replace the exact value of the agents' credential wherever a file
+    under the directories holds it: an agent that prints its environment
+    writes the token into its stream, its session transcript and whatever
+    it said to its peers, and a run whose files are published (a
+    workflow's artifact) would publish it. Returns the files rewritten."""
+    values = credential_values() if values is None else values
+    if not values:
+        return []
+    rewritten = []
+    for directory in directories:
+        directory = Path(directory)
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                if scrub_file(path, values):
+                    rewritten.append(path)
+            except OSError as problem:
+                say(f"scrubbing {path} failed: {problem}")
+    return rewritten
+
+
+def scrub_pair(plan):
+    """The pair's directory and the hub's, once the pair's last file is
+    written; one line says when the credential was found, since an agent
+    that printed it is worth knowing about."""
+    hub_dir = Path(plan["log_dir"]) / plan["run_name"] / "hub"
+    rewritten = scrub_credentials([plan["run_dir"], hub_dir])
+    if rewritten:
+        say(f"{plan['run_id']}: the agents' credential was in {len(rewritten)} files and is scrubbed out of them")
 
 
 def wait_for_first_line(path, process, timeout):
@@ -1561,9 +1634,10 @@ def release_run(plan, hub):
 
 
 def finish_pair(plan, driver, handles, hub):
-    """Wait, record, tear down, score; returns the pair's verdict. When the
-    wait is interrupted the run is still closed, so the arm frees what it
-    took (Arm.teardown), and the containers still go."""
+    """Wait, record, tear down, score, scrub; returns the pair's verdict.
+    When the wait is interrupted the run is still closed, so the arm frees
+    what it took (Arm.teardown), and the containers still go; the scrub
+    runs last either way, since the credential may be in any file."""
     try:
         outcomes = wait_agents(plan, driver, handles)
         ended = now()
@@ -1571,10 +1645,12 @@ def finish_pair(plan, driver, handles, hub):
         write_outputs(plan, outcomes, metrics, events, ended, artifacts)
     except BaseException:
         abandon(plan, hub)
+        scrub_pair(plan)
         raise
     teardown(plan)
     evaluation = score(plan)
     conclude(plan)
+    scrub_pair(plan)
     return verdict(outcomes, evaluation)
 
 
@@ -1631,6 +1707,7 @@ def record_failure(plan, hub, problem):
     teardown(plan)
     conclude(plan)
     save_plan(plan)
+    scrub_pair(plan)
 
 
 def verdict(outcomes, evaluation):
