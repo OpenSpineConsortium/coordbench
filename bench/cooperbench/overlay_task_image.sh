@@ -10,18 +10,21 @@
 # that CA, since pip in runner.sh, claude to the API, git and npm all go
 # through it. A host with no such file (a GitHub-hosted runner, a
 # machine of the owner's) gets no trust lines.
-# A glibc image gets this host's own claude binary, or the one
-# COORDBENCH_CLAUDE_BIN names (the fake agent, in a run that spends no
-# usage); an Alpine (musl) image, where that binary cannot run, gets Node
-# from the official Alpine image and the same Claude Code version from
-# npm, whose registry the policy allows. The image is labelled with the
-# version it carries, so prepare_task.sh overlays it again when the
-# host's version changes.
+# A glibc image gets this host's own claude binary; an Alpine (musl)
+# image, where that binary cannot run, gets Node from the official Alpine
+# image and the same Claude Code version from npm, whose registry the
+# policy allows. A stand-in named in COORDBENCH_CLAUDE_BIN (a script, in
+# a run that spends no usage) is copied into every image in claude's
+# place, musl or not, and nothing is installed over it. The image is
+# labelled with the version it carries, so prepare_task.sh overlays it
+# again when the host's version changes.
 # Usage: overlay_task_image.sh <image>
 set -euo pipefail
 image=$1
 ctx=$(mktemp -d)
-claude_bin=$(readlink -f "${COORDBENCH_CLAUDE_BIN:-$(command -v claude)}")
+# command -v first, so a bare name or a relative path means here what it
+# means to setup.sh's and prepare_task.sh's own "$COORDBENCH_CLAUDE_BIN --version".
+claude_bin=$(readlink -f "$(command -v "${COORDBENCH_CLAUDE_BIN:-claude}")")
 version=$("$claude_bin" --version | awk '{print $1}')
 registry=${COORDBENCH_REGISTRY:-mirror.gcr.io/library}
 ca=${COORDBENCH_PROXY_CA:-/root/.ccr/ca-bundle.crt}
@@ -41,7 +44,7 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/proxy-ca-bundle.crt \
 fi
 redis='RUN pip install -q redis || pip3 install -q redis || python3 -m pip install -q --break-system-packages redis'
 labels="LABEL cooperbench.overlay=$origin cooperbench.claude=$version"
-if docker run --rm --entrypoint sh "$image" -c 'test -e /lib/ld-musl-x86_64.so.1'; then
+if [ -z "${COORDBENCH_CLAUDE_BIN:-}" ] && docker run --rm --entrypoint sh "$image" -c 'test -e /lib/ld-musl-x86_64.so.1'; then
     cat > "$ctx"/Dockerfile <<DOCKER
 FROM $registry/node:22-alpine AS node
 FROM $image

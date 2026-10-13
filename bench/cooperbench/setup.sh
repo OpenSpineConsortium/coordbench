@@ -28,10 +28,13 @@ fi
 docker info >/dev/null
 
 if ! command -v uv >/dev/null 2>&1; then
+    # pipx where the host has it (GitHub's runners do); else pip for the
+    # user, and once more past PEP 668 on a system Python that refuses a
+    # user install, since uv is one binary and leaves the system alone.
     if command -v pipx >/dev/null 2>&1; then
         pipx install -q uv
     else
-        python3 -m pip install -q --user uv
+        python3 -m pip install -q --user uv || python3 -m pip install -q --user --break-system-packages uv
     fi
 fi
 uv --version >/dev/null

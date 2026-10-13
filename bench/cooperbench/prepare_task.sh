@@ -35,4 +35,11 @@ else
     fi
     "$here/overlay_task_image.sh" "$image" >/dev/null
 fi
-(cd "$work" && LITELLM_LOCAL_MODEL_COST_MAP=True .venv/bin/python scripts/check_gradeable.py "$repo/task$task" --backend docker --workers 2)
+# The gradeability check runs each feature's tests twice in task containers,
+# minutes a task; the workflow's run jobs skip it, since the survey job
+# checked the task already and a pair's eval would show a broken task anyway.
+if [ -n "${COORDBENCH_SKIP_GRADEABLE:-}" ]; then
+    echo "gradeability check skipped (COORDBENCH_SKIP_GRADEABLE is set)"
+else
+    (cd "$work" && LITELLM_LOCAL_MODEL_COST_MAP=True .venv/bin/python scripts/check_gradeable.py "$repo/task$task" --backend docker --workers 2)
+fi

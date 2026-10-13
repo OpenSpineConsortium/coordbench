@@ -2781,9 +2781,6 @@ class MachineFailuresAndReferenceMerges(RunnerCase):
         self.assertFalse((self.logs / "t").exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class Scrubbing(unittest.TestCase):
     """scrub_credentials on its own: every file under the directories, a
@@ -2838,3 +2835,86 @@ class Scrubbing(unittest.TestCase):
         (inside / "link.txt").symlink_to(outside)
         self.assertEqual(runner.scrub_credentials([inside], values=[SECRET]), [])
         self.assertEqual(outside.read_text(), SECRET + "\n")
+
+    def test_an_archive_is_left_whole_and_an_earlier_attempt_is_scrubbed_before_it_is_packed(self):
+        run_dir = self.tmp / "pair"
+        run_dir.mkdir()
+        (run_dir / "a.txt").write_text(f"token {SECRET}\n")
+        (run_dir / "b.txt").write_text("clean\n")
+        stray = self.tmp / "pair" / "agent-made.tar.gz"
+        with tarfile.open(stray, "w:gz") as bundle:
+            bundle.add(run_dir / "a.txt", arcname="a.txt")
+        stray_bytes = stray.read_bytes()
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": SECRET}, clear=False):
+            archive = runner.set_aside_earlier_attempt(run_dir)
+        with tarfile.open(archive) as bundle:
+            self.assertEqual(sorted(bundle.getnames()), ["a.txt", "agent-made.tar.gz", "b.txt"])
+            self.assertEqual(bundle.extractfile("a.txt").read(), f"token {runner.SCRUBBED}\n".encode())
+            self.assertEqual(bundle.extractfile("agent-made.tar.gz").read(), stray_bytes)
+        archive_bytes = archive.read_bytes()
+        self.assertEqual(runner.scrub_credentials([run_dir], values=[SECRET]), [])
+        self.assertEqual(archive.read_bytes(), archive_bytes)
+        self.assertFalse((run_dir / "a.txt").exists())
+
+    def test_a_scrubbed_gzip_has_no_name_and_no_time_in_its_header(self):
+        path = self.tmp / "trajectory.json.gz"
+        path.write_bytes(gzip.compress(f'{{"text": "{SECRET}"}}'.encode(), mtime=0))
+        self.assertEqual(runner.scrub_credentials([self.tmp], values=[SECRET]), [path])
+        header = path.read_bytes()[:10]
+        self.assertEqual(header[4:8], b"\x00\x00\x00\x00")
+        self.assertEqual(header[3] & 0x08, 0)
+        self.assertEqual(path.read_bytes(), gzip.compress(f'{{"text": "{runner.SCRUBBED}"}}'.encode(), mtime=0))
+
+    def test_a_broken_gzip_is_said_and_the_other_files_are_still_scrubbed(self):
+        (self.tmp / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00" + SECRET.encode())
+        (self.tmp / "stream.jsonl").write_text(SECRET + "\n")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            rewritten = runner.scrub_credentials([self.tmp], values=[SECRET])
+        self.assertEqual(rewritten, [self.tmp / "stream.jsonl"])
+        self.assertIn("scrubbing", err.getvalue())
+        self.assertIn("broken.gz", err.getvalue())
+        self.assertEqual((self.tmp / "stream.jsonl").read_text(), runner.SCRUBBED + "\n")
+
+    def test_a_file_that_cannot_be_rewritten_fails_the_scrub_once_the_rest_is_done(self):
+        (self.tmp / "a_stream.jsonl").write_text(SECRET + "\n")
+        (self.tmp / "b_stream.jsonl").write_text(SECRET + "\n")
+        real = runner.write_scrubbed
+
+        def refusing(path, cleaned):
+            if path.name == "a_stream.jsonl":
+                raise PermissionError(13, "Permission denied")
+            real(path, cleaned)
+
+        with mock.patch.object(runner, "write_scrubbed", refusing):
+            with self.assertRaises(runner.CredentialKept) as caught:
+                runner.scrub_credentials([self.tmp], values=[SECRET])
+        self.assertIn("a_stream.jsonl", str(caught.exception))
+        self.assertIn("could not be rewritten", str(caught.exception))
+        self.assertEqual((self.tmp / "b_stream.jsonl").read_text(), runner.SCRUBBED + "\n")
+
+    def test_a_pair_scrubs_its_own_hub_events_and_the_hub_s_files_wait_for_the_hub_to_stop(self):
+        run_dir = self.tmp / "run" / "arm" / "pair"
+        hub = self.tmp / "run" / "hub"
+        (hub / "mine").mkdir(parents=True)
+        (hub / "other").mkdir()
+        run_dir.mkdir(parents=True)
+        for path in (run_dir / "stream.jsonl", hub / "mine" / "events.jsonl", hub / "other" / "events.jsonl",
+                     hub / "hub.log"):
+            path.write_text(SECRET + "\n")
+        plan = {"log_dir": str(self.tmp), "run_name": "run", "run_dir": str(run_dir), "run_id": "mine"}
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": SECRET}, clear=False):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                runner.scrub_pair(plan)
+            self.assertIn("was in 2 files", err.getvalue())
+            self.assertEqual((run_dir / "stream.jsonl").read_text(), runner.SCRUBBED + "\n")
+            self.assertEqual((hub / "mine" / "events.jsonl").read_text(), runner.SCRUBBED + "\n")
+            self.assertEqual((hub / "other" / "events.jsonl").read_text(), SECRET + "\n")
+            self.assertEqual((hub / "hub.log").read_text(), SECRET + "\n")
+            with contextlib.redirect_stderr(io.StringIO()):
+                runner.scrub_hub(hub)
+            self.assertEqual((hub / "hub.log").read_text(), runner.SCRUBBED + "\n")
+            self.assertEqual((hub / "other" / "events.jsonl").read_text(), SECRET + "\n")
+
+
+if __name__ == "__main__":
+    unittest.main()
