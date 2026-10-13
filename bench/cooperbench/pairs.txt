@@ -1,0 +1,27 @@
+# The pre-registered pair list of bench/cooperbench/PLAN.md: one entry per
+# task, which names every flash pair of that task, read by the dispatch
+# input "pairs: @bench/cooperbench/pairs.txt". These are the 43 pairs of
+# CooperBench's flash subset whose gold patches graded in the cloud
+# session (bench/cooperbench/README.md, the table of 2026-10-09; go_chi 56
+# graded in one check of three there), 17 tasks; the three tasks left out
+# (openai_tiktoken 0, dottxt_ai_outlines 1706, llama_index 18813) download
+# at test time from hosts the session could not reach. The list changes
+# only as PLAN.md says: from the survey run on GitHub's runners, before
+# the first real dispatch.
+pallets_click_task/2068
+pallets_click_task/2800
+pallets_click_task/2956
+pallets_jinja_task/1465
+pallets_jinja_task/1559
+pallets_jinja_task/1621
+pillow_task/25
+pillow_task/68
+pillow_task/290
+typst_task/6554
+dottxt_ai_outlines_task/1655
+dspy_task/8394
+huggingface_datasets_task/3997
+huggingface_datasets_task/6252
+samuelcolvin_dirty_equals_task/43
+go_chi_task/26
+go_chi_task/56

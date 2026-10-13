@@ -1,0 +1,82 @@
+#!/bin/sh
+# A stand-in for claude in a run that spends no usage, so the whole path
+# (the task images, the containers, the hub, the git server, CooperBench's
+# scoring and the workflow's artifacts) runs on a GitHub-hosted runner
+# before any token does. The claude-cli driver execs it in the task
+# container with claude's own flags and the prompt after "--", and it
+# answers in Claude Code's stream-json, so the driver reads it as an
+# agent: it makes one small change in a file of its own, tells its peers
+# through whatever coordination commands the arm installed (coop-send;
+# the sdlc arm's claim, pull request and ready), writes patch.txt as the
+# prompt asks, and ends with a result event of zero usage. Every pair it
+# runs fails CooperBench's tests by design, since it implements nothing;
+# what a fake run checks is that the infrastructure ran, so its report
+# wants infrastructure_errors 0 and every agent Submitted.
+# `fake_claude --version` prints a version, so the overlay can label the
+# image with it as it labels one with the real binary's. It is POSIX sh,
+# since the Alpine task images have no bash.
+set -u
+if [ "${1:-}" = "--version" ]; then
+    echo "0.0.0-fake (Claude Code)"
+    exit 0
+fi
+started=$(( $(date +%s) * 1000 ))
+prompt=""
+after_dashes=0
+for word in "$@"; do
+    if [ "$after_dashes" = 1 ]; then prompt=$word; break; fi
+    [ "$word" = "--" ] && after_dashes=1
+done
+agent=${COORD_RPC_URL##*/}
+agent=${agent:-agent}
+
+say() {
+    # One assistant event, as Claude Code streams one.
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$1"
+}
+
+printf '{"type":"system","subtype":"init","session_id":"fake-%s","tools":["Bash"],"mcp_servers":[],"model":"%s","claude_code_version":"0.0.0-fake"}\n' \
+    "$agent" "${ANTHROPIC_MODEL:-fake}"
+cd /workspace/repo 2>/dev/null || true
+file="coordbench_fake_$agent.txt"
+echo "A change by the fake agent $agent, for the infrastructure check; it implements no feature." > "$file"
+git add -N "$file" >/dev/null 2>&1 || true
+say "fake agent $agent: changed $file"
+
+if command -v coop-agents >/dev/null 2>&1; then
+    for peer in $(coop-agents 2>/dev/null); do
+        [ "$peer" = "$agent" ] && continue
+        coop-send "$peer" "fake $agent here: I change only $file" >/dev/null 2>&1 || true
+    done
+    coop-recv >/dev/null 2>&1 || true
+    say "fake agent $agent: told the peers"
+fi
+
+issue=$(printf '%s' "$prompt" | grep -o 'Your issue is \*\*#[0-9]*' | grep -o '[0-9]*$' || true)
+if [ -n "$issue" ] && command -v sdlc-claim >/dev/null 2>&1; then
+    base=$(git rev-parse HEAD)
+    sdlc-claim "$issue" >/dev/null 2>&1 || true
+    git checkout -q -b "claude/$issue" 2>/dev/null || git checkout -q "claude/$issue"
+    git add "$file"
+    git -c user.name="$agent" -c user.email=agent@cooperbench.local commit -q -m "fake: $file" || true
+    git push -q team "claude/$issue" >/dev/null 2>&1 || true
+    sdlc-pr "$issue" >/dev/null 2>&1 || true
+    for _ in 1 2 3; do
+        answer=$(sdlc-ready "$issue" 2>&1 || true)
+        case $answer in
+            *"main moved"*)
+                git fetch -q team >/dev/null 2>&1 || true
+                git merge -q --no-edit team/main >/dev/null 2>&1 || { git checkout --theirs . ; git add -A; git commit -q -m "merge main" || true; }
+                git push -q team "claude/$issue" >/dev/null 2>&1 || true ;;
+            *) break ;;
+        esac
+    done
+    git fetch -q team >/dev/null 2>&1 || true
+    git diff "$base" team/main > patch.txt 2>/dev/null || git diff "$base" HEAD > patch.txt
+    say "fake agent $agent: claimed, opened and readied #$issue"
+else
+    git diff > patch.txt 2>/dev/null || true
+fi
+ended=$(( $(date +%s) * 1000 ))
+printf '{"type":"result","subtype":"success","is_error":false,"num_turns":3,"total_cost_usd":0,"duration_ms":%d,"duration_api_ms":0,"result":"Done.","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}\n' \
+    $((ended - started))

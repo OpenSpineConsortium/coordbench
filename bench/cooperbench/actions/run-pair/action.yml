@@ -1,0 +1,84 @@
+name: Run one CooperBench pair
+description: >-
+  One (pair, arm) of .github/workflows/bench.yml on this runner: free the
+  disk, skip the pair when an artifact of its name already holds a
+  finished pair, else run pair.sh. The fake and real jobs of the
+  workflow share these steps; the upload stays in the job, since it must
+  run whatever these steps did. In a real run the job sets
+  CLAUDE_CODE_OAUTH_TOKEN in its environment and these steps read it by
+  name only; in a fake run none is set and none is read.
+inputs:
+  mode:
+    description: fake or real
+    required: true
+  arm:
+    required: true
+  repo:
+    required: true
+  task:
+    required: true
+  features:
+    description: the pair as f1_f6
+    required: true
+  name:
+    description: the run name, which is the directory under the logs
+    required: true
+  artifact:
+    description: the artifact's name, which says whether the pair is done
+    required: true
+  model:
+    required: false
+    default: claude-sonnet-5-5
+  timeout_min:
+    required: false
+    default: "120"
+outputs:
+  skip:
+    description: "true when an artifact of the name already holds a finished pair"
+    value: ${{ steps.finished.outputs.skip }}
+  run_dir:
+    description: the directory the pair wrote, to upload
+    value: ${{ steps.pair.outputs.run_dir }}
+runs:
+  using: composite
+  steps:
+    - name: Free the disk for the task image
+      shell: bash
+      run: bash bench/cooperbench/actions/free_disk.sh
+
+    - name: Skip a pair an earlier dispatch finished
+      id: finished
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        ARTIFACT: ${{ inputs.artifact }}
+      run: |
+        if python3 bench/cooperbench/actions/artifacts.py finished "$ARTIFACT"; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Refuse a real run with no token
+      if: inputs.mode == 'real' && steps.finished.outputs.skip != 'true'
+      shell: bash
+      run: |
+        if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+          echo "::error::no Claude token for this account: the organization secret the plan names is unset or not shared with this repository"
+          exit 1
+        fi
+
+    - name: Run the pair
+      if: steps.finished.outputs.skip != 'true'
+      id: pair
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        ARM: ${{ inputs.arm }}
+        REPO: ${{ inputs.repo }}
+        TASK: ${{ inputs.task }}
+        FEATURES: ${{ inputs.features }}
+        RUN_NAME: ${{ inputs.name }}
+        MODEL: ${{ inputs.model }}
+        TIMEOUT_MIN: ${{ inputs.timeout_min }}
+      run: bash bench/cooperbench/actions/pair.sh

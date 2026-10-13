@@ -125,6 +125,43 @@ object under a workspace kept with --keep, or the token encoded some
 other way, is outside it, as is the log of a hub started elsewhere
 (--hub), which is that hub's to keep.
 
+## In GitHub Actions
+
+.github/workflows/bench.yml runs the same kit on GitHub's runners, one job
+per pair and arm, with the report job setting the arms side by side from
+the pairs' artifacts. It has three modes, chosen when it is dispatched:
+
+- survey: CooperBench's gradeability check on each task of the pair list,
+  with no agent, whose table (survey_report.py) says which pairs grade on
+  a runner and whether the largest images fit; PLAN.md's pair list is
+  fixed from it.
+- fake: every pair with fake_claude as the agent, so the whole path (the
+  images, the containers, the hub, the git server, the scorer and the
+  artifacts) runs and no usage is spent. A pull request that changes the
+  kit, the workflow or the runner runs one pair this way.
+- real: Claude Code on the owner's accounts. Every real job waits in the
+  environment bench until a reviewer approves the run; it reads its
+  account's token from the organization secret SYMPHONY_CLAUDE_<account>
+  by name, and runs in the concurrency group of its account, one job at a
+  time, up to 100 waiting in order.
+
+The owner sets up, once: an organization secret SYMPHONY_CLAUDE_<NAME>
+per account, its value from `claude setup-token` on that account, shared
+with this repository; the repository variable SYMPHONY_CLAUDE_ACCOUNTS
+with the names, separated by commas; and the environment bench in this
+repository with the owner as a required reviewer. The token's value is
+never in a log: run.py passes it to the agents by name, and after each
+pair scrubs it out of every file the pair left (above).
+
+A dispatch names a tag; its artifacts are `<tag>__<arm>__<repo>__<task>__f1_f6`,
+kept 90 days, and a dispatch of the same tag skips every pair whose
+artifact holds an eval.json, so a run that stopped on a usage limit is
+finished by dispatching it again. The pairs come from PLAN.md's list
+(`@bench/cooperbench/pairs.txt`), from `flash`, or from entries such as
+`pallets_click_task/2068`. The report is the artifact
+`report-<tag>-<run id>` and the job summary; METRICS.md says where each
+of the paper's statistics is in it.
+
 ## Steps, in the new session
 
 1. `bash bench/cooperbench/setup.sh`: Docker, CooperBench, Redis, the git server.
@@ -228,5 +265,12 @@ which is why the steps take one task at a time.
   audit and the gradeability checks; tested in
   tests/test_experiment_dataset_stats.py.
 - overlay_task_image.sh, build_task_image.sh: the image steps on their own.
+- fake_claude: the stand-in agent of a run that spends no usage (above).
+- actions/: what .github/workflows/bench.yml runs: plan.py (the matrix),
+  run-pair/action.yml and pair.sh (one pair and arm), survey_task.sh,
+  artifacts.py (the resume and the report's download), report.sh and
+  survey_report.py, free_disk.sh; tested in tests/test_experiment_actions.py.
+- PLAN.md, pairs.txt, METRICS.md: the benchmark pre-registered, its pair
+  list, and where each of the paper's statistics is in the report.
 - cooperbench-claude-code-setup.patch: the adapter's installer skips the
   install when claude is already in the image.
