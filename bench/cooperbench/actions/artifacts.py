@@ -84,7 +84,9 @@ def list_artifacts(conf, name=None, opener=None):
     """Every artifact not expired, newest first as GitHub lists them; by
     exact name when one is given. Returns the list and whether it was cut
     short at MOST_PAGES pages, since the API filters by exact name only
-    and a tag's artifacts may lie past the newest 5000."""
+    and a tag's artifacts may lie past the newest 5000: cut when the
+    listing's total_count says more lie beyond the last page read, and,
+    should an answer lack the count, whenever that page was full."""
     found = []
     for page in range(1, MOST_PAGES + 1):
         query = f"?per_page={PAGE}&page={page}" + (f"&name={urllib.parse.quote(name)}" if name else "")
@@ -92,7 +94,8 @@ def list_artifacts(conf, name=None, opener=None):
         found.extend(a for a in answer.get("artifacts", []) if not a.get("expired"))
         if len(answer.get("artifacts", [])) < PAGE:
             return found, False
-    return found, True
+    total = answer.get("total_count")
+    return found, not isinstance(total, int) or total > PAGE * MOST_PAGES
 
 
 def by_name(artifacts, prefix=""):
@@ -163,9 +166,20 @@ def zip_state(data, mode="fake"):
         evals = [name for name in names if name.endswith("eval.json")]
         if not results:
             return "unfinished"
-        result = json.loads(packed.read(results[0]))
-        evaluation = json.loads(packed.read(evals[0])) if evals else None
+        result = parsed(packed.read(results[0]))
+        evaluation = parsed(packed.read(evals[0])) if evals else None
     return pair_state(result, evaluation, mode)
+
+
+def parsed(data):
+    """A member's JSON, or None when it does not parse, as read_json and
+    run.py read a file: a write a full disk cut short leaves an empty
+    eval.json, which is an unscored pair, not an artifact nobody can read,
+    so it never hides an older finished attempt of the name."""
+    try:
+        return json.loads(data)
+    except ValueError:
+        return None
 
 
 def holds_finished_pair(data, mode="fake"):

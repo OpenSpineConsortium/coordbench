@@ -125,9 +125,13 @@ object under the team arm's shared/ copy or a workspace kept with
 --keep, or the token encoded some other way, is outside it, as is the
 log of a hub started elsewhere (--hub), which is that hub's to keep.
 `run.py scrub --run-dir DIR` runs the scrub once more over a run
-directory and reads every file back, archives' members and git objects
-(loose ones and packfiles, inflated) included, and exits 2 when any
-still holds the token or could not be read; the workflow's jobs run it
+directory, removing first every symlink and special file in it (the
+upload would follow a symlink to a file the scrub never read), and
+reads every file back, the members of an archive named .tar, .tar.gz,
+.tgz or .zip (each read as its bytes) and the git objects where a
+repository keeps them (loose ones and packfiles, inflated, with each
+delta applied to its base) included, and exits 2 when any still holds
+the token or could not be read; the workflow's jobs run it
 before an upload, after stopping any agent container still up, and
 publish nothing it refused. The team arm's shared/ is copied into every
 pair and published with it.
@@ -146,7 +150,8 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
   images, the containers, the hub, the git server, the scorer and the
   artifacts) runs and no usage is spent. A pull request that changes the
   kit (bench/cooperbench/), the workflow or the package coordbench/ runs
-  one fake pair per arm of a smoke set as its check.
+  one fake pair, pallets_click 2068's features 1 and 6, under three arms
+  (solo, coop-git and sdlc) as its check.
 - real: Claude Code on the owner's accounts. One job, approve, waits in
   the environment bench until a reviewer approves the dispatch, once;
   every real job needs it and carries no environment of its own, since a
@@ -156,12 +161,13 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
   the slot a number from 1 to 8, and runs in the concurrency group of its
   slot, one job at a time, up to 100 waiting, first in first out as far
   as GitHub keeps it; a dispatch holds at most 256 jobs, GitHub's limit
-  on one matrix. The 100 is the group's across every dispatch, so a
-  second dispatch while the first still queues gets its jobs past that
-  number cancelled by GitHub: plan.py keeps each dispatch under it, and
-  nothing checks the queue for you, so dispatch the same tag again only
-  when no run of an earlier dispatch is still queued (Actions > Bench:
-  no run of the tag in progress). One dispatch holds the whole list only
+  on one matrix. The 100 is the group's across every real dispatch,
+  whatever its tag, so a second dispatch while an earlier one still
+  queues gets its jobs past that number cancelled by GitHub: plan.py
+  keeps each dispatch under it, and nothing checks the queue for you, so
+  make a real dispatch only when no earlier real run is still queued or
+  in progress (Actions > Bench lists every dispatch as Bench, without its
+  tag; a run's tag is in its plan job's summary). One dispatch holds the whole list only
   with at least ceil(pairs x arms / 100) accounts: three for the 50
   pairs under five arms; with fewer, the plan says how many items it
   left out and the next dispatch of the tag takes them.
@@ -278,9 +284,11 @@ that is usage drawn from the plan's limits, not a bill, and an account
 runs one job at a time, so a run spans days and several usage windows. A pair whose agents stop
 on a usage limit is marked Error, and running the same command again
 later runs it again; finished pairs are kept, a pair whose agent ran
-out its 120 minutes among them, since its patch is scored. The pilot is about 42
-sessions, near $18 at API prices. With CONCURRENCY=1 a pair takes 5 to 20
-minutes per arm.
+out its 120 minutes among them, since its patch is scored. The cloud
+session's pilot above, run_arms.sh's four arms over the same six pairs,
+is 42 sessions, about $18 at API prices, and pilot.sh's six arms there
+66 sessions, about $28. With CONCURRENCY=1 a pair takes 5 to 20 minutes
+per arm.
 
 The container has 4 CPUs, 15 GB of memory and about 26 GB of free disk.
 The task images are 0.1 to 4.2 GB compressed and about twice that on disk,

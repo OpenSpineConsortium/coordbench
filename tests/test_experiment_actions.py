@@ -265,7 +265,8 @@ class FakeGitHub:
         page = int(query.get("page", 1))
         found = [a for a in self.listed if "name" not in query or a["name"] == urllib.parse.unquote(query["name"])]
         start = (page - 1) * artifacts.PAGE
-        return io.BytesIO(json.dumps({"artifacts": found[start:start + artifacts.PAGE]}).encode())
+        return io.BytesIO(json.dumps({"total_count": len(found),
+                                      "artifacts": found[start:start + artifacts.PAGE]}).encode())
 
 
 def zipped(files):
@@ -489,6 +490,29 @@ class Artifacts(unittest.TestCase):
         with mock.patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(artifacts.command_finished(self.CONF, "u__coop__r__1__f1_f2", opener=FakeGitHub(listed, zips)), 0)
 
+    def test_a_file_cut_short_is_read_as_missing_and_never_hides_an_older_finished_attempt(self):
+        """A write a full disk cut short leaves an empty eval.json or
+        result.json, which run.py and check-dir read as missing (unscored,
+        unfinished); the artifact's reader reads it the same way rather
+        than call the whole name unreadable, so finished and download
+        still take the older finished attempt."""
+        submitted = json.dumps({"agents": {"agent1": {"status": "Submitted"}}})
+        pair = "coop/r/task1/f1_f2/"
+        self.assertEqual(artifacts.zip_state(zipped({pair + "result.json": submitted, pair + "eval.json": ""})),
+                         "unscored")
+        self.assertEqual(artifacts.zip_state(zipped({pair + "result.json": "{\"agents\": {"})), "unfinished")
+        listed = [{"id": 31, "name": "v__coop__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": False},
+                  {"id": 32, "name": "v__coop__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False}]
+        zips = {31: zipped({pair + "result.json": submitted, pair + "eval.json": ""}),
+                32: zipped({pair + "result.json": submitted, pair + "eval.json": json.dumps({"both_passed": True}),
+                            pair + "note": "older"})}
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            self.assertEqual(artifacts.command_finished(self.CONF, "v__coop__r__1__f1_f2",
+                                                        opener=FakeGitHub(listed, zips)), 0)
+            artifacts.command_download(self.CONF, "v", self.tmp / "all", opener=FakeGitHub(listed, zips))
+        self.assertIn("finished in run", printed.getvalue())
+        self.assertEqual((self.tmp / "all" / "v-coop-r-1-f1_f2" / pair / "note").read_text(), "older")
+
     def test_a_run_directory_is_checked_by_the_same_rule(self):
         pair = self.tmp / "run" / "coop" / "r" / "task1" / "f1_f2"
         pair.mkdir(parents=True)
@@ -537,14 +561,30 @@ class Artifacts(unittest.TestCase):
         self.assertFalse((self.tmp / "s-solo-r-1-f1_f2").exists())
 
     def test_a_listing_cut_short_is_said(self):
+        most = artifacts.PAGE * artifacts.MOST_PAGES
         many = [{"id": n, "name": f"u__solo__r__{n}__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False}
-                for n in range(artifacts.PAGE * artifacts.MOST_PAGES + 1)]
+                for n in range(most + 1)]
         github = FakeGitHub(many, {})
         found, cut = artifacts.list_artifacts(self.CONF, opener=github)
-        self.assertEqual((len(found), cut), (artifacts.PAGE * artifacts.MOST_PAGES, True))
+        self.assertEqual((len(found), cut), (most, True))
         with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
             artifacts.command_download(self.CONF, "none", self.tmp, opener=github)
         self.assertIn("cut at 5000", json.loads(printed.getvalue().splitlines()[0])["warning"])
+        # Exactly as many as the pages hold is all there is: nothing was cut.
+        found, cut = artifacts.list_artifacts(self.CONF, opener=FakeGitHub(many[:most], {}))
+        self.assertEqual((len(found), cut), (most, False))
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            artifacts.command_download(self.CONF, "none", self.tmp, opener=FakeGitHub(many[:most], {}))
+        self.assertNotIn("warning", printed.getvalue())
+
+        class Uncounted(FakeGitHub):
+            def open(self, request, timeout=None):
+                answer = json.loads(super().open(request, timeout).read())
+                answer.pop("total_count")
+                return io.BytesIO(json.dumps(answer).encode())
+
+        # An answer with no count says the listing may be cut, as before.
+        self.assertEqual(artifacts.list_artifacts(self.CONF, opener=Uncounted(many[:most], {}))[1], True)
 
     def test_a_zip_that_escapes_its_directory_is_refused(self):
         with self.assertRaises(ValueError):
@@ -766,13 +806,17 @@ echo 'merged: claude/3 is in main as abc1234'
         self.assertEqual(last["result"], "sdlc-ready 4 failed (1): refused: no such issue")
 
     def test_every_event_is_valid_json_whatever_the_texts_hold(self):
-        environment = {**self.environment, "COORD_RPC_URL": 'http://hub/rpc/agent "one"\\two',
-                       "ANTHROPIC_MODEL": 'a "quoted"\nmodel'}
+        # JSON takes no control character raw: a newline, a carriage
+        # return or a tab becomes a space and any other is dropped.
+        environment = {**self.environment, "COORD_RPC_URL": 'http://hub/rpc/agent "one"\\two\tthree',
+                       "ANTHROPIC_MODEL": 'a "quoted"\nmodel\twith\ra\x01bell\x1f'}
         result = subprocess.run(["sh", str(KIT / "fake_claude"), "-p", "--output-format", "stream-json", "--", "x"],
-                                cwd=self.repo, capture_output=True, text=True, env=environment, check=True)
-        events = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(events[0]["model"], 'a "quoted" model')
-        self.assertIn('agent "one"\\two', events[0]["session_id"])
+                                cwd=self.repo, capture_output=True, env=environment, check=True)
+        lines = result.stdout.split(b"\n")
+        self.assertEqual(lines[-1], b"")
+        events = [json.loads(line) for line in lines[:-1]]
+        self.assertEqual(events[0]["model"], 'a "quoted" model with abell')
+        self.assertIn('agent "one"\\two three', events[0]["session_id"])
         self.assertEqual(events[-1]["type"], "result")
 
 
@@ -928,6 +972,17 @@ class Workflow(unittest.TestCase):
         action = "\n".join(line for line in self.action.splitlines() if not line.lstrip().startswith("#"))
         self.assertIn("if: ${{ !cancelled() && steps.finished.outcome == 'success' && "
                       "steps.finished.outputs.skip != 'true' }}", action)
+        # A step whose condition names no status function runs only when
+        # every step before it succeeded, and the pair's step fails
+        # whenever run.py exits 1: so every step after it says
+        # !cancelled(), or a failed pair would publish no marker.
+        after_pair = action[action.index("id: pair"):]
+        conditions = re.findall(r"^\s+if: (.+)$", after_pair, re.M)
+        self.assertEqual(len(conditions), 2, conditions)
+        for condition in conditions:
+            with self.subTest(condition=condition):
+                self.assertTrue(condition.startswith("${{ !cancelled() && "), condition)
+        self.assertIn("if: ${{ !cancelled() && steps.scrub.outputs.publish == 'true' }}\n      id: done", action)
         self.assertIn('fetch "$ARTIFACT" "$RUNNER_TEMP/rescore" --mode "$MODE"', action)
         self.assertIn("RESCORE_DIR: ${{ runner.temp }}/rescore", action)
         pair = (ACTIONS / "pair.sh").read_text(encoding="utf-8")
@@ -969,11 +1024,42 @@ class Workflow(unittest.TestCase):
 
     def test_free_disk_runs_only_on_a_hosted_runner(self):
         script = (ACTIONS / "free_disk.sh").read_text(encoding="utf-8")
-        self.assertLess(script.index('if [ "${GITHUB_ACTIONS:-}" != true ]'), script.index("rm -rf"))
-        done = subprocess.run(["bash", str(ACTIONS / "free_disk.sh")], env={**os.environ, "GITHUB_ACTIONS": ""},
-                              capture_output=True, text=True)
-        self.assertEqual((done.returncode, done.stdout), (0, ""))
-        self.assertIn("GitHub-hosted runner", done.stderr)
+        self.assertLess(script.index('if [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ]'), script.index("rm -rf"))
+        # GITHUB_ACTIONS is true on a self-hosted runner too, the owner's
+        # own machine, so only RUNNER_ENVIRONMENT lets the deletions run.
+        # The script runs with nothing of the caller's environment but
+        # PATH, so no exported function or BASH_ENV stands in for a command.
+        for environment_name in ("self-hosted", "", None):
+            with self.subTest(runner=environment_name):
+                env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ACTIONS": "true"}
+                if environment_name is not None:
+                    env["RUNNER_ENVIRONMENT"] = environment_name
+                done = subprocess.run(["bash", str(ACTIONS / "free_disk.sh")], env=env, capture_output=True, text=True)
+                self.assertEqual((done.returncode, done.stdout), (0, ""))
+                self.assertIn("GitHub-hosted runner", done.stderr)
+
+    def test_free_disk_on_a_hosted_runner_removes_the_toolchains_and_the_images(self):
+        # sudo is a stub that only logs what it was asked, so the test
+        # deletes nothing wherever it runs: it is checked to be the sudo
+        # the script will find, and the script gets nothing of the
+        # caller's environment, where an exported function or BASH_ENV
+        # would come before PATH.
+        with tempfile.TemporaryDirectory() as tmp:
+            stubs, log = Path(tmp) / "bin", Path(tmp) / "asked"
+            stubs.mkdir()
+            sudo = stubs / "sudo"
+            sudo.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{log}"\n', encoding="utf-8")
+            sudo.chmod(0o755)
+            path = f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}"
+            self.assertEqual(shutil.which("sudo", path=path), str(sudo))
+            done = subprocess.run(["bash", str(ACTIONS / "free_disk.sh")], capture_output=True, text=True,
+                                  env={"PATH": path, "HOME": tmp, "RUNNER_ENVIRONMENT": "github-hosted"})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertNotIn("GitHub-hosted runner", done.stderr)
+            asked = log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("rm -rf /usr/share/dotnet", asked)
+        self.assertIn("rm -rf /opt/hostedtoolcache/CodeQL", asked)
+        self.assertEqual(asked[-1], "docker image prune -af")
 
     def test_the_artifact_names_are_the_planner_s(self):
         self.assertIn("name: ${{ matrix.artifact }}", self.workflow)
@@ -1008,6 +1094,23 @@ class Workflow(unittest.TestCase):
         for name in ("PLAN.md", "METRICS.md", "pairs.txt"):
             self.assertTrue((KIT / name).is_file(), name)
         self.assertIn("pairs.txt", self.workflow)
+
+    def test_the_plan_and_the_readme_say_what_the_report_and_the_smoke_check_do(self):
+        def prose(text):
+            return " ".join(word for word in text.split() if word != "#")
+        plan_text, readme = (prose((KIT / name).read_text(encoding="utf-8")) for name in ("PLAN.md", "README.md"))
+        # The attempt the report reads, as artifacts.chosen_state picks it.
+        self.assertIn("the newest artifact of its name that holds a finished pair, else the newest whose agents "
+                      "did not fail but that is unscored, else the newest,", plan_text)
+        self.assertIn("each by its newest finished attempt, else its newest unscored one, else its newest", plan_text)
+        # The smoke check a pull request runs, as the workflow sets it.
+        smoke = {name: re.search(rf"{name}: \$\{{\{{ github.event_name == 'pull_request' && '([^']+)'",
+                                 self.workflow).group(1) for name in ("PAIRS", "ARMS")}
+        self.assertEqual(smoke, {"PAIRS": "pallets_click_task/2068/f1_f6", "ARMS": "solo,coop-git,sdlc"})
+        self.assertIn("runs one fake pair, pallets_click 2068's features 1 and 6, under three arms "
+                      "(solo, coop-git and sdlc) as its check.", readme)
+        self.assertIn("runs one pair of pallets_click 2068 this way under three arms as its check.",
+                      prose(self.workflow))
 
 
 if __name__ == "__main__":

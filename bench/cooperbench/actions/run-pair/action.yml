@@ -144,7 +144,12 @@ runs:
         fi
 
     - name: Say whether the pair is finished, for its marker
-      if: steps.scrub.outputs.publish == 'true'
+      # After the pair however it ended, as the scrub runs: a condition
+      # with no status function runs the step only when every step
+      # before it succeeded, and the pair's step fails whenever run.py
+      # exits 1, so check-dir decides alone whether a pair is finished.
+      # The scrub sets publish to true only when it succeeded.
+      if: ${{ !cancelled() && steps.scrub.outputs.publish == 'true' }}
       id: done
       shell: bash
       env:

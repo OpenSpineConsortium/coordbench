@@ -67,9 +67,10 @@ be added as a sixth arm by the dispatch input.
   most three times; a pair still failed after the third dispatch stands
   as an error, a failure in the primary rate, and the report's attempt
   counts say which. The report reads, for each pair, the newest artifact
-  of its name that holds a finished pair, else the newest, so a rerun
-  that itself failed never hides a scored sample; the earlier attempts
-  stay on GitHub under the same name until they expire. A fake dispatch's tag
+  of its name that holds a finished pair, else the newest whose agents
+  did not fail but that is unscored, else the newest, so a rerun that
+  itself failed never hides a scored sample; the earlier attempts stay
+  on GitHub under the same name until they expire. A fake dispatch's tag
   reads fake-<tag>, and a real dispatch refuses such a tag, so a
   rehearsal's artifacts never stand in for real pairs.
 - Judging: the free heuristics only, in the run; the model-judged
@@ -82,7 +83,8 @@ eval.json's both_passed, CooperBench's own verdict: the pair passes when
 the merged patch passes both features' hidden tests (a conflicting merge
 passes only on agent1's patch, as 63b9d44 scores it). The rate is k/n over
 every pair of the list, each by its newest finished attempt, else its
-newest (Resume), an error counting as a failure, the paper's definition; an earlier attempt whose agent failed
+newest unscored one, else its newest (Resume), an error counting as a
+failure, the paper's definition; an earlier attempt whose agent failed
 was run again (Resume, at most three dispatches) and is not counted, so
 an arm whose agents crash more gets more second chances, and the
 report's attempt counts say how many; an attempt that ran out its time

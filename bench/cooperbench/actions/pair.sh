@@ -12,8 +12,10 @@
 # team arm's shared volume from docker's own directory and writes the
 # task list's mirror there, which only root reads and writes. The files
 # it leaves are given back to this user, so the upload step can read them.
-# The pair's verdict is the exit status (1 when an agent ended in Error),
-# after the heuristics ran; the artifact is uploaded either way.
+# The pair's verdict is the exit status (1 when an agent failed, as
+# run.py's agent_failed reads one, or the scoring did; an agent that ran
+# out its time is kept, so its pair exits 0 like any scored pair), after
+# the heuristics ran; the artifact is uploaded either way.
 set -euo pipefail
 : "${MODE:?}" "${ARM:?}" "${REPO:?}" "${TASK:?}" "${FEATURES:?}" "${RUN_NAME:?}"
 root=$(cd "$(dirname "$0")/../../.." && pwd)

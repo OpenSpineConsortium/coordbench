@@ -39,8 +39,10 @@ agent=${agent:-agent}
 
 json_text() {
     # The text as the content of a JSON string: backslashes and quotes
-    # escaped, newlines made spaces, so no text breaks an event's line.
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' '
+    # escaped, newlines, carriage returns and tabs made spaces and every
+    # other control character dropped, since JSON takes none of them raw
+    # and no text may break an event's line.
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\r\t' '   ' | tr -d '\001-\037'
 }
 
 say() {
