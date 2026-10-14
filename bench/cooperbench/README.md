@@ -133,45 +133,55 @@ directory, removing first every symlink and special file in it (the
 upload would follow a symlink to a file the scrub never read), and
 reads every file back through every layer it is packed in, each opened
 by what its bytes say it is, whatever the file's name or place: gzip,
-xz, lzma and bzip2 streams, tar members (a ustar or v7 header; a
-member of a type tar does not know, as a regular file; past headers
-that do not read, as GNU tar steps over them, each member behind them
-by its size, and what follows the tar's end), zip members (a zipapp's
-too, and one that does not read as unzip decompresses it), ar members
-(a .deb), git's loose objects (at whatever compression git wrote
-them), packfiles (with each delta applied to its base) and bundles, an
-archive inside an archive, up to eight layers deep, with one budget for
-the whole directory (1 GiB unpacked, each stream, member or object
-counting 1 KiB and a delta the larger of what it makes and 32 bytes an
-instruction). A layer is found where a file, a stream or a member
-starts, or by a zip's end record: a stream that starts partway through
-other bytes (after a line of text, a zip's end, or a zlib or lzma
-stream) is outside it, as base64 is, and so is a path staged and never
+xz, lzma (with any properties xz reads) and bzip2 streams, tar members
+(a ustar or v7 header; a member of a type tar does not know, as a
+regular file; past headers that do not read, as GNU tar steps over
+them, each member behind them by its size, a first header among them
+when a later one carries ustar's magic; and what follows the tar's
+end), zip members (a zipapp's too, one that does not read as unzip
+decompresses it, a Deflate64 one as far as deflate reads it, and the
+members a split zip's last part holds whole), ar members (a .deb, a
+BSD archive's, and what follows the last), git's loose objects (at
+whatever compression git wrote them), packfiles (with each delta
+applied to its base) and bundles, an archive inside an archive, up to
+eight layers deep, with one budget for the whole directory (1 GiB
+unpacked, each stream, member or object counting 1 KiB and a delta the
+larger of what it makes and 32 bytes an instruction). A layer is found
+where a file, a stream or a member starts, or by a zip's end record
+where no format that accounts for all of the bytes opens them: a
+stream that starts partway through other bytes (after a line of text,
+a zip's end, or a zlib or lzma stream) is outside it, as base64 is, and
+so are a zip after a git object or a pack, which git refuses with bytes
+after them, a v7 tar whose first header does not read, which has no
+magic to find the next header by, and a path staged and never
 committed that a git index of version 4 (feature.manyFiles) holds as
 what it does not share with the path before it. It exits 2 when a file
 or a layer still holds the token, a path's name does, the budget or the
-depth runs out, or a file does not open: a stream or a tar member cut
-short (what it gave is searched first), a zip member that does not
-read, a part of a split zip (zip -s) that starts as a zip, the first
-part included (a part that starts partway through a member, as the
-last and the middle ones often do, is searched as it is), a format it
-cannot open (zstd, 7z, rar, lz4, .Z, lzip), an incremental
-bundle whose pack holds a delta on an object it does not carry (its
-other objects are searched first), a SHA-256 repository's pack, or a
-path it cannot reach (one past PATH_MAX). A repository's history is
-the exception: what its objects hold (a project's own zstd or cut gzip
-test fixture) is searched as far as it opens and never refused for it,
-though the same file in a work tree is, and a packfile cut short is
-not opened there at all. Every line it writes names a path with the
-token replaced. A file whose bytes only look like a container (a log
-with a stray zip end record) is scrubbed as text, and the scrub's own
-pass has one budget for the directory too, past which a .gz is left
-whole for the read-back to refuse. The workflow's jobs run it before
-an upload, after stopping any agent container still up, and publish
-nothing it refused; a fake run, which has no token, reads its files
-back for a stand-in, so the rehearsal refuses what a real run's
-read-back would. The team arm's shared/ is copied into every pair and
-published with it.
+depth runs out, or a file does not open: a stream, a tar member or an
+ar member cut short (what it gave is searched first), a zip member that
+does not read, a zip whose directory does not read (a name that is not
+UTF-8 under its UTF-8 flag), a split zip's (zip -s) first part, and its
+last part once the members it holds whole are searched (a middle part,
+which starts partway through a member, is searched as it is, as is a
+last part that holds only the directory, and a zip -s archive that
+fits in one part is an ordinary zip), a format it cannot open (zstd,
+7z, rar, lz4, .Z, lzip), an incremental bundle whose pack holds a delta
+on an object it does not carry (its other objects are searched first),
+a SHA-256 repository's pack, or a path it cannot reach (one past
+PATH_MAX). A repository's history is the exception: what its objects
+hold (a project's own zstd or cut gzip test fixture) is searched as far
+as it opens and never refused for it, though the same file in a work
+tree is, and a packfile cut short is not opened there at all. Every
+line it writes names a path with the token replaced. A file whose bytes
+only look like a container (a log with a stray zip end record) is
+scrubbed as text, and the scrub's own pass has one budget for the
+directory too, each gzip member counting 1 KiB as in the read-back,
+past which a .gz is left whole for the read-back to refuse. The
+workflow's jobs run it before an upload, after stopping any agent
+container still up, and publish nothing it refused; a fake run, which
+has no token, reads its files back for a stand-in, so the rehearsal
+refuses what a real run's read-back would. The team arm's shared/ is
+copied into every pair and published with it.
 
 ## In GitHub Actions
 
