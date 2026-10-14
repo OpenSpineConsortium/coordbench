@@ -82,6 +82,49 @@ run.py copy the alias to that name for the agents. A session sees only the varia
 when it started, so start a new session on this repository afterwards.
 Keep ANTHROPIC_API_KEY unset: the adapter prefers it, and it bills the API.
 
+## On another host
+
+The scripts run the same way on any Linux host with Docker, a GitHub-hosted
+runner among them, and read these settings, each with a default for the
+cloud session:
+
+- COOPERBENCH_DIR: CooperBench's checkout (default ~/cooperbench).
+- CLAUDE_CODE_VERSION: the Claude Code version setup.sh installs with
+  Claude Code's native installer when the host has no claude (default the
+  version pinned in setup.sh); the overlay copies that one binary into
+  every task image, so every agent runs the same build, and labels the
+  image with the version (cooperbench.claude), so prepare_task.sh overlays
+  it again when the version changes.
+- COORDBENCH_CLAUDE_BIN: a stand-in for claude, a script that answers in
+  Claude Code's stream-json, copied into every image in claude's place
+  (the Alpine ones too, so it is POSIX sh) and never installed over, for a
+  run that spends no usage.
+- COORDBENCH_PROXY_CA: the egress proxy's CA (default
+  /root/.ccr/ca-bundle.crt, the cloud session's); where the file is absent
+  the overlay adds no trust lines and build_task_image.sh builds a task's
+  Dockerfile as the dataset wrote it, with apt and Docker Hub reachable.
+- COORDBENCH_SKIP_GRADEABLE: set, prepare_task.sh skips CooperBench's
+  gradeability check, minutes a task, where the task was checked already
+  (a survey ran) and a pair's eval would show a broken task anyway.
+- COORDBENCH_REGISTRY: where the redis, git-server and node images come
+  from (default mirror.gcr.io/library); COORDBENCH_MIRROR: the mirror a
+  task image is pulled from first (default mirror.gcr.io), with Docker
+  Hub itself tried next and the task's Dockerfile built last.
+
+After each pair, however it ended, run.py replaces the exact value of the
+agents' credential (CLAUDE_CODE_OAUTH_TOKEN, or COORDBENCH_CLAUDE_TOKEN)
+wherever a file of the pair, or of the hub it started, holds it, the gzip
+trajectory included, with "[credential scrubbed by coordbench]": an agent
+that prints its environment writes the token into its stream, its
+transcript and what it told its peer, and a pair's files may be published
+as a workflow's artifact. The run says on stderr when it found one, and a
+pair with a file that holds the token and could not be rewritten is an
+error, not a result. The scrub reads the token's exact bytes in plain and
+gzip files only: an archive an agent packed (.tar.gz, .zip), a git
+object under a workspace kept with --keep, or the token encoded some
+other way, is outside it, as is the log of a hub started elsewhere
+(--hub), which is that hub's to keep.
+
 ## Steps, in the new session
 
 1. `bash bench/cooperbench/setup.sh`: Docker, CooperBench, Redis, the git server.
@@ -142,7 +185,7 @@ which is why the steps take one task at a time.
 
 - Agent and model: Claude Code with MODEL (claude-sonnet-5-5 unless set)
   instead of codex with gpt-5.5.
-- Claude Code is the session's own binary (2.1.295) rather than the latest
+- Claude Code is the session's own binary (2.1.296) rather than the latest
   npm release; it carries Claude Code's own subagent tools.
 - coop-git keeps messages on, CooperBench's default; the authors did not
   record their choice. The team arm runs without --git, as theirs did.
@@ -158,9 +201,11 @@ which is why the steps take one task at a time.
 ## Files
 
 - setup.sh: brings up Docker, CooperBench at the pinned commit with the
-  patch, Redis and the git server.
-- prepare_task.sh: pulls or builds one task's image, adds the overlay, and
-  checks that its features are gradeable.
+  patch, Redis and the git server, and installs uv and Claude Code where
+  the host has none.
+- prepare_task.sh: pulls or builds one task's image, adds the overlay
+  (once per Claude Code version), and checks that its features are
+  gradeable.
 - survey.sh: prepares every flash task in turn and checks its gold
   patches grade here; it is what made the table above.
 - run_arms.sh: runs the four arms on one task, and coop-nocomm

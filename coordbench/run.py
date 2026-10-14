@@ -199,6 +199,7 @@ alone (mode 0o600).
 
 import argparse
 import contextlib
+import gzip
 import importlib
 import importlib.util
 import json
@@ -217,6 +218,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -613,6 +615,145 @@ def environment_without_secrets():
     """For the hub, the scorer and git: none of them needs the agents'
     credentials or the runner's hub token, so none of them gets them."""
     return {name: value for name, value in os.environ.items() if name not in SECRET_NAMES}
+
+
+# What the agents' credential reads as wherever a file held it.
+SCRUBBED = "[credential scrubbed by coordbench]"
+# A credential shorter than this is a placeholder, not a token, and is
+# left alone: replacing a few characters everywhere would damage the
+# files the scrub is meant to keep.
+SHORTEST_CREDENTIAL = 12
+# The archives the scrub leaves whole: a tar's member sizes are in its
+# headers, so a replacement inside one loses every member after it.
+# set_aside_earlier_attempt scrubs a pair's files before it packs them, so
+# an archive of its own holds no credential; what an agent packed is a
+# limit of the scrub, and the README says so.
+ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar", ".zip")
+
+
+class CredentialKept(RuntimeError):
+    """A file that holds the agents' credential could not be rewritten."""
+
+
+def credential_values(environ=None):
+    """The subscription token's value under every name it may carry, the
+    longest first, so one that contains another is replaced whole."""
+    environ = os.environ if environ is None else environ
+    values = {environ.get(name) or "" for name in (*drivers.PASSED_BY_NAME, drivers.TOKEN_ALIAS)}
+    return sorted((value for value in values if len(value) >= SHORTEST_CREDENTIAL), key=len, reverse=True)
+
+
+def scrub_bytes(data, values):
+    for value in values:
+        data = data.replace(value.encode("utf-8"), SCRUBBED.encode("utf-8"))
+    return data
+
+
+def is_archive(path):
+    return path.name.endswith(ARCHIVE_SUFFIXES)
+
+
+def read_for_scrub(path):
+    if path.suffix == ".gz":
+        with gzip.open(path, "rb") as source:
+            return source.read()
+    return path.read_bytes()
+
+
+def write_scrubbed(path, cleaned):
+    """In place, so the mode stays; a gzip file gets a header with no name
+    and no time, as export.py writes trajectory.json.gz, so a scrubbed
+    export is still the same bytes for the same content."""
+    if path.suffix == ".gz":
+        with open(path, "wb") as target, gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0) as packed:
+            packed.write(cleaned)
+    else:
+        path.write_bytes(cleaned)
+
+
+def scrub_file(path, values):
+    """True when the file held a credential and was rewritten; an archive
+    is left whole (ARCHIVE_SUFFIXES). A file that holds the credential and
+    cannot be rewritten raises CredentialKept, since a pair's files may be
+    published and must not carry it."""
+    if is_archive(path):
+        return False
+    data = read_for_scrub(path)
+    cleaned = scrub_bytes(data, values)
+    if cleaned == data:
+        return False
+    try:
+        write_scrubbed(path, cleaned)
+    except OSError as problem:
+        raise CredentialKept(f"{path} holds the agents' credential and could not be rewritten: {problem}") from problem
+    return True
+
+
+def scrub_paths(paths, values):
+    """The files, each once; a file that cannot be read (a broken gzip
+    among them) is said and skipped, and when any file holds the
+    credential and could not be rewritten, every other file is still
+    scrubbed and then CredentialKept names them all."""
+    rewritten, kept = [], []
+    for path in paths:
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            if scrub_file(path, values):
+                rewritten.append(path)
+        except CredentialKept as problem:
+            kept.append(str(problem))
+        except (OSError, EOFError, zlib.error) as problem:
+            say(f"scrubbing {path} failed: {problem}")
+    if kept:
+        raise CredentialKept("\n".join(kept))
+    return rewritten
+
+
+def scrub_credentials(directories, values=None):
+    """Replace the exact value of the agents' credential wherever a file
+    under the directories holds it: an agent that prints its environment
+    writes the token into its stream, its session transcript and whatever
+    it said to its peers, and a run whose files are published (a
+    workflow's artifact) would publish it. Returns the files rewritten."""
+    values = credential_values() if values is None else values
+    if not values:
+        return []
+    paths = []
+    for directory in directories:
+        directory = Path(directory)
+        if directory.is_dir():
+            paths.extend(sorted(directory.rglob("*")))
+    return scrub_paths(paths, values)
+
+
+def pair_hub_dir(plan):
+    return Path(plan["log_dir"]) / plan["run_name"] / "hub"
+
+
+def scrub_pair(plan):
+    """The pair's directory and its own part of the hub's, once the pair's
+    last file is written; one line says when the credential was found,
+    since an agent that printed it is worth knowing about. The hub writes
+    each pair's events under that pair's run id, and its own files, which
+    it appends to while any pair runs, are scrubbed once it stops
+    (scrub_hub); the files of a hub started elsewhere (--hub) are that
+    hub's, and the README says so."""
+    rewritten = scrub_credentials([plan["run_dir"], pair_hub_dir(plan) / plan["run_id"]])
+    if rewritten:
+        say(f"{plan['run_id']}: the agents' credential was in {len(rewritten)} files and is scrubbed out of them")
+
+
+def scrub_hub(hub_dir):
+    """The hub's own files (its log, its first line, its trace), once it
+    has stopped and appends to them no more."""
+    hub_dir = Path(hub_dir)
+    values = credential_values()
+    if not hub_dir.is_dir() or not values:
+        return
+    rewritten = scrub_paths(sorted(hub_dir.iterdir()), values)
+    if rewritten:
+        say(f"the agents' credential was in {len(rewritten)} files of the hub and is scrubbed out of them")
 
 
 def wait_for_first_line(path, process, timeout):
@@ -1410,7 +1551,9 @@ def set_aside_earlier_attempt(run_dir):
     the session driver finds no new transcript for. Left in place, the
     post-hoc tools would read them as the new attempt's; packed, nothing
     of the old attempt is read again and nothing is lost, a judge.json
-    having been paid for."""
+    having been paid for. The files are scrubbed of the agents' credential
+    first (scrub_credentials), since the attempt may have ended before its
+    own scrub."""
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         return None
@@ -1421,6 +1564,10 @@ def set_aside_earlier_attempt(run_dir):
         shutil.rmtree(path, ignore_errors=True)
     if not packed:
         return None
+    # An attempt killed before its scrub may have left the credential in
+    # its files; packed clean, the archive never holds it and is never
+    # rewritten (ARCHIVE_SUFFIXES).
+    scrub_credentials([run_dir])
     archive = unused_archive_name(run_dir)
     with tarfile.open(archive, "w:gz") as bundle:
         for path in packed:
@@ -1561,21 +1708,40 @@ def release_run(plan, hub):
 
 
 def finish_pair(plan, driver, handles, hub):
-    """Wait, record, tear down, score; returns the pair's verdict. When the
-    wait is interrupted the run is still closed, so the arm frees what it
-    took (Arm.teardown), and the containers still go."""
+    """Wait, record, tear down, score, scrub; returns the pair's verdict.
+    When the wait is interrupted the run is still closed, so the arm frees
+    what it took (Arm.teardown), the containers go, and the drivers'
+    threads, which write the agents' stream files, are waited for; the
+    scrub runs last whatever happened before it, since the credential may
+    be in any file and a pair's files may be published however the pair
+    ended."""
     try:
-        outcomes = wait_agents(plan, driver, handles)
-        ended = now()
-        metrics, events, artifacts = close_run(plan, hub)
-        write_outputs(plan, outcomes, metrics, events, ended, artifacts)
-    except BaseException:
-        abandon(plan, hub)
-        raise
-    teardown(plan)
-    evaluation = score(plan)
-    conclude(plan)
+        try:
+            outcomes = wait_agents(plan, driver, handles)
+            ended = now()
+            metrics, events, artifacts = close_run(plan, hub)
+            write_outputs(plan, outcomes, metrics, events, ended, artifacts)
+        except BaseException:
+            abandon(plan, hub)
+            settle(handles)
+            raise
+        teardown(plan)
+        evaluation = score(plan)
+        conclude(plan)
+    finally:
+        scrub_pair(plan)
     return verdict(outcomes, evaluation)
+
+
+def settle(handles, timeout=30):
+    """Wait, up to timeout seconds each, for the drivers' threads to end:
+    the claude-cli driver's thread writes the agent's stream file until
+    its docker exec ends, which abandon's docker rm makes it do, and a
+    file rewritten while a thread still writes it would keep its tail."""
+    for handle in handles.values():
+        thread = getattr(handle, "thread", None)
+        if thread is not None:
+            thread.join(timeout)
 
 
 def conclude(plan):
@@ -1626,11 +1792,14 @@ def record_failure(plan, hub, problem):
     plan["error_kind"] = "infrastructure" if isinstance(problem, INFRASTRUCTURE_FAILURES) else "setup"
     say(f"{plan['run_id']}: {plan['error']}")
     outcomes = {a["id"]: unmeasured_error(plan["error"]) for a in plan["agents"]}
-    metrics, events, artifacts = close_run(plan, hub)
-    write_outputs(plan, outcomes, metrics, events, now(), artifacts)
-    teardown(plan)
-    conclude(plan)
-    save_plan(plan)
+    try:
+        metrics, events, artifacts = close_run(plan, hub)
+        write_outputs(plan, outcomes, metrics, events, now(), artifacts)
+        teardown(plan)
+        conclude(plan)
+        save_plan(plan)
+    finally:
+        scrub_pair(plan)
 
 
 def verdict(outcomes, evaluation):
@@ -2391,6 +2560,7 @@ def command_run(args):
     finally:
         if process is not None:
             stop_hub(process)
+            scrub_hub(hub_dir(settings))
     write_run_summary(settings, run_setting(settings, pairs), [report for _, report in results], time.time() - began)
     return 1 if any(outcome == "error" for outcome, _ in results) else 0
 
@@ -2434,6 +2604,7 @@ def command_finish(args):
     finally:
         if plan.get("hub_pid"):
             stop_hub_pid(plan["hub_pid"], plan["hub_url"])
+            scrub_hub(pair_hub_dir(plan))
     save_plan(plan)
     close_debug_sinks()
     refresh_summary(plan)
@@ -2580,7 +2751,7 @@ def main(argv=None):
         trace.set_level("debug")
     try:
         return args.func(args)
-    except (HubError, FileNotFoundError, ValueError) as problem:
+    except (HubError, CredentialKept, FileNotFoundError, ValueError) as problem:
         say(str(problem))
         return 2
 

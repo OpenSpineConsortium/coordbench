@@ -22,7 +22,9 @@ work=${COOPERBENCH_DIR:-$HOME/cooperbench}
 logs="$work/logs"
 cd "$root" || exit 2
 
-docker info >/dev/null 2>&1 || bash bench/cooperbench/setup.sh
+# setup.sh is cheap once everything is there, and a host with Docker up
+# may still lack claude or CooperBench's checkout.
+bash bench/cooperbench/setup.sh || exit 1
 bash bench/cooperbench/prepare_task.sh "$repo" "$task" || exit 1
 
 status=0
