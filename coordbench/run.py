@@ -200,6 +200,7 @@ alone (mode 0o600).
 import argparse
 import contextlib
 import gzip
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -218,6 +219,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -490,13 +492,31 @@ def result_agents(result):
     return {"solo": result["agent"]} if isinstance(result.get("agent"), dict) else {}
 
 
+def agent_ran_out_of_time(agent):
+    """Whether the claude-cli driver ended the agent at the pair's time
+    limit (drivers.CliRun.run): the benchmark's own limit, reached, is an
+    outcome of the pair, whose patch is scored as any other's, not a
+    failure of the harness."""
+    return str(agent.get("end_reason") or "").startswith(drivers.TIMED_OUT)
+
+
+def agent_failed(agent):
+    """An agent whose attempt is no sample: Error from a usage limit, a
+    refused sign-in, a container gone, the stream ended without a result;
+    one that ran out its time is kept (agent_ran_out_of_time)."""
+    return agent.get("status") == "Error" and not agent_ran_out_of_time(agent)
+
+
 def pair_finished(run_dir):
     """CooperBench reruns a pair any of whose agents ended in Error
-    (coop.py and team.py read "agents", solo.py the singular "agent")."""
+    (coop.py and team.py read "agents", solo.py the singular "agent");
+    coordbench keeps one whose agent ran out its time (PARITY.md, row 23),
+    since that attempt is scored and a rerun would most likely run out
+    again, spending the account's usage to replace a sample."""
     result = read_json(Path(run_dir) / "result.json")
     if not result or result.get("error"):
         return False
-    return not any(a.get("status") == "Error" for a in result_agents(result).values())
+    return not any(agent_failed(a) for a in result_agents(result).values())
 
 
 # The hub.
@@ -725,6 +745,370 @@ def scrub_credentials(directories, values=None):
         if directory.is_dir():
             paths.extend(sorted(directory.rglob("*")))
     return scrub_paths(paths, values)
+
+
+def archive_holds(path, values):
+    """Whether a member of the archive holds the credential, read without
+    unpacking it: the scrub leaves archives whole, so one that does keeps
+    the pair from being published. An archive inside the archive is read
+    as its bytes, not opened."""
+    needles = [value.encode("utf-8") for value in values]
+    if path.name.endswith(".zip"):
+        with zipfile.ZipFile(path) as packed:
+            return any(any(needle in packed.read(member) for needle in needles)
+                       for member in packed.namelist() if not member.endswith("/"))
+    with tarfile.open(path, "r:*") as packed:
+        for member in packed:
+            if member.isfile():
+                data = packed.extractfile(member).read()
+                if any(needle in data for needle in needles):
+                    return True
+    return False
+
+
+LOOSE_OBJECT = re.compile(r"[0-9a-f]{38}")
+
+
+def git_object_kind(path):
+    """"loose" for a file at objects/xx/<38 hex>, "pack" for one at
+    objects/pack/*.pack, else None: a repository an agent made under the
+    team arm's shared/ (or a workspace kept with --keep) keeps its files
+    zlib-compressed, where the scrub's plain search cannot see the
+    credential; a bare repository has objects/ at its root, so the
+    directory above objects/ is not looked at."""
+    if path.parent.parent.name != "objects":
+        return None
+    if path.parent.name == "pack" and path.name.endswith(".pack"):
+        return "pack"
+    if len(path.parent.name) == 2 and LOOSE_OBJECT.fullmatch(path.name):
+        return "loose"
+    return None
+
+
+# A packfile's object types (git's object.h): the four an object is, by
+# the name its id is computed over, and the two kinds of delta.
+PACKED_KINDS = {1: b"commit", 2: b"tree", 3: b"blob", 4: b"tag"}
+OFS_DELTA, REF_DELTA = 6, 7
+# How much of a packfile the decompressor is handed at once: what follows
+# an object's stream comes back as a copy (unused_data), so handing it
+# the rest of the pack would copy the pack once for every object.
+INFLATE_CHUNK = 64 * 1024
+# The largest object the scrub reads, whole or made by a delta: git stores
+# a file over core.bigFileThreshold (512 MiB by default) whole, never as a
+# delta, so a pair's repositories hold nothing near it, and a header or a
+# delta that names more is refused as unreadable rather than let it take
+# the runner's memory.
+LARGEST_OBJECT = 1 << 30
+# git reads a size or an offset in at most 64 bits, so a header that runs
+# on past them is refused, as git refuses it, before it costs time.
+LONGEST_NUMBER_BITS = 64
+
+
+class PackedObject:
+    """One object of a packfile: where it starts, its type, the base of a
+    delta (the base's start for an offset delta, its id for a ref delta,
+    None for a whole object) and its data, which for a delta is its
+    instructions until the delta is applied."""
+
+    __slots__ = ("offset", "kind", "base", "data")
+
+    def __init__(self, offset, kind, base, data):
+        self.offset, self.kind, self.base, self.data = offset, kind, base, data
+
+    def object_id(self):
+        """The id git gives the object: the SHA-1 of "<type> <size>\\0" and its content."""
+        digest = hashlib.sha1(PACKED_KINDS[self.kind] + b" " + str(len(self.data)).encode() + b"\0")
+        digest.update(self.data)
+        return digest.digest()
+
+
+def pack_contents(data):
+    """The content of every object of a git packfile with its deltas
+    applied, as git would show it, so a value in a file is seen whole
+    however git's deltas cut it: an insert run is at most 127 bytes, and
+    a longer line reaches a delta as runs with an instruction between
+    them. Whatever git itself refuses (a checksum that does not match, a
+    truncated object, one whose size is not its header's, a delta whose
+    base is not in the pack or whose instructions do not fit it, bytes
+    after the last object) raises ValueError, and the caller treats the
+    file as unreadable."""
+    try:
+        return [packed.data for packed in resolve_deltas(packed_objects(data))]
+    except IndexError:
+        raise ValueError("a truncated packfile") from None
+
+
+def packed_objects(data):
+    """The objects of a packfile in order, each inflated: after the
+    12-byte header (PACK, the version, the count), each object is its
+    type-and-size header, for an offset delta its base's distance back,
+    for a ref delta its base's 20-byte id, then a zlib stream; the pack
+    ends with the SHA-1 of everything before it."""
+    if len(data) < 32 or data[:4] != b"PACK" or int.from_bytes(data[4:8], "big") not in (2, 3):
+        raise ValueError("not a packfile git reads")
+    if hashlib.sha1(memoryview(data)[:-20]).digest() != data[-20:]:
+        raise ValueError("a packfile whose checksum does not match its content")
+    view = memoryview(data)[:-20]
+    objects, offset = [], 12
+    for _ in range(int.from_bytes(data[8:12], "big")):
+        start = offset
+        kind, size, offset = object_header(view, offset)
+        base = None
+        if kind == OFS_DELTA:
+            distance, offset = base_distance(view, offset)
+            base = start - distance
+        elif kind == REF_DELTA:
+            base, offset = bytes(view[offset:offset + 20]), offset + 20
+        elif kind not in PACKED_KINDS:
+            raise ValueError(f"an object of type {kind}, which git does not have")
+        content, offset = inflate_object(view, offset, size)
+        objects.append(PackedObject(start, kind, base, content))
+    if offset != len(view):
+        raise ValueError("bytes after the packfile's last object")
+    return objects
+
+
+def object_header(view, offset):
+    """A packed object's type and size, and where its data starts: the
+    first byte holds the type in bits 4 to 6 and the size's low four
+    bits, and each byte whose top bit is set is followed by seven more."""
+    byte = view[offset]
+    kind, size, shift = (byte >> 4) & 7, byte & 0x0F, 4
+    offset += 1
+    while byte & 0x80:
+        if shift >= LONGEST_NUMBER_BITS:
+            raise ValueError("an object header longer than git reads")
+        byte = view[offset]
+        offset += 1
+        size |= (byte & 0x7F) << shift
+        shift += 7
+    return kind, size, offset
+
+
+def base_distance(view, offset):
+    """An offset delta's distance back to its base, in git's encoding,
+    which adds one before each shift so no distance has two spellings."""
+    byte = view[offset]
+    distance = byte & 0x7F
+    offset += 1
+    while byte & 0x80:
+        if (distance + 1) >> (LONGEST_NUMBER_BITS - 7):
+            raise ValueError("an offset delta's distance longer than git reads")
+        byte = view[offset]
+        offset += 1
+        distance = ((distance + 1) << 7) | (byte & 0x7F)
+    return distance, offset
+
+
+def inflate_object(view, offset, size):
+    """The zlib stream at offset, inflated, and the offset after it. The
+    decompressor is fed a chunk at a time, the first about the object's
+    size, so what it copies past the stream's end (unused_data) is at
+    most a chunk, never the rest of the pack; and a stream that inflates
+    past its header's size is refused as soon as it does, so a small pack
+    cannot fill the runner's memory before the sizes are compared."""
+    if size > LARGEST_OBJECT:
+        raise ValueError(f"an object of {size} bytes, more than the scrub reads")
+    inflater = zlib.decompressobj()
+    parts, made, position, step = [], 0, offset, min(INFLATE_CHUNK, size + 64)
+    while not inflater.eof:
+        chunk = view[position:position + step]
+        if not chunk:
+            raise ValueError("a truncated object")
+        parts.append(inflater.decompress(chunk))
+        made += len(parts[-1])
+        if made > size:
+            raise ValueError("an object larger than its header gives")
+        position += len(chunk)
+        step = INFLATE_CHUNK
+    content = b"".join(parts)
+    if len(content) != size:
+        raise ValueError("an object whose size is not the one its header gives")
+    return content, position - len(inflater.unused_data)
+
+
+def resolve_deltas(objects):
+    """The objects with every delta applied to its base, as git's
+    index-pack resolves them: from each whole object to the deltas made
+    of it, found by its offset or by its id, so a base that comes after
+    its delta in the pack (a ref delta may name one) is found too. A
+    delta whose base never turns up raises, as git refuses such a pack."""
+    waiting = {}
+    for packed in objects:
+        if packed.base is not None:
+            waiting.setdefault(packed.base, []).append(packed)
+    by_id = any(isinstance(base, bytes) for base in waiting)
+    ready = [packed for packed in objects if packed.base is None]
+    resolved = []
+    while ready:
+        base = ready.pop()
+        resolved.append(base)
+        deltas = waiting.pop(base.offset, [])
+        if by_id:
+            deltas += waiting.pop(base.object_id(), [])
+        for delta in deltas:
+            delta.kind, delta.data = base.kind, apply_delta(base.data, delta.data)
+        ready.extend(deltas)
+    if waiting:
+        raise ValueError("a delta whose base is not in the packfile")
+    return resolved
+
+
+def apply_delta(base, delta):
+    """The object a delta makes of its base, read as git's patch-delta
+    reads it: the base's size and the result's, then instructions, each a
+    copy from the base (a byte with its top bit set) or an insert of the
+    next 1 to 127 bytes; an instruction that does not fit raises."""
+    source_size, position = delta_size(delta, 0)
+    target_size, position = delta_size(delta, position)
+    if source_size != len(base):
+        raise ValueError("a delta made for a base of another size")
+    if target_size > LARGEST_OBJECT:
+        raise ValueError(f"a delta that makes {target_size} bytes, more than the scrub reads")
+    out = bytearray()
+    while position < len(delta):
+        command = delta[position]
+        position += 1
+        if command & 0x80:
+            start, length, position = copy_instruction(delta, command, position)
+            if start + length > len(base):
+                raise ValueError("a delta that copies past the end of its base")
+            out += base[start:start + length]
+        elif command:
+            if position + command > len(delta):
+                raise ValueError("a delta whose insert runs past its end")
+            out += delta[position:position + command]
+            position += command
+        else:
+            raise ValueError("a delta with the reserved instruction 0")
+        if len(out) > target_size:
+            raise ValueError("a delta that makes more than the size it names")
+    if len(out) != target_size:
+        raise ValueError("a delta that makes less than the size it names")
+    return bytes(out)
+
+
+def delta_size(delta, position):
+    """One of a delta's two sizes: seven bits a byte, the lowest first."""
+    size, shift = 0, 0
+    while True:
+        if shift >= LONGEST_NUMBER_BITS:
+            raise ValueError("a delta size longer than git reads")
+        byte = delta[position]
+        position += 1
+        size |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return size, position
+
+
+def copy_instruction(delta, command, position):
+    """A copy's offset and size: bits 0 to 3 of the command say which of
+    the offset's four bytes follow, bits 4 to 6 which of the size's
+    three, and a size of 0 means 0x10000, as git reads it."""
+    start = length = 0
+    for bit in range(4):
+        if command & (1 << bit):
+            start |= delta[position] << (8 * bit)
+            position += 1
+    for bit in range(3):
+        if command & (0x10 << bit):
+            length |= delta[position] << (8 * bit)
+            position += 1
+    return start, length or 0x10000, position
+
+
+def git_object_holds(path, kind, values):
+    """Whether a git object file holds the credential once inflated, a
+    packfile's objects with their deltas applied (pack_contents)."""
+    needles = [value.encode("utf-8") for value in values]
+    data = path.read_bytes()
+    if kind == "loose":
+        return any(needle in zlib.decompress(data) for needle in needles)
+    return any(any(needle in content for needle in needles) for content in pack_contents(data))
+
+
+def unscrubbed(directory, values):
+    """Every file under the directory that still holds the credential,
+    that holds it inside an archive or a git object, or that could not be
+    read, each with why, for a run whose files are about to be published;
+    and every symlink or special file, which the scrub never reads and the
+    upload would follow (remove_links takes them out first)."""
+    kept = []
+    for path in sorted(Path(directory).rglob("*")):
+        if path.is_symlink():
+            kept.append(f"{path}: is a symlink, which the upload would follow to what the scrub never read")
+            continue
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            kept.append(f"{path}: is not a regular file, which the scrub cannot read")
+            continue
+        inside = "inside an archive" if is_archive(path) else "inside a git object" if git_object_kind(path) else ""
+        try:
+            if is_archive(path):
+                held = archive_holds(path, values)
+            elif git_object_kind(path):
+                held = git_object_holds(path, git_object_kind(path), values)
+            else:
+                data = read_for_scrub(path)
+                held = any(value.encode("utf-8") in data for value in values)
+        except (OSError, EOFError, IndexError, ValueError, zlib.error, tarfile.TarError, zipfile.BadZipFile) as problem:
+            kept.append(f"{path}: could not be read ({problem})")
+            continue
+        if held:
+            kept.append(f"{path}: holds the agents' credential" + (f" {inside}" if inside else ""))
+    return kept
+
+
+def remove_links(directory):
+    """Remove every symlink and special file (a FIFO, a socket, a device)
+    under the directory, and return them: the workflow's upload follows a
+    symlink and packs what it points at, which the scrub never reads, and
+    a FIFO would hold the upload until a writer came. A symlink to a
+    directory goes as a link; what it points at is left alone."""
+    removed = []
+    for root, directories, files in os.walk(directory):
+        for name in (*directories, *files):
+            path = Path(root) / name
+            if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                path.unlink()
+                removed.append(path)
+        directories[:] = [name for name in directories if (Path(root) / name).is_dir()]
+    return removed
+
+
+def command_scrub(args):
+    """Scrub a run directory once more and say whether it may be
+    published: exit 0 when no file under it holds the agents' credential
+    (none is in the environment, or every file was read and found clean),
+    2 when one does, or holds it inside an archive or a git object, or
+    could not be read, which the job treats as a pair with no result
+    rather than publish it. Symlinks and special files are removed first,
+    whatever the environment holds (remove_links).
+    The workflow runs this after run.py ended however it ended, since the
+    run's own scrub runs only when the pair finishes."""
+    directory = Path(args.run_dir)
+    if not directory.is_dir():
+        say(f"{directory} is not a directory")
+        return 2
+    removed = remove_links(directory)
+    if removed:
+        say(f"{directory}: removed {len(removed)} symlinks and special files, which the upload would follow: "
+            + ", ".join(str(path.relative_to(directory)) for path in removed))
+    values = credential_values()
+    if not values:
+        say(f"{directory}: no credential in the environment, nothing to scrub")
+        return 0
+    rewritten = scrub_credentials([directory], values)
+    if rewritten:
+        say(f"{directory}: the agents' credential was in {len(rewritten)} files and is scrubbed out of them")
+    kept = unscrubbed(directory, values)
+    if kept:
+        say("\n".join(kept))
+        return 2
+    say(f"{directory}: no file holds the agents' credential")
+    return 0
 
 
 def pair_hub_dir(plan):
@@ -1489,12 +1873,14 @@ def agent_job(plan, agent):
         disallowed_tools=list(plan.get("disallowed_tools") or []))
 
 
-def start_agents(plan, driver):
-    """Start every agent; one that fails to start is recorded and the rest
-    run on, as CooperBench lets one agent's error leave the other running.
-    Each agent's start goes in the plan, which prepare saves, so a finish
-    in another process measures the agent's phase from there."""
-    handles = {}
+def start_agents(plan, driver, handles=None):
+    """Start every agent, each one's handle going into handles as it
+    starts, so a caller interrupted half way holds the ones started; one
+    that fails to start is recorded and the rest run on, as CooperBench
+    lets one agent's error leave the other running. Each agent's start
+    goes in the plan, which prepare saves, so a finish in another process
+    measures the agent's phase from there."""
+    handles = {} if handles is None else handles
     for agent in plan["agents"]:
         agent["started_at"] = now().isoformat()
         try:
@@ -1613,13 +1999,25 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
             with timed(plan, "provision", agent["id"]):
                 provision_agent(plan, agent, hub, options)
     except Exception as problem:
-        record_failure(plan, hub, problem)
-        raise PairFailed(plan["error"]) from problem
+        fail_pair(plan, hub, problem)
     except BaseException:
-        abandon(plan, hub)
+        interrupted(plan, hub)
         raise
-    handles = start_agents(plan, driver)
-    save_plan(plan)
+    # The agents stream to the host from the moment they start, so a
+    # failure after that (the plan's write, the disk full) or an interrupt
+    # must tear them down, wait for the threads that write their streams,
+    # and scrub what they wrote, as finish_pair does. start_agents fills
+    # handles as each agent starts, so an interrupt between two starts
+    # still waits for the first.
+    handles = {}
+    try:
+        start_agents(plan, driver, handles)
+        save_plan(plan)
+    except Exception as problem:
+        fail_pair(plan, hub, problem, handles)
+    except BaseException:
+        interrupted(plan, hub, handles)
+        raise
     return plan, handles
 
 
@@ -1722,8 +2120,7 @@ def finish_pair(plan, driver, handles, hub):
             metrics, events, artifacts = close_run(plan, hub)
             write_outputs(plan, outcomes, metrics, events, ended, artifacts)
         except BaseException:
-            abandon(plan, hub)
-            settle(handles)
+            abandon(plan, hub, handles)
             raise
         teardown(plan)
         evaluation = score(plan)
@@ -1772,13 +2169,25 @@ def export_pair(plan):
         say(f"{plan['run_id']}: exporting the trajectory failed: {type(problem).__name__}: {problem}")
 
 
-def abandon(plan, hub):
-    """Close the run and remove its containers when a pair stops half way;
+def interrupted(plan, hub, handles=None):
+    """A pair that an interrupt stopped before finish_pair took it over:
+    abandoned, then scrubbed whatever the abandoning did, as finish_pair
+    scrubs a pair however it ended."""
+    try:
+        abandon(plan, hub, handles)
+    finally:
+        scrub_pair(plan)
+
+
+def abandon(plan, hub, handles=None):
+    """Close the run, remove its containers and wait for the drivers'
+    threads (stop_agents) when a pair stops half way, the removal even
+    when the closing failed and the wait even when the removal did;
     closing twice is harmless, the hub tears an arm down once."""
     try:
         close_run(plan, hub)
     finally:
-        teardown(plan)
+        stop_agents(plan, handles or {})
 
 
 # The failures that come from the machine, not the pair: Docker, the hub,
@@ -1787,23 +2196,59 @@ def abandon(plan, hub):
 INFRASTRUCTURE_FAILURES = (drivers.DockerError, HubError, OSError, subprocess.SubprocessError)
 
 
-def record_failure(plan, hub, problem):
+def fail_pair(plan, hub, problem, handles=None):
+    """Record a pair that failed before its agents could finish and raise
+    PairFailed, also when the record itself failed (a full disk fails its
+    writes as it failed the plan's), so the caller frees what it holds,
+    the hub prepare started among it, and a run goes on to its next pair."""
+    try:
+        record_failure(plan, hub, problem, handles)
+    except Exception as second:
+        say(f"{plan['run_id']}: recording the failure failed too: {type(second).__name__}: {second}")
+    raise PairFailed(plan["error"]) from problem
+
+
+def record_failure(plan, hub, problem, handles=None):
+    """The pair's error, its run closed and its record written; then its
+    containers removed and the drivers' threads waited for whatever the
+    record did, since containers left up keep their agents running and
+    streaming to the host; and the scrub last."""
     plan["error"] = f"{type(problem).__name__}: {problem}"
     plan["error_kind"] = "infrastructure" if isinstance(problem, INFRASTRUCTURE_FAILURES) else "setup"
-    say(f"{plan['run_id']}: {plan['error']}")
     outcomes = {a["id"]: unmeasured_error(plan["error"]) for a in plan["agents"]}
     try:
-        metrics, events, artifacts = close_run(plan, hub)
-        write_outputs(plan, outcomes, metrics, events, now(), artifacts)
-        teardown(plan)
+        try:
+            say(f"{plan['run_id']}: {plan['error']}")
+            metrics, events, artifacts = close_run(plan, hub)
+            write_outputs(plan, outcomes, metrics, events, now(), artifacts)
+        finally:
+            stop_agents(plan, handles or {})
         conclude(plan)
         save_plan(plan)
     finally:
         scrub_pair(plan)
 
 
+def stop_agents(plan, handles):
+    """The pair's containers removed (teardown), then the drivers'
+    threads waited for (settle), which the removal ends, even when the
+    removal failed."""
+    try:
+        teardown(plan)
+    finally:
+        settle(handles)
+
+
+def outcome_failed(outcome):
+    """agent_failed for a driver's outcome rather than a result.json record."""
+    return agent_failed({"status": outcome.status, "end_reason": outcome.end_reason})
+
+
 def verdict(outcomes, evaluation):
-    if any(o.status == "Error" for o in outcomes.values()) or evaluation.get("error"):
+    """error when an agent failed (agent_failed: one that ran out its time
+    is kept, as pair_finished keeps it) or the scoring did, so a job's exit
+    status says what the rerun rule says; else CooperBench's both_passed."""
+    if any(outcome_failed(o) for o in outcomes.values()) or evaluation.get("error"):
         return "error"
     return "pass" if evaluation.get("both_passed") else "fail"
 
@@ -2127,8 +2572,8 @@ def copy_shared_volume(plan):
         return
     destination = Path(plan["run_dir"]) / SHARED_COPY
     shutil.rmtree(destination, ignore_errors=True)
-    destination.mkdir(parents=True)
     try:
+        destination.mkdir(parents=True)
         done = drivers.docker("cp", f"{resources['containers'][0]}:{SHARED_DIR}/.", str(destination), timeout=300)
         problem = None if done.returncode == 0 else (done.stderr or done.stdout or "").strip()[:300]
     except (OSError, subprocess.SubprocessError) as error:
@@ -2349,6 +2794,15 @@ def plan_summary(plan, handles):
     return {"run_dir": plan["run_dir"], "agents": agents}
 
 
+def scored(run_dir):
+    """Whether the pair's eval.json holds a verdict: a record with no
+    error, as the Actions kit's artifacts.py reads it. A finished pair
+    whose scoring failed (a sandbox that would not start) is scored
+    again from its patches, never left as it was (PARITY.md, row 23)."""
+    evaluation = read_json(Path(run_dir) / "eval.json")
+    return isinstance(evaluation, dict) and not evaluation.get("error")
+
+
 def run_one(settings, hub, driver, repo, task_id, features, task=None):
     """One pair, unless it is finished: its verdict, and its report for
     summary.json (runconfig.pair_report) under the task label CooperBench
@@ -2358,9 +2812,11 @@ def run_one(settings, hub, driver, repo, task_id, features, task=None):
     finished = finished_run_dir(plan)
     if finished is not None and not settings["force"]:
         plan["run_dir"] = str(finished)
-        if (finished / "eval.json").exists():
+        if scored(finished):
             return "skipped", runconfig.pair_report(finished, task, "skip", eval_skipped=True)
-        return verdict({}, score(plan)), runconfig.pair_report(finished, task, "skip")
+        evaluation = score(plan)
+        export_pair(plan)
+        return verdict({}, evaluation), runconfig.pair_report(finished, task, "skip")
     try:
         outcome = run_pair(settings, hub, driver, repo, task_id, features)
     finally:
@@ -2622,12 +3078,12 @@ def rescore_dirs(path):
 
 def needs_scoring(run_dir, plan, force):
     """Whether rescore scores the pair: always with --force, else when it
-    has no eval.json, as `cooperbench eval` decides, or when a merged
+    has no verdict (scored: no eval.json, as `cooperbench eval` decides,
+    or one whose scoring failed, as run_one decides), or when a merged
     pair's eval.json has no cascade block yet."""
-    evaluation = read_json(Path(run_dir) / "eval.json")
-    if force or not isinstance(evaluation, dict):
+    if force or not scored(run_dir):
         return True
-    return plan["setting"] != "solo" and "cascade" not in evaluation
+    return plan["setting"] != "solo" and "cascade" not in read_json(Path(run_dir) / "eval.json")
 
 
 def rescore_pair(run_dir, overrides, force):
@@ -2741,6 +3197,10 @@ def parser():
     rescoring.add_argument("--dataset-dir", help="the dataset to take the tests from, instead of the plan's")
     add_debug_argument(rescoring)
     rescoring.set_defaults(func=command_rescore)
+    scrubbing = commands.add_parser("scrub", help="scrub a run directory once more and say whether it may be published")
+    scrubbing.add_argument("--run-dir", required=True, help="the run directory a job uploads")
+    add_debug_argument(scrubbing)
+    scrubbing.set_defaults(func=command_scrub)
     return top
 
 
