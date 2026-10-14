@@ -43,22 +43,43 @@ of the tag.
 - Agents: Claude Code, the version setup.sh pins, through coordbench's
   claude-cli driver on CooperBench 63b9d44 with its one patch; model
   claude-sonnet-5-5 for every agent; the MCP tool surface; WebFetch and
-  WebSearch off; no turn cap; 120 minutes per agent; one seed. Each
-  (pair, arm) is one job on ubuntu-24.04, so no pair sees another's
-  containers.
+  WebSearch off; no turn cap; 120 minutes per agent, the most the
+  workflow allows, so a job ends inside its own limit with the scoring
+  and the upload still to run; one seed. Each (pair, arm) is one job on
+  ubuntu-24.04, so no pair sees another's containers.
 - Accounts: the owner's, one job at a time per account, every arm of a
   pair on the same account (plan.py), so an account's usage window is
   spent on a pair's arms together rather than on one arm; the order the
   jobs run in is GitHub's queue's, first in first out as far as it keeps
   it, so the arm rotation is a tendency, not a guarantee. Three or more
-  accounts hold the whole list in one dispatch (250 jobs, under the 100
-  an account's queue takes); on one or two, the same tag is dispatched
-  again once the first dispatch has drained, and the resume carries on.
-- Resume: a pair whose artifact holds a scored pair with no agent in
-  Error is not run again; a pair that ended in Error (a usage limit among
-  the causes) runs again on the next dispatch of the same tag, on a fresh
-  runner, and its new artifact is the one the report reads, the earlier
-  attempt's staying on GitHub under the same name until it expires.
+  accounts hold the whole list in one dispatch (250 jobs, each account's
+  share under the 100 its queue takes); on one or two, the same tag is
+  dispatched again once the first dispatch has drained, and the resume
+  carries on.
+- Resume: a pair whose artifact holds a scored pair with no agent
+  failed is finished, and the next dispatch of the same tag plans no job
+  for it (its marker artifact says so) and skips it if one runs; a pair
+  whose agents did not fail but whose scoring failed or never ran is
+  scored again from the files its artifact holds, with no agent started;
+  a pair an agent of which failed runs again, on a fresh runner, and the
+  retry replaces the attempt. An agent failed when its status is Error
+  for a cause outside the benchmark: a usage limit, a refused sign-in, a
+  container gone, a stream that ended without a result, or the harness's
+  own error (result.json's error). An agent that ran out the 120 minutes
+  is also marked Error, as CooperBench marks it, but its pair is kept:
+  the time limit is the benchmark's own, its patch is scored as any
+  other's, and a rerun would most likely run out again, spending two
+  hours of usage to replace a sample (PARITY.md, row 23). The stopping
+  rule: the tag is dispatched until no planned pair is left to run, at
+  most three times; a pair still failed after the third dispatch stands
+  as an error, a failure in the primary rate, and the report's attempt
+  counts say which. The report reads, for each pair, the newest artifact
+  of its name that holds a finished pair, else the newest whose agents
+  did not fail but that is unscored, else the newest, so a rerun that
+  itself failed never hides a scored sample; the earlier attempts stay
+  on GitHub under the same name until they expire. A fake dispatch's tag
+  reads fake-<tag>, and a real dispatch refuses such a tag, so a
+  rehearsal's artifacts never stand in for real pairs.
 - Judging: the free heuristics only, in the run; the model-judged
   measures (communication errors, symptoms, speech acts, emergent
   behaviours) are run afterwards by hand, on purpose, if at all.
@@ -68,8 +89,27 @@ of the tag.
 eval.json's both_passed, CooperBench's own verdict: the pair passes when
 the merged patch passes both features' hidden tests (a conflicting merge
 passes only on agent1's patch, as 63b9d44 scores it). The rate is k/n over
-every attempted pair, an error counting as a failure, the paper's
-definition; the rate on finished pairs is reported beside it.
+every pair of the list, each by its newest finished attempt, else its
+newest unscored one, else its newest (Resume), an error counting as a
+failure, the paper's definition; an earlier attempt whose agent failed
+was run again (Resume, at most three dispatches) and is not counted, so
+an arm whose agents crash more gets more second chances, and the
+report's attempt counts say how many; an attempt that ran out its time
+is kept and scored, never run again. A planned pair whose job left no record at all (cut short before
+run.py wrote its result) is not in n: the report lists such items at its
+top, from the dispatch's plan, and the next dispatch runs them. The rate
+on finished pairs is reported beside it.
+
+The primary comparison is sdlc against coop on both_passed, two-sided
+at alpha 0.05 by the exact McNemar test over the pairs both arms scored;
+sdlc against solo, coop-git and team are secondary, and the ten pairwise
+tests the report prints are read as such. The McNemar test takes the
+pairs as independent trials, which pairs of one task are not (the
+bootstrap intervals resample task sets for that reason); a test that
+respects the task sets, a sign-flip permutation over them for the paired
+difference, is the follow-up to the report, and until it is there a
+significant McNemar p on discordant pairs that cluster in one or two
+tasks is read with that in mind.
 
 ## Analysis, in report.py as it stands
 

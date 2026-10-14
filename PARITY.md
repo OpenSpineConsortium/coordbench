@@ -75,8 +75,8 @@ category; the review's additions are placed where they belong.
 | Emergent behaviours | 5 | 0 | 0 | 4 | 1 |
 | Trajectory files | 16 | 12 | 1 | 3 | 0 |
 | Viewer | 14 | 8 | 1 | 4 | 1 |
-| Setup, dataset and agents | 21 | 5 | 3 | 10 | 3 |
-| All | 149 | 68 | 25 | 48 | 8 |
+| Setup, dataset and agents | 21 | 5 | 2 | 11 | 3 |
+| All | 149 | 68 | 24 | 49 | 8 |
 
 Rows 77 to 86, the ten symptoms, are counted one by one; a row with two
 statuses (same under one driver, different under another) is counted by
@@ -1542,22 +1542,43 @@ Status: not measured.
 - Left undone: re-rating with another model would not give the same label;
   it waits for the authors' labels.
 
-**23. Rerun rule (corrected).** Status: equivalent.
+**23. Rerun rule (corrected).** Status: different.
 - CooperBench: rerun a pair any of whose agents ended in Error (coop.py
-  75-81; solo reads the singular agent, solo.py 44-49).
+  75-81; solo reads the singular agent, solo.py 44-49), an agent killed
+  at the 7200 s timeout among them (claude_code/parsers.py: no result
+  event is Error).
 - coordbench: coordbench/run.py pair_finished, the same rule over both
   shapes, which also reruns a pair whose result.json has a top-level error
-  (a harness failure); run_one scores again, without its agents, a
-  finished pair that lacks eval.json. A pair run again in the same
+  (a harness failure) and keeps a pair whose agent ran out its time
+  (agent_ran_out_of_time: drivers.CliRun's end_reason starts "timed out
+  after"), since that attempt's patch is scored as CooperBench scores it
+  and a rerun would most likely run out again, spending the account's
+  usage to replace a sample, the attempt count then set by how often the
+  owner dispatched; the Actions kit's artifacts.py reads the same rule
+  (bench/cooperbench/PLAN.md, Resume). run_one scores again, without its
+  agents, a finished pair that lacks eval.json or whose eval.json holds
+  an error (run.py scored), as artifacts.py calls such a pair unscored.
+  A pair run again in the same
   directory has the earlier attempt's files packed into
   previous-<time>.tar.gz first (run.py set_aside_earlier_attempt), and
   run.py rescore scores pairs from their patches without ever starting
-  their agents, as `cooperbench eval` does.
-- What differs: the harness-error rerun, a coordbench addition; and the
-  packing, since CooperBench's runner reuses the directory with
-  mkdir(exist_ok=True) and leaves what the new attempt does not rewrite,
-  which for coordbench (a judge.json, an agent's _sent.jsonl, a session
-  transcript) the post-hoc tools would read as the new attempt's.
+  their agents, as `cooperbench eval` does: a pair with no verdict, as
+  run_one decides, or a merged pair with no cascade block yet
+  (needs_scoring).
+- What differs: the time-limit keep, deliberately, for the reason above:
+  CooperBench would run such a pair again; the harness-error rerun, a
+  coordbench addition; the scoring again of a pair whose eval.json holds
+  an error, by run and rescore alike, where CooperBench's runner reads
+  such an eval.json back unless forced (eval/evaluate.py
+  _evaluate_single, 320-322) and counts it as an evaluation error
+  (runner/core.py _process_eval_result, 333-334), and `cooperbench eval`
+  skips it as already evaluated (eval/evaluate.py 57-60), so a sandbox
+  that failed once does not cost the pair its sample; and the packing,
+  since CooperBench's runner reuses the
+  directory with mkdir(exist_ok=True) and leaves what the new attempt
+  does not rewrite, which for coordbench (a judge.json, an agent's
+  _sent.jsonl, a session transcript) the post-hoc tools would read as
+  the new attempt's.
 
 **51. team_features switches, lead_agent, team_role and the ablation
 sweep.** Status: different.

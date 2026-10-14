@@ -3,11 +3,18 @@ one row per task, whether every feature graded on the runner (its tests
 fail on the base commit and pass with the gold patch), the image's size,
 the time the check took and the disk left, so PLAN.md's pair list can be
 written from it. Reads every <logs>/<tag>-survey-<repo>-<task>/*.summary.json
-and its .json beside it; prints Markdown. Usage: survey_report.py <logs> [tag]."""
+and its .json beside it, and, given the plan's survey matrix (a JSON file
+holding {"include": [{"repo": ..., "task": ...}, ...]}), a row for every
+planned task whose job left no summary, since a job the runner cut short
+before the check wrote one would otherwise vanish from the table the pair
+list is fixed from; prints Markdown.
+Usage: survey_report.py <logs> [tag] [plan.json]."""
 
 import json
 import sys
 from pathlib import Path
+
+NO_SUMMARY = "no artifact (the job ended before the check wrote its summary)"
 
 
 def gradeable_features(report):
@@ -25,9 +32,18 @@ def gigabytes(value):
     return f"{value / 1e9:.2f}" if value else "-"
 
 
-def rows(logs, tag=None):
+def planned_tasks(path):
+    """The (repo, task) pairs of the plan's survey matrix, in its order."""
+    if not path:
+        return []
+    matrix = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [(t["repo"], t["task"]) for t in matrix.get("include", []) if isinstance(t, dict)]
+
+
+def rows(logs, tag=None, planned=()):
     """One row per survey directory, <tag>-survey-<repo>-<task>; with no
-    tag, every directory with -survey- in its name."""
+    tag, every directory with -survey- in its name; then one per planned
+    task with no summary."""
     found = []
     pattern = f"{tag}-survey-*/*.summary.json" if tag else "*-survey-*/*.summary.json"
     for summary_path in sorted(Path(logs).glob(pattern)):
@@ -47,6 +63,11 @@ def rows(logs, tag=None):
                       "features": f"{sum(verdicts)}/{len(verdicts)}" if verdicts else "-",
                       "image": gigabytes(summary.get("image_bytes")), "seconds": summary.get("seconds"),
                       "free": gigabytes(summary.get("disk_free_bytes"))})
+    seen = {(str(row["repo"]), str(row["task"])) for row in found}
+    for repo, task in planned:
+        if (str(repo), str(task)) not in seen:
+            found.append({"repo": repo, "task": task, "graded": NO_SUMMARY, "features": "-", "image": "-",
+                          "seconds": "-", "free": "-"})
     return found
 
 
@@ -64,7 +85,8 @@ def render(found):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    print(render(rows(argv[0] if argv else ".", argv[1] if len(argv) > 1 else None)), end="")
+    planned = planned_tasks(argv[2]) if len(argv) > 2 else []
+    print(render(rows(argv[0] if argv else ".", argv[1] if len(argv) > 1 else None, planned)), end="")
     return 0
 
 
