@@ -693,12 +693,14 @@ def is_archive(path):
     return path.name.endswith(ARCHIVE_SUFFIXES)
 
 
-def read_for_scrub(path):
+def read_for_scrub(path, budget):
     """A file's bytes, a .gz file's inflated: at most LARGEST_EXPANSION of
     them, past which the file is left whole for the read-back, which
-    refuses it, rather than let it take the runner's memory. A .gz is read
-    a step at a time, since gzip's read(n) sets n bytes aside before it
-    reads any."""
+    refuses it, rather than let it take the runner's memory; and what the
+    .gz files inflate to is charged to one budget for the whole pass, so
+    many small files that inflate far cost no more than the read-back
+    would let them. A .gz is read a step at a time, since gzip's read(n)
+    sets n bytes aside before it reads any."""
     if path.suffix != ".gz":
         return path.read_bytes()
     data = bytearray()
@@ -707,6 +709,7 @@ def read_for_scrub(path):
             data += part
             if len(data) > LARGEST_EXPANSION:
                 raise ValueError("it inflates to more than the scrub reads")
+            budget.take(len(part))
     return data
 
 
@@ -721,7 +724,7 @@ def write_scrubbed(path, cleaned):
         path.write_bytes(cleaned)
 
 
-def scrub_file(path, values):
+def scrub_file(path, values, budget):
     """True when the file held a credential and was rewritten; an archive
     is left whole (ARCHIVE_SUFFIXES, CONTAINERS, holds_members). A file
     that holds the credential and cannot be rewritten raises
@@ -729,8 +732,8 @@ def scrub_file(path, values):
     carry it."""
     if is_archive(path):
         return False
-    data = read_for_scrub(path)
-    if any(holds_members(kind, data) for kind in CONTAINERS.intersection(packed_kinds(data))):
+    data = read_for_scrub(path, budget)
+    if any(holds_members(kind, data, budget) for kind in CONTAINERS.intersection(packed_kinds(data))):
         return False
     cleaned = scrub_bytes(data, values)
     if cleaned == data:
@@ -745,15 +748,15 @@ def scrub_file(path, values):
 
 def scrub_paths(paths, values):
     """The files, each once; a file that cannot be read (a broken gzip
-    among them) is said and skipped, and when any file holds the
-    credential and could not be rewritten, every other file is still
-    scrubbed and then CredentialKept names them all."""
-    rewritten, kept = [], []
+    among them, or one past the pass's budget) is said and skipped, and
+    when any file holds the credential and could not be rewritten, every
+    other file is still scrubbed and then CredentialKept names them all."""
+    rewritten, kept, budget = [], [], Budget()
     for path in paths:
         try:
             if path.is_symlink() or not path.is_file():
                 continue
-            if scrub_file(path, values):
+            if scrub_file(path, values, budget):
                 rewritten.append(path)
         except CredentialKept as problem:
             kept.append(str(problem))
@@ -834,6 +837,16 @@ class StoppedShort(ValueError):
     def __init__(self, message, partial):
         super().__init__(message)
         self.partial = partial
+
+
+class BasesMissing(ValueError):
+    """A thin pack, as an incremental bundle's is: a delta whose base the
+    pack does not carry, with the content of every object that did
+    resolve (resolved), which is searched before the pack is refused."""
+
+    def __init__(self, message, resolved):
+        super().__init__(message)
+        self.resolved = resolved
 
 
 class MembersUnread(ValueError):
@@ -1038,7 +1051,7 @@ def resolve_deltas(objects, budget):
             delta.kind, delta.data = base.kind, apply_delta(base.data, delta.data, budget)
         ready.extend(deltas)
     if waiting:
-        raise ValueError("a delta whose base is not in the packfile")
+        raise BasesMissing("a delta whose base is not in the packfile", [packed.data for packed in resolved])
     return resolved
 
 
@@ -1047,8 +1060,11 @@ def apply_delta(base, delta, budget):
     reads it: the base's size and the result's, then instructions, each a
     copy from the base (a byte with its top bit set) or an insert of the
     next 1 to 127 bytes; an instruction that does not fit raises. The
-    budget is charged what the delta makes and, DELTA_STEP instructions
-    at a time, INSTRUCTION_COST for each instruction it takes to make it."""
+    budget is charged the larger of what the delta makes and
+    INSTRUCTION_COST for each instruction it takes to make it, counted
+    DELTA_STEP instructions at a time, so a real delta, whose copies make
+    hundreds of bytes an instruction, costs what it makes, and one of
+    one-byte inserts cannot turn the loop once a byte for less."""
     source_size, position = delta_size(delta, 0)
     target_size, position = delta_size(delta, position)
     if source_size != len(base):
@@ -1056,11 +1072,11 @@ def apply_delta(base, delta, budget):
     if target_size > LARGEST_OBJECT:
         raise ValueError(f"a delta that makes {target_size} bytes, more than the scrub reads")
     budget.take(target_size)
-    out, turns = bytearray(), 0
+    out, turns, charged = bytearray(), 0, target_size
     while position < len(delta):
         turns += 1
         if turns % DELTA_STEP == 0:
-            budget.take(DELTA_STEP * INSTRUCTION_COST)
+            charged = charge_instructions(budget, turns, charged)
         command = delta[position]
         position += 1
         if command & 0x80:
@@ -1077,10 +1093,19 @@ def apply_delta(base, delta, budget):
             raise ValueError("a delta with the reserved instruction 0")
         if len(out) > target_size:
             raise ValueError("a delta that makes more than the size it names")
-    budget.take(turns % DELTA_STEP * INSTRUCTION_COST)
+    charge_instructions(budget, turns, charged)
     if len(out) != target_size:
         raise ValueError("a delta that makes less than the size it names")
     return bytes(out)
+
+
+def charge_instructions(budget, turns, charged):
+    """What a delta's instructions owe past what it has paid, taken from
+    the budget; returns what it has paid now."""
+    owed = turns * INSTRUCTION_COST
+    if owed > charged:
+        budget.take(owed - charged)
+    return max(owed, charged)
 
 
 def delta_size(delta, position):
@@ -1136,9 +1161,11 @@ ZIP_STARTS = (b"PK\x03\x04", b"PK\x05\x06")
 # most, and the record and zip64's locator and record before it.
 ZIP_TAIL = (1 << 16) + 22 + 20 + 56
 TAR_CHECKSUM = re.compile(rb" *([0-7]{1,7})[ \0]*")
+TAR_SIZE = re.compile(rb" *([0-7]{1,11})[ \0]*")
 UNOPENED_FORMATS = ((b"\x28\xb5\x2f\xfd", "zstd"), (b"7z\xbc\xaf\x27\x1c", "7z"),
                     (b"Rar!\x1a\x07", "rar"), (b"\x04\x22\x4d\x18", "lz4"),
-                    (b"\x1f\x9d", "compress (.Z)"), (b"LZIP", "lzip"))
+                    (b"\x1f\x9d", "compress (.Z)"), (b"LZIP", "lzip"),
+                    (b"PK\x07\x08", "a split zip's first part (zip -s)"))
 CONTAINERS = frozenset({"tar", "zip", "prefixed zip", "ar", "git packfile", "git bundle"})
 # zlib_content inflates with partial and so raises only at a limit; zlib
 # is listed all the same, since a weak sign never refuses, however it is
@@ -1155,7 +1182,13 @@ AR_SIZE = re.compile(rb" *([0-9]{1,10}) *")
 
 def packed_kinds(data):
     """Every format the bytes may be packed in, the sure signs first; []
-    for bytes the read-back searches only as they are."""
+    for bytes the read-back searches only as they are. The weak signs are
+    looked for only where no sure sign is, every one of them, and tried in
+    turn: what a sure sign opens covers all of its bytes (what follows a
+    stream, what a tar steps over), and a git object is a sure sign once
+    its first bytes inflate to git's header, since an object git wrote at
+    compression level 0, or of bytes that do not compress, shows what it
+    holds as it is, a zip's end record among them."""
     kinds = []
     if data[:3] == GZIP_MAGIC + b"\x08":
         kinds.append("gzip")
@@ -1171,17 +1204,34 @@ def packed_kinds(data):
         kinds.append("zip")
     elif data.startswith(AR_MAGIC):
         kinds.append("ar")
+    elif is_loose_object(data):
+        kinds.append("zlib")
     else:
         kinds += [name for magic, name in UNOPENED_FORMATS if data.startswith(magic)]
     if is_tar(data):
         kinds.append("tar")
-    if "zip" not in kinds and zipfile.is_zipfile(io.BytesIO(bytes(data[-ZIP_TAIL:]))):
-        kinds.append("prefixed zip")
-    if not kinds and len(data) > 2 and data[0] == 0x78 and (data[0] << 8 | data[1]) % 31 == 0:
+    if kinds:
+        return kinds
+    if len(data) > 2 and data[0] == 0x78 and (data[0] << 8 | data[1]) % 31 == 0:
         kinds.append("zlib")
-    if not kinds and is_lzma_alone(data):
+    if is_lzma_alone(data):
         kinds.append("lzma")
+    if zipfile.is_zipfile(io.BytesIO(bytes(data[-ZIP_TAIL:]))):
+        kinds.append("prefixed zip")
     return kinds
+
+
+def is_loose_object(data):
+    """A zlib stream whose first bytes inflate to the header git puts
+    before an object's content (LOOSE_HEADER), as every loose object's
+    do, a quarantined or temporary one's included."""
+    if len(data) < 2 or data[0] != 0x78 or (data[0] << 8 | data[1]) % 31:
+        return False
+    try:
+        head = zlib.decompressobj().decompress(bytes(data[:FIRST_CHUNK]), 32)
+    except zlib.error:
+        return False
+    return bool(LOOSE_HEADER.match(head))
 
 
 def tar_header(data, start=0):
@@ -1364,6 +1414,8 @@ def streams(kind, magic, one_stream):
 # The header git puts before a loose object's content, whose content is
 # then opened as a file of its own would be (a committed tarball).
 LOOSE_HEADER = re.compile(rb"(blob|commit|tree|tag) [0-9]{1,20}\0")
+# The size of the properties an lzma member of a zip carries (APPNOTE 5.8).
+ZIP_LZMA_PROPERTIES = 5
 
 
 def zlib_content(data, budget):
@@ -1381,10 +1433,12 @@ def lzma_content(data, budget):
 
 
 def tar_members(data, budget):
-    """Each regular member's content; a header that does not read is
-    stepped over, as GNU tar steps over it, so no member after it is lost,
-    and what tarfile stepped over is opened too (stepped_over), since it
-    tries those blocks as headers and never reads them as a member."""
+    """Each regular member's content, and a member's of a type tarfile does
+    not know, which tar extracts as a regular file; a header that does not
+    read is stepped over, as GNU tar steps over it, so no member after it
+    is lost, and what tarfile stepped over is opened too (stepped_over),
+    since it tries those blocks as headers and never reads them as a
+    member."""
     with Reading(data) as source, tarfile.open(fileobj=source, mode="r:", ignore_zeros=True) as packed:
         expected = 0
         for member in packed:
@@ -1392,24 +1446,59 @@ def tar_members(data, budget):
             if member.offset > expected:
                 yield from stepped_over(data, expected, member.offset, budget)
             expected = packed.offset
-            if member.isreg():
-                yield "tar", read_in_steps(packed.extractfile(member), budget)
+            if member.isreg() or member.type not in tarfile.SUPPORTED_TYPES:
+                yield "tar", tar_member(packed, member, data, budget)
     yield from stepped_over(data, expected, len(data), budget)
 
 
+def tar_member(packed, member, data, budget):
+    """A member's content; one cut short by the tar's end stops the tar
+    with the bytes it holds (StoppedShort), as tar -xO prints them before
+    it reports the error."""
+    try:
+        return read_in_steps(packed.extractfile(member), budget)
+    except tarfile.ReadError as problem:
+        held = bytearray(memoryview(data)[member.offset_data:member.offset_data + member.size])
+        budget.take(len(held))
+        raise StoppedShort(f"a tar member cut short ({why(problem)})", held) from None
+
+
 def stepped_over(data, start, end, budget):
-    """The blocks a tar's reader stepped over between start and end, past
-    their zero blocks and past a header that did not read, so the member
-    behind it is opened from its first byte; bytes that are no header at
-    all (what follows a tar's end) are opened from where they start, and
-    zeros alone, as a tar's end is, give nothing."""
-    start += (ZEROS.match(data, start, end).end() - start) // 512 * 512
-    block = data[start:min(start + 512, end)]
-    if len(block) == 512 and (block[257:262] == b"ustar" or checksum_holds(block)):
-        start += 512
-    if start < end and ZEROS.match(data, start, end).end() < end:
-        budget.take(end - start)
-        yield "what a tar stepped over", data[start:end]
+    """The blocks a tar's reader stepped over between start and end, read
+    as GNU tar reads them: past zero blocks, each header that reads as one
+    (ustar's magic or a checksum that holds) gives the member behind it,
+    as long as its size says, so a run of headers tarfile refuses loses no
+    member. Where a block reads as no header, what follows is opened from
+    that block, as what follows a tar's end is, and, when the block is
+    shaped like a header (its checksum field a number), from the block
+    after it too, where the member of a header broken past reading
+    starts. Zeros alone, as a tar's end is, give nothing."""
+    while True:
+        start += (ZEROS.match(data, start, end).end() - start) // 512 * 512
+        block = data[start:min(start + 512, end)]
+        size = header_size(block)
+        if size is None:
+            break
+        budget.take(ITEM_COST)
+        content = data[start + 512:min(start + 512 + size, end)]
+        if content:
+            budget.take(len(content))
+            yield "what a tar stepped over", content
+        start = min(start + 512 + -(-size // 512) * 512, end)
+    shaped = len(block) == 512 and TAR_CHECKSUM.fullmatch(block[148:156])
+    for begin in (start, start + 512) if shaped else (start,):
+        if begin < end and ZEROS.match(data, begin, end).end() < end:
+            budget.take(end - begin)
+            yield "what a tar stepped over", data[begin:end]
+
+
+def header_size(block):
+    """The size a tar header gives its member, in octal at 124, or None for
+    a block that reads as no header or a size that does not read."""
+    if len(block) < 512 or not (block[257:262] == b"ustar" or checksum_holds(block)):
+        return None
+    size = TAR_SIZE.fullmatch(block[124:136])
+    return int(size.group(1), 8) if size else None
 
 
 def zip_members(data, budget):
@@ -1423,6 +1512,8 @@ def zip_members(data, budget):
     budget.take(ITEM_COST * data.count(b"PK\x01\x02"))
     unread = None
     with Reading(data) as source, zipfile.ZipFile(source) as packed:
+        if split_across_files(data):
+            raise ValueError("a zip split across files (zip -s), which the scrub cannot open")
         for info in packed.infolist():
             try:
                 with packed.open(info) as member:
@@ -1437,32 +1528,71 @@ def zip_members(data, budget):
         raise MembersUnread(f"a zip member that does not read ({why(unread)})")
 
 
+def split_across_files(data):
+    """Whether a zip's end record says it is one part of several, as zip -s
+    numbers each part a disk, so its members lie in the other parts."""
+    tail = bytes(data[-ZIP_TAIL:])
+    at = tail.rfind(b"PK\x05\x06")
+    return at >= 0 and tail[at + 4:at + 8] not in (b"", bytes(4))
+
+
 def raw_member(data, info, budget):
     """A member's bytes read from its local header, as unzip reads them
-    whatever its CRC says: stored bytes as they are, a deflate stream as
-    far as it inflates, nothing for another method."""
+    whatever its CRC says, as far as its compressed size goes and charged
+    as they lie, so entries that overlap cost their bytes each time:
+    stored bytes as they are, a deflate, bzip2 or lzma stream as far as
+    it decompresses, nothing for another method or for a stream that
+    does not start."""
     start = info.header_offset
     header = data[start:start + 30]
     if len(header) < 30 or header[:4] != b"PK\x03\x04":
         return b""
     start += 30 + int.from_bytes(header[26:28], "little") + int.from_bytes(header[28:30], "little")
-    if info.compress_type == zipfile.ZIP_DEFLATED:
-        return inflated(data, start, -zlib.MAX_WBITS, budget, partial=True)[0]
-    if info.compress_type != zipfile.ZIP_STORED:
+    packed = bytes(memoryview(data)[start:start + info.compress_size])
+    budget.take(len(packed))
+    try:
+        if info.compress_type == zipfile.ZIP_STORED:
+            return packed
+        if info.compress_type == zipfile.ZIP_DEFLATED:
+            return inflated(packed, 0, -zlib.MAX_WBITS, budget, partial=True)[0]
+        if info.compress_type == zipfile.ZIP_BZIP2:
+            return decompressed(bz2.BZ2Decompressor(), packed, 0, budget)[0]
+        if info.compress_type == zipfile.ZIP_LZMA:
+            return decompressed(zip_lzma(packed), packed, 4 + ZIP_LZMA_PROPERTIES, budget)[0]
+    except StoppedShort as problem:
+        return problem.partial
+    except LimitReached:
+        raise
+    except (ValueError, lzma.LZMAError):
         return b""
-    budget.take(min(info.compress_size, len(data)))
-    return data[start:start + info.compress_size]
+    return b""
 
 
-def holds_members(kind, data):
+def zip_lzma(packed):
+    """The decompressor for a zip's lzma member: two bytes of version, two
+    of the properties' size, then the properties, lc, lp and pb in one
+    byte and the dictionary's size in four, then the raw stream."""
+    properties = packed[4:4 + ZIP_LZMA_PROPERTIES]
+    if packed[2:4] != ZIP_LZMA_PROPERTIES.to_bytes(2, "little") or len(properties) < 5 or properties[0] >= 9 * 5 * 5:
+        raise ValueError("an lzma member whose properties do not read")
+    lc, lp, pb = properties[0] % 9, properties[0] // 9 % 5, properties[0] // 45
+    dictionary = int.from_bytes(properties[1:5], "little")
+    filters = [{"id": lzma.FILTER_LZMA1, "dict_size": dictionary, "lc": lc, "lp": lp, "pb": pb}]
+    return lzma.LZMADecompressor(lzma.FORMAT_RAW, filters=filters)
+
+
+def holds_members(kind, data, budget):
     """Whether the scrub must leave a container whole: a sure sign always;
     a zip found by its end record, or a tar by its checksum alone, only
     when it opens with a member, so a log whose bytes only look like one
-    is scrubbed as text. A zip whose directory is past what the read-back
-    would read is left whole for the read-back to refuse."""
+    is scrubbed as text. A zip's directory is charged to the scrub's
+    budget, as the read-back charges it, and one past what is left is
+    left whole for the read-back to refuse."""
     if kind == "prefixed zip":
-        if data.count(b"PK\x01\x02") > LARGEST_EXPANSION // ITEM_COST:
+        entries = data.count(b"PK\x01\x02")
+        if entries > budget.left // ITEM_COST:
             return True
+        budget.take(ITEM_COST * entries)
         try:
             with Reading(data) as source, zipfile.ZipFile(source) as packed:
                 return bool(packed.infolist())
@@ -1503,7 +1633,16 @@ def read_in_steps(stream, budget):
 
 
 def pack_objects(data, budget):
-    for content in pack_contents(data, budget):
+    """Each object of a packfile, deltas applied; a thin pack gives the
+    objects that did resolve, then is refused (BasesMissing), so a
+    repository's history is searched as far as it opens."""
+    try:
+        contents = pack_contents(data, budget)
+    except BasesMissing as problem:
+        for content in problem.resolved:
+            yield "git packfile", content
+        raise
+    for content in contents:
         yield "git packfile", content
 
 
@@ -1511,8 +1650,9 @@ def bundle_pack(data, budget):
     """A git bundle's packfile: after its header, its prerequisites and its
     references, a blank line, then the pack. An incremental bundle's pack
     may be thin: one that holds a delta on an object it does not carry is
-    refused (resolve_deltas), and one whose objects are whole or made on
-    objects it carries is read like any other."""
+    read as far as its objects resolve and then refused (pack_objects),
+    and one whose objects are whole or made on objects it carries is read
+    like any other."""
     end = data.find(b"\n\n")
     if end < 0 or data[end + 2:end + 6] != b"PACK":
         raise ValueError("a git bundle with no packfile after its header")
