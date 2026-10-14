@@ -13,9 +13,13 @@ CooperBench's own evaluation, and the agents are Claude Code.
 - coordbench/README.md is the contract: what an arm, a driver and the hub
   are, how to write an arm, and how to run one.
 - bench/cooperbench/README.md is the CooperBench kit: the shell scripts
-  that bring CooperBench up in a Claude Code cloud session, prepare a task
-  image and run CooperBench's own four arms, and report.py, which sets
-  the arms side by side.
+  that bring CooperBench up, prepare a task image and run CooperBench's
+  own arms and Symphony's sdlc arm, and report.py, which sets the arms
+  side by side. .github/workflows/bench.yml runs the benchmark in this
+  repository's Actions, in modes survey, fake and real;
+  bench/cooperbench/PLAN.md is its pre-registration (the question, the
+  pair list pairs.txt, the five arms, the analysis) and METRICS.md maps
+  every statistic of the paper and its follow-ups to the report.
 - coordbench/README.md's "After a run" names what reads a run's files
   afterwards: the merge cascade in eval.json, the export for
   CooperBench's viewer and the comparison page (coordbench/viewer/), and

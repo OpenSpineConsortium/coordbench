@@ -145,7 +145,8 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
 - fake: every pair with fake_claude as the agent, so the whole path (the
   images, the containers, the hub, the git server, the scorer and the
   artifacts) runs and no usage is spent. A pull request that changes the
-  kit, the workflow or the runner runs one pair this way.
+  kit (bench/cooperbench/), the workflow or the package coordbench/ runs
+  one fake pair per arm of a smoke set as its check.
 - real: Claude Code on the owner's accounts. One job, approve, waits in
   the environment bench until a reviewer approves the dispatch, once;
   every real job needs it and carries no environment of its own, since a
@@ -158,7 +159,12 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
   on one matrix. The 100 is the group's across every dispatch, so a
   second dispatch while the first still queues gets its jobs past that
   number cancelled by GitHub: plan.py keeps each dispatch under it, and
-  the next dispatch of the same tag waits until the first has drained.
+  nothing checks the queue for you, so dispatch the same tag again only
+  when no run of an earlier dispatch is still queued (Actions > Bench:
+  no run of the tag in progress). One dispatch holds the whole list only
+  with at least ceil(pairs x arms / 100) accounts: three for the 50
+  pairs under five arms; with fewer, the plan says how many items it
+  left out and the next dispatch of the tag takes them.
   The workflow names the eight slots' secrets one by one rather than
   looking one up by a computed name, which would hand the runner every
   secret the repository can see. The approval gates this workflow's use
@@ -176,13 +182,20 @@ reads the environment and refuses a real run until it has one who may
 approve this dispatch (actions/environment.py; a rule against
 self-review with the owner as its only reviewer refuses too), so nothing
 runs unapproved, and the run is dispatched again once the reviewer is
-set; then an organization secret SYMPHONY_CLAUDE_<slot> per account, the
-slot a number from 1 up (so SYMPHONY_CLAUDE_1 for the first account,
+set (on the environment's page: Required reviewers ticked with the
+owner added, Prevent self-review left unticked since the owner both
+dispatches and approves, and Deployment branches and tags limited to
+main); then an organization secret SYMPHONY_CLAUDE_<slot> per account,
+the slot a number from 1 up (so SYMPHONY_CLAUDE_1 for the first account,
 SYMPHONY_CLAUDE_2 for the second, up to 8), its value from `claude
-setup-token` on that account, shared with this repository, which the
-plan job checks slot by slot before any job runs; and the repository
-variable SYMPHONY_CLAUDE_ACCOUNTS with the slots in use, separated by
-commas (`1,2,3` for three accounts). The token's value is never in a log:
+setup-token` on that account, with Repository access set to Selected
+repositories and this one ticked (this repository is public, so Private
+repositories leaves it out, and All repositories would hand the token
+to every workflow of the organization), which the plan job checks slot
+by slot before any job runs; and the repository variable
+SYMPHONY_CLAUDE_ACCOUNTS with the slots in use, separated by commas
+(`1,2,3` for three accounts). A real dispatch is approved on its run's
+page: Review deployments, tick bench, Approve and deploy. The token's value is never in a log:
 run.py passes it to the agents by name, after each pair scrubs it out of
 every file the pair left (above), and before anything is uploaded the
 job scrubs the pair's directory once more and reads every file back,
@@ -255,11 +268,14 @@ and 12 each for the other three arms, 42 sessions in all.
 
 The authors' own claude_code team run on the 10-pair core subset cost
 about $8.50 at API prices, about $0.43 per agent session with Sonnet 4.5.
-The flash subset over four arms is 50 solo sessions and 100 for each of
-the other three arms, 350 sessions in all, about $150 at API prices
-(294 sessions, about $125, for the 42 pairs that grade here). On
-a subscription that is usage drawn from the plan's limits, not a bill,
-and it will likely span several usage windows. A pair whose agents stop
+The flash subset over the four arms of that run is 50 solo sessions and
+100 for each of the other three arms, 350 sessions in all, about $150 at
+API prices. The dispatch in Actions runs five arms, so a pair is nine
+sessions (one solo and two for each other arm): pairs.txt's 50 pairs are
+450 sessions, about $195 at the authors' rate, and the pilot on
+pallets_click 2068 (six pairs) 54 sessions, about $23. On a subscription
+that is usage drawn from the plan's limits, not a bill, and an account
+runs one job at a time, so a run spans days and several usage windows. A pair whose agents stop
 on a usage limit is marked Error, and running the same command again
 later runs it again; finished pairs are kept, a pair whose agent ran
 out its 120 minutes among them, since its patch is scored. The pilot is about 42

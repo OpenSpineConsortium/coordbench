@@ -10,7 +10,8 @@ name: Bench
 #   grades on a runner.
 # - fake: every pair with bench/cooperbench/fake_claude as the agent, so
 #   the whole path runs and no usage is spent; a pull request that
-#   changes the kit, the workflow or the runner runs one pair this way.
+#   changes the kit, the workflow or the package coordbench/ runs a
+#   few pairs this way as its check.
 #   Its artifacts carry the tag fake-<tag>, so a real run never takes
 #   them for finished pairs.
 # - real: the agents are Claude Code on the owner's accounts. The approve

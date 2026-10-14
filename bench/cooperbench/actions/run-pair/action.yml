@@ -95,7 +95,7 @@ runs:
       shell: bash
       run: |
         if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-          echo "::error::no Claude token for this account: the organization secret the plan names is unset or not shared with this repository"
+          echo "::error::no Claude token for this account: the organization secret the plan names is unset, or its Repository access does not select this repository"
           exit 1
         fi
 
