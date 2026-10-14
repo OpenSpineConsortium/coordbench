@@ -19,11 +19,11 @@ python3 bench/cooperbench/actions/artifacts.py download "$TAG" "$logs" > "$REPOR
 # in one flat directory as survey.sh keeps them, for report.py's dataset
 # section; a summary.json beside each is the survey's own and stays out.
 mkdir -p "$logs/survey"
-for report in "$logs"/*-survey-*/*.json; do
+for report in "$logs/$TAG"-survey-*/*.json; do
     case $report in *.summary.json) ;; *) [ -f "$report" ] && cp "$report" "$logs/survey/" ;; esac
 done
 if [ "$MODE" = survey ]; then
-    python3 bench/cooperbench/actions/survey_report.py "$logs" > "$REPORT_DIR/report.md"
+    python3 bench/cooperbench/actions/survey_report.py "$logs" "$TAG" > "$REPORT_DIR/report.md"
 else
     runs=()
     while IFS= read -r line; do

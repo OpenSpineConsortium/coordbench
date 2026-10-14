@@ -22,6 +22,7 @@ KIT = ROOT / "bench" / "cooperbench"
 ACTIONS = KIT / "actions"
 sys.path.insert(0, str(ACTIONS))
 import artifacts  # noqa: E402
+import environment  # noqa: E402
 import plan  # noqa: E402
 import survey_report  # noqa: E402
 
@@ -89,6 +90,22 @@ class Planner(unittest.TestCase):
         self.assertEqual(dropped, 20)
         items, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one", "two"], "t")
         self.assertEqual((len(items), dropped), (120, 0))
+
+    def test_a_matrix_holds_at_most_256_jobs_in_any_mode_and_a_fake_run_has_no_queue_cap(self):
+        pairs = [("r", n, (1, 2)) for n in range(43)]
+        items, dropped = plan.plan_items(pairs, list(plan.ARMS) + ["coop-nocomm"], ["one", "two", "three"], "t")
+        self.assertEqual((len(items), dropped), (plan.MATRIX_LIMIT, 2))
+        items, dropped = plan.plan_items(pairs, list(plan.ARMS), ["fake"], "t", queue_limit=0)
+        self.assertEqual((len(items), dropped), (215, 0))
+        many = {"name": "flash", "tasks": [{"repo": "r", "task_id": n, "pairs": [[1, 2]]} for n in range(120)]}
+        (Path(self.dataset) / "subsets" / "flash.json").write_text(json.dumps(many), encoding="utf-8")
+        fake = plan.plan(self.dataset, "fake", "flash", "solo,coop", "", "t")
+        self.assertEqual((len(fake["items"]), fake["dropped"]), (240, 0))
+        real = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "one", "t")
+        self.assertEqual((len(real["items"]), real["dropped"]), (100, 260))
+        self.assertIn("256 jobs from one matrix and queues at most 100 per account", real["notes"][0])
+        with self.assertRaises(ValueError):
+            plan.plan(self.dataset, "real", "flash", "solo", "one, two-three", "t")
 
     def test_a_real_run_needs_accounts_and_the_other_modes_do_not(self):
         with self.assertRaises(ValueError):
@@ -163,9 +180,27 @@ class Artifacts(unittest.TestCase):
              {"id": 4, "name": "t__coop__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": True},
              {"id": 5, "name": "other__solo__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": False}],
             {1: zipped({"solo/r/task1/f1_f2/result.json": "{}"}),
-             2: zipped({"solo/r/task1/f1_f2/result.json": "{}", "solo/r/task1/f1_f2/eval.json": "{}"}),
+             2: zipped({"solo/r/task1/f1_f2/result.json": json.dumps({"agent": {"status": "Submitted"}}),
+                        "solo/r/task1/f1_f2/eval.json": json.dumps({"both_passed": False, "error": None})}),
              3: zipped({"sdlc/r/task1/f1_f2/result.json": "{}"}),
              5: zipped({"x": "y"})})
+
+    def test_a_finished_pair_is_scored_with_no_agent_in_error(self):
+        scored = {"both_passed": True, "error": None}
+        self.assertTrue(artifacts.holds_finished_pair(zipped({
+            "coop/r/task1/f1_f2/result.json": json.dumps({"agents": {"agent1": {"status": "Submitted"},
+                                                                     "agent2": {"status": "Submitted"}}}),
+            "coop/r/task1/f1_f2/eval.json": json.dumps(scored)})))
+        for name, result, evaluation in (
+                ("an agent in Error", {"agents": {"agent1": {"status": "Submitted"}, "agent2": {"status": "Error"}}}, scored),
+                ("an eval error", {"agents": {"agent1": {"status": "Submitted"}}}, {"error": "docker died"}),
+                ("a pair error", {"error": "HubError: gone", "agents": {"agent1": {"status": "Submitted"}}}, scored),
+                ("no agents", {}, scored)):
+            with self.subTest(case=name):
+                self.assertFalse(artifacts.holds_finished_pair(zipped({
+                    "coop/r/task1/f1_f2/result.json": json.dumps(result),
+                    "coop/r/task1/f1_f2/eval.json": json.dumps(evaluation)})))
+        self.assertFalse(artifacts.holds_finished_pair(zipped({"coop/r/task1/f1_f2/eval.json": json.dumps(scored)})))
 
     def test_finished_reads_the_newest_artifact_of_the_name_and_wants_an_eval(self):
         with mock.patch("sys.stdout", new_callable=io.StringIO):
@@ -226,14 +261,20 @@ class SurveyReport(unittest.TestCase):
         (bad / "openai_tiktoken_task-0.json").write_text(json.dumps([
             {"task": "openai_tiktoken_task/task0", "feature": "feature1", "verdict": "OK", "note": ""},
             {"task": "openai_tiktoken_task/task0", "feature": "feature2", "verdict": "GOLD_FAILS", "note": "download"}]))
+        # check_gradeable.py exits 0 whatever its verdicts, so the status is 0 here too.
         (bad / "openai_tiktoken_task-0.summary.json").write_text(json.dumps(
-            {"repo": "openai_tiktoken_task", "task": 0, "status": 1, "seconds": 90, "image_bytes": 0,
+            {"repo": "openai_tiktoken_task", "task": 0, "status": 0, "seconds": 90, "image_bytes": 0,
              "disk_free_bytes": 12000000000}))
         broken = tmp / "t-survey-go_chi_task-56"
         broken.mkdir()
         (broken / "go_chi_task-56.summary.json").write_text(json.dumps(
             {"repo": "go_chi_task", "task": 56, "status": 1, "seconds": 5, "image_bytes": 0, "disk_free_bytes": 0}))
-        text = survey_report.render(survey_report.rows(tmp))
+        other = tmp / "other-survey-pillow_task-25"
+        other.mkdir()
+        (other / "pillow_task-25.summary.json").write_text(json.dumps(
+            {"repo": "pillow_task", "task": 25, "status": 0, "seconds": 1, "image_bytes": 0, "disk_free_bytes": 0}))
+        self.assertEqual(len(survey_report.rows(tmp)), 4)
+        text = survey_report.render(survey_report.rows(tmp, "t"))
         self.assertIn("| go_chi_task 56 | no report (the check failed before writing one) | - |", text)
         self.assertIn("| openai_tiktoken_task 0 | not all | 1/2 | - | 90 | 12.00 |", text)
         self.assertIn("| pallets_click_task 2068 | all | 2/2 | 1.05 | 310 | 9.00 |", text)
@@ -262,8 +303,11 @@ class FakeAgent(unittest.TestCase):
                               cwd=self.repo, capture_output=True, text=True, env=environment, check=True)
 
     def test_it_speaks_stream_json_and_leaves_a_patch(self):
-        self.assertEqual(subprocess.run([str(KIT / "fake_claude"), "--version"], capture_output=True, text=True,
-                                        check=True).stdout.strip(), "0.0.0-fake (Claude Code)")
+        version = subprocess.run([str(KIT / "fake_claude"), "--version"], capture_output=True, text=True,
+                                 check=True).stdout.strip()
+        # The version carries the file's checksum, so an edited fake agent
+        # is overlaid onto an image already labelled with an earlier one.
+        self.assertRegex(version, r"^0\.0\.0-fake\.\d+ \(Claude Code\)$")
         for shell in ("sh", "bash", "dash"):
             if shutil.which(shell) is None:
                 continue
@@ -271,7 +315,7 @@ class FakeAgent(unittest.TestCase):
                 result = self.run_fake("Implement feature 1.", shell=shell)
                 events = [json.loads(line) for line in result.stdout.splitlines()]
                 self.assertEqual(events[0]["type"], "system")
-                self.assertEqual(events[0]["claude_code_version"], "0.0.0-fake")
+                self.assertEqual(events[0]["claude_code_version"], version.split()[0])
                 self.assertEqual(events[-1]["type"], "result")
                 self.assertEqual(events[-1]["usage"]["output_tokens"], 0)
                 patch = (self.repo / "patch.txt").read_text()
@@ -296,6 +340,102 @@ class FakeAgent(unittest.TestCase):
         self.assertIn("claude/3", branches)
         self.assertIn("claimed, opened and readied #3", result.stdout)
         self.assertTrue((self.repo / "patch.txt").exists())
+
+    def sdlc_tools(self, ready_answer, claim_status=0):
+        tools = self.tmp / "tools"
+        tools.mkdir(exist_ok=True)
+        (tools / "sdlc-claim").write_text(f"#!/bin/sh\nexit {claim_status}\n")
+        (tools / "sdlc-pr").write_text("#!/bin/sh\nexit 0\n")
+        (tools / "sdlc-ready").write_text(f"#!/bin/sh\necho '{ready_answer}'\n")
+        for name in ("sdlc-claim", "sdlc-pr", "sdlc-ready"):
+            (tools / name).chmod(0o755)
+        remote = self.tmp / "team.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "remote", "add", "team", str(remote)], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "push", "-q", "team", "HEAD:main"], check=True)
+        return tools, remote
+
+    def test_a_coordination_command_that_fails_ends_the_agent_in_error(self):
+        tools, _ = self.sdlc_tools("draft", claim_status=1)
+        environment = dict(os.environ, COORD_RPC_URL="http://hub/agent2", PATH=f"{tools}:{os.environ['PATH']}")
+        result = subprocess.run(["sh", str(KIT / "fake_claude"), "-p", "--", "Your issue is **#3**."],
+                                cwd=self.repo, capture_output=True, text=True, env=environment)
+        self.assertEqual(result.returncode, 1)
+        last = json.loads(result.stdout.splitlines()[-1])
+        self.assertEqual(last["type"], "result")
+        self.assertTrue(last["is_error"])
+        self.assertIn("sdlc-claim 3 failed", last["result"])
+        self.assertFalse((self.repo / "patch.txt").exists())
+
+    def test_patch_txt_is_the_integrated_diff_only_once_the_pull_request_merged(self):
+        tools, remote = self.sdlc_tools("draft")
+        result = self.run_fake("Your issue is **#3**.", extra_path=str(tools), agent="agent2")
+        self.assertIn("(draft)", result.stdout)
+        own = (self.repo / "patch.txt").read_text()
+        self.assertIn("coordbench_fake_agent2.txt", own)
+        # Another agent's work on team/main is not the agent's own until the pull request merged.
+        other = self.tmp / "other"
+        subprocess.run(["git", "clone", "-q", "-b", "main", str(remote), str(other)], check=True)
+        (other / "coordbench_fake_agent1.txt").write_text("another agent's change\n")
+        subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(other), "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "-m", "x"],
+                       check=True)
+        pushed = subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:main"], capture_output=True, text=True)
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertNotIn("coordbench_fake_agent1.txt", own)
+        (tools / "sdlc-ready").write_text("#!/bin/sh\necho 'merged'\n")
+        result = self.run_fake("Your issue is **#4**.", extra_path=str(tools), agent="agent3")
+        self.assertIn("(merged)", result.stdout)
+        integrated = (self.repo / "patch.txt").read_text()
+        self.assertIn("coordbench_fake_agent1.txt", integrated)
+
+
+class EnvironmentGate(unittest.TestCase):
+    """The plan job's gate before a real run: the environment must exist
+    and have a required reviewer, and nothing it cannot read lets a run
+    through."""
+    CONF = Artifacts.CONF
+
+    class Answers:
+        def __init__(self, answer):
+            self.answer = answer
+            self.requests = []
+
+        def open(self, request, timeout=None):
+            self.requests.append(request)
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return io.BytesIO(json.dumps(self.answer).encode())
+
+    def gate(self, answer):
+        opener = self.Answers(answer)
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            status = environment.command_check(self.CONF, "bench", opener)
+        return status, out.getvalue(), opener
+
+    def test_an_environment_with_a_required_reviewer_lets_the_run_through(self):
+        status, said, opener = self.gate({"name": "bench", "protection_rules": [
+            {"type": "wait_timer", "wait_timer": 0},
+            {"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "owner"}}]}]})
+        self.assertEqual(status, 0)
+        self.assertIn("has a required reviewer", said)
+        self.assertEqual(opener.requests[0].full_url, "https://api.example/repos/o/r/environments/bench")
+
+    def test_a_missing_environment_or_one_with_no_reviewer_or_an_unreadable_one_stops_the_run(self):
+        cases = {
+            "no rules": {"name": "bench", "protection_rules": []},
+            "a reviewer rule with nobody": {"name": "bench", "protection_rules": [{"type": "required_reviewers",
+                                                                                   "reviewers": []}]},
+            "only a wait timer": {"name": "bench", "protection_rules": [{"type": "wait_timer", "wait_timer": 5}]},
+            "not there": urllib.error.HTTPError("u", 404, "Not Found", {}, None),
+            "forbidden": urllib.error.HTTPError("u", 403, "Forbidden", {}, None),
+            "network": urllib.error.URLError("no route"),
+        }
+        for name, answer in cases.items():
+            with self.subTest(case=name):
+                status, said, _ = self.gate(answer)
+                self.assertEqual(status, 1, said)
+                self.assertTrue(said.strip(), name)
 
 
 class Workflow(unittest.TestCase):
@@ -328,6 +468,9 @@ class Workflow(unittest.TestCase):
         self.assertNotIn("cancel-in-progress", real)
         self.assertIn("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets[format('SYMPHONY_CLAUDE_{0}', matrix.account)] }}", real)
         self.assertIn("timeout-minutes: 330", real)
+        gate = self.workflow[self.workflow.index("\n  plan:"):self.workflow.index("\n  survey:")]
+        self.assertIn("if: steps.plan.outputs.mode == 'real'", gate)
+        self.assertIn("run: python3 bench/cooperbench/actions/environment.py bench", gate)
         fake = self.workflow[self.workflow.index("  run:"):self.workflow.index("  run-real:")]
         self.assertNotIn("secrets", fake)
         self.assertNotIn("environment:", fake)

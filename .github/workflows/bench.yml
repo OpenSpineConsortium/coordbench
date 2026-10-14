@@ -12,17 +12,20 @@ name: Bench
 #   the whole path runs and no usage is spent; a pull request that
 #   changes the kit, the workflow or the runner runs one pair this way.
 # - real: the agents are Claude Code on the owner's accounts. Each job
-#   waits in the environment bench until a reviewer approves the run,
-#   takes its account's token from the organization secret
-#   SYMPHONY_CLAUDE_<account> and runs in the concurrency group of that
-#   account, so one account runs one job at a time and up to 100 wait in
-#   order; the accounts are the variable SYMPHONY_CLAUDE_ACCOUNTS (names
-#   separated by commas or blanks) unless the dispatch names them.
+#   waits in the environment bench until a reviewer approves the run
+#   (the plan job refuses a real run while that environment has no
+#   required reviewer, actions/environment.py), takes its account's
+#   token from the organization secret SYMPHONY_CLAUDE_<account> and
+#   runs in the concurrency group of that account, so one account runs
+#   one job at a time and up to 100 wait, first in first out as far as
+#   GitHub keeps it; the accounts are the variable
+#   SYMPHONY_CLAUDE_ACCOUNTS (names separated by commas or blanks)
+#   unless the dispatch names them.
 # A pair's files are one artifact, kept 90 days, named
 # <tag>__<arm>__<repo>__<task>__f1_f6; a dispatch of the same tag skips
-# every pair whose artifact holds an eval.json, so a run that stopped on
-# a usage limit is finished by dispatching it again. No step calls a
-# judge model, and none sees ANTHROPIC_API_KEY.
+# every pair whose artifact holds a scored pair with no agent in Error,
+# so a run that stopped on a usage limit is finished by dispatching it
+# again. No step calls a judge model, and none sees ANTHROPIC_API_KEY.
 
 on:
   workflow_dispatch:
@@ -92,11 +95,22 @@ jobs:
           PAIRS: ${{ inputs.pairs || 'pallets_click_task/2068/f1_f6' }}
           ARMS: ${{ inputs.arms || 'solo,coop-git,sdlc' }}
           ACCOUNTS: ${{ inputs.accounts || vars.SYMPHONY_CLAUDE_ACCOUNTS }}
-          TAG: ${{ inputs.tag || format('smoke-pr{0}', github.event.pull_request.number) }}
+          # A pull request's tag carries the run id, so every push runs
+          # the pair again rather than finding the last push's artifact.
+          TAG: ${{ inputs.tag || format('smoke-pr{0}-{1}', github.event.pull_request.number, github.run_id) }}
         run: |
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           python3 bench/cooperbench/actions/plan.py --dataset-dir "$RUNNER_TEMP/cooperbench/dataset" \
             --mode "$MODE" --pairs "$PAIRS" --arms "$ARMS" --accounts "$ACCOUNTS" --tag "$TAG"
+
+      - name: Refuse a real run until the environment bench has a required reviewer
+        # GitHub makes an environment a job names before anyone has made
+        # it, with no rule, and the run-real jobs would then run
+        # unapproved; the plan stops here, before the matrix, instead.
+        if: steps.plan.outputs.mode == 'real'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 bench/cooperbench/actions/environment.py bench
 
       - name: Say what was planned
         env:

@@ -45,10 +45,14 @@ be added as a sixth arm by the dispatch input.
   containers.
 - Accounts: the owner's, one job at a time per account, every arm of a
   pair on the same account (plan.py), so an account's usage window is
-  spent on a pair's arms together rather than on one arm.
-- Resume: a pair whose artifact holds an eval.json is not run again; a
-  pair that ended in Error (a usage limit among the causes) runs again on
-  the next dispatch of the same tag, and the report counts its attempts.
+  spent on a pair's arms together rather than on one arm; the order the
+  jobs run in is GitHub's queue's, first in first out as far as it keeps
+  it, so the arm rotation is a tendency, not a guarantee.
+- Resume: a pair whose artifact holds a scored pair with no agent in
+  Error is not run again; a pair that ended in Error (a usage limit among
+  the causes) runs again on the next dispatch of the same tag, on a fresh
+  runner, and its new artifact is the one the report reads, the earlier
+  attempt's staying on GitHub under the same name until it expires.
 - Judging: the free heuristics only, in the run; the model-judged
   measures (communication errors, symptoms, speech acts, emergent
   behaviours) are run afterwards by hand, on purpose, if at all.
@@ -64,7 +68,7 @@ definition; the rate on finished pairs is reported beside it.
 ## Analysis, in report.py as it stands
 
 1. The pass rate of each arm with a 95% Wilson interval and a bootstrap
-   over task sets (5,000 resamples, seed 0), since pairs of one task are
+   over task sets (2,000 resamples, report.py's BOOTSTRAP_ITERATIONS, seed 0), since pairs of one task are
    not independent.
 2. sdlc against each other arm on the pairs both scored: the discordant
    counts and an exact McNemar test; the coordination gap against solo

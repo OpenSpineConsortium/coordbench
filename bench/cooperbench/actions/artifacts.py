@@ -3,8 +3,8 @@ one artifact per pair and arm, named as plan.py names it, kept across
 dispatches so a run resumes.
 
 - `finished NAME` says whether an artifact of that name holds a finished
-  pair (an eval.json): exit 0 when it does, 1 when there is none or it
-  is unfinished, so the job skips the pair or runs it.
+  pair (scored, no agent in Error): exit 0 when it does, 1 when there is
+  none or it is unfinished, so the job skips the pair or runs it.
 - `download TAG DIR` fetches every artifact whose name starts with TAG__
   (the newest of each name) and unpacks each into DIR/<run name>/, the
   run name being the artifact's parts joined by dashes, as plan.py made
@@ -97,9 +97,23 @@ def fetch_zip(conf, artifact_id, opener=None):
 
 
 def holds_finished_pair(data):
-    """True when the zip holds an eval.json, which a pair writes last."""
+    """True when the zip holds a scored pair whose agents all finished: an
+    eval.json without an error beside a result.json none of whose agents
+    ended in Error, as run.py's pair_finished reads a pair directory. A
+    pair an agent left in Error (a usage limit among the causes) is run
+    again by the next dispatch, as PLAN.md says."""
     with zipfile.ZipFile(io.BytesIO(data)) as packed:
-        return any(name.endswith("eval.json") for name in packed.namelist())
+        names = packed.namelist()
+        evals = [name for name in names if name.endswith("eval.json")]
+        results = [name for name in names if name.endswith("result.json")]
+        if not evals or not results:
+            return False
+        evaluation = json.loads(packed.read(evals[0]))
+        result = json.loads(packed.read(results[0]))
+    if not isinstance(evaluation, dict) or evaluation.get("error") or not isinstance(result, dict) or result.get("error"):
+        return False
+    agents = result.get("agents") if isinstance(result.get("agents"), dict) else {"solo": result.get("agent")}
+    return bool(agents) and not any(not isinstance(a, dict) or a.get("status") == "Error" for a in agents.values())
 
 
 def run_name_of(artifact_name):
@@ -130,7 +144,7 @@ def command_finished(conf, name, opener=None):
         if holds_finished_pair(fetch_zip(conf, newest["id"], opener)):
             print(f"{name}: finished in run {newest.get('workflow_run', {}).get('id')} ({newest['created_at']})")
             return 0
-        print(f"{name}: an artifact without eval.json; the pair runs again")
+        print(f"{name}: the pair is unscored or an agent ended in Error; it runs again")
         return 1
     except (urllib.error.URLError, OSError, ValueError, KeyError) as problem:
         print(f"{name}: could not read the artifacts ({problem}); the pair runs")

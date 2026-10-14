@@ -143,20 +143,30 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
   environment bench until a reviewer approves the run; it reads its
   account's token from the organization secret SYMPHONY_CLAUDE_<account>
   by name, and runs in the concurrency group of its account, one job at a
-  time, up to 100 waiting in order.
+  time, up to 100 waiting, first in first out as far as GitHub keeps it;
+  a dispatch holds at most 256 jobs, GitHub's limit on one matrix. The
+  100 is the group's across every dispatch, so a second dispatch while
+  the first still queues gets its jobs past that number cancelled by
+  GitHub: plan.py keeps each dispatch under it, and the next dispatch of
+  the same tag waits until the first has drained.
 
-The owner sets up, once: an organization secret SYMPHONY_CLAUDE_<NAME>
-per account, its value from `claude setup-token` on that account, shared
-with this repository; the repository variable SYMPHONY_CLAUDE_ACCOUNTS
-with the names, separated by commas; and the environment bench in this
-repository with the owner as a required reviewer. The token's value is
-never in a log: run.py passes it to the agents by name, and after each
-pair scrubs it out of every file the pair left (above).
+The owner sets up, once and in this order: the environment bench in this
+repository with the owner as a required reviewer, first, since a real
+dispatch before it exists would make the environment with no reviewer;
+the plan job reads the environment and refuses a real run until it has
+one (actions/environment.py), so nothing runs unapproved, and the run is
+dispatched again once the reviewer is set; then an organization secret SYMPHONY_CLAUDE_<NAME> per
+account (the name letters, digits and underscores), its value from
+`claude setup-token` on that account, shared with this repository; and
+the repository variable SYMPHONY_CLAUDE_ACCOUNTS with the names,
+separated by commas. The token's value is never in a log: run.py passes
+it to the agents by name, and after each pair scrubs it out of every file
+the pair left (above).
 
 A dispatch names a tag; its artifacts are `<tag>__<arm>__<repo>__<task>__f1_f6`,
 kept 90 days, and a dispatch of the same tag skips every pair whose
-artifact holds an eval.json, so a run that stopped on a usage limit is
-finished by dispatching it again. The pairs come from PLAN.md's list
+artifact holds a scored pair with no agent in Error, so a run that
+stopped on a usage limit is finished by dispatching it again. The pairs come from PLAN.md's list
 (`@bench/cooperbench/pairs.txt`), from `flash`, or from entries such as
 `pallets_click_task/2068`. The report is the artifact
 `report-<tag>-<run id>` and the job summary; METRICS.md says where each
@@ -268,8 +278,9 @@ which is why the steps take one task at a time.
 - fake_claude: the stand-in agent of a run that spends no usage (above).
 - actions/: what .github/workflows/bench.yml runs: plan.py (the matrix),
   run-pair/action.yml and pair.sh (one pair and arm), survey_task.sh,
-  artifacts.py (the resume and the report's download), report.sh and
-  survey_report.py, free_disk.sh; tested in tests/test_experiment_actions.py.
+  artifacts.py (the resume and the report's download), environment.py
+  (the gate before a real run), report.sh and survey_report.py,
+  free_disk.sh; tested in tests/test_experiment_actions.py.
 - PLAN.md, pairs.txt, METRICS.md: the benchmark pre-registered, its pair
   list, and where each of the paper's statistics is in the report.
 - cooperbench-claude-code-setup.patch: the adapter's installer skips the

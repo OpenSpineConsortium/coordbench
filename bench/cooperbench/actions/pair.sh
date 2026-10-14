@@ -19,8 +19,6 @@ root=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root"
 export COOPERBENCH_DIR=${COOPERBENCH_DIR:-$HOME/cooperbench}
 export PATH="$HOME/.local/bin:$PATH"
-# Named first, so the upload step finds the directory whatever happens below.
-echo "run_dir=$COOPERBENCH_DIR/logs/$RUN_NAME" >> "${GITHUB_OUTPUT:-/dev/null}"
 if [ "$MODE" != real ]; then
     export COORDBENCH_CLAUDE_BIN="$root/bench/cooperbench/fake_claude"
     unset CLAUDE_CODE_OAUTH_TOKEN COORDBENCH_CLAUDE_TOKEN

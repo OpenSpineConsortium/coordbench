@@ -6,9 +6,12 @@ costs that one job and the resumed dispatch runs it again. Every arm of a
 pair goes to one account, so the arms of a pair draw on one usage window
 and no account sees a pair's work twice; accounts take pairs in turn; and
 the arm order rotates by pair index, so no arm is always first on an
-account's fresh window or always last on its tired one. GitHub queues at
-most 100 pending jobs in one concurrency group and cancels the rest, so an
-account gets at most that many items in one dispatch and the plan says
+account's fresh window or always last on its tired one, as far as GitHub
+keeps the order (its queue is first in, first out by the time a job
+started waiting, which it does not guarantee). GitHub runs at most 256
+jobs from one matrix, and queues at most 100 pending jobs in one
+concurrency group and cancels the rest, so a dispatch holds at most 256
+items, an account at most 100 of them in a real run, and the plan says
 how many it left out; a dispatch of the same tag later takes them, since
 a finished item is skipped by its artifact.
 
@@ -30,7 +33,13 @@ import re
 from pathlib import Path
 
 ARMS = ("solo", "coop", "coop-git", "team", "sdlc")
+# GitHub queues at most this many pending jobs in one concurrency group
+# (queue: max), and a real run's jobs queue per account.
 QUEUE_LIMIT = 100
+# GitHub runs at most this many jobs from one matrix, in any mode.
+MATRIX_LIMIT = 256
+# An account's name is part of its secret's name, SYMPHONY_CLAUDE_<name>.
+ACCOUNT = re.compile(r"[A-Za-z0-9_]{1,80}")
 ENTRY = re.compile(r"^(?P<repo>[A-Za-z0-9_]+)/(?P<task>\d{1,9})(?:/f?(?P<first>\d{1,4})_f?(?P<second>\d{1,4}))?$")
 SEPARATORS = re.compile(r"[,\s]+")
 
@@ -108,17 +117,19 @@ def artifact_name(tag, arm, pair):
     return "__".join([tag, arm, repo, str(task), feature_word(features)])
 
 
-def plan_items(pairs, arms, accounts, tag):
+def plan_items(pairs, arms, accounts, tag, queue_limit=QUEUE_LIMIT):
     """One item per pair and arm, pair-major, each pair's arms on one
     account, accounts in turn, the arm order rotated by pair index; then
-    the per-account queue cap."""
+    the matrix limit, and the per-account queue cap where one applies.
+    Dropped items are counted, and a later dispatch of the same tag takes
+    them, since a finished item is skipped by its artifact."""
     items, dropped = [], 0
     counts = {account: 0 for account in accounts}
     for index, pair in enumerate(pairs):
         account = accounts[index % len(accounts)]
         rotated = arms[index % len(arms):] + arms[:index % len(arms)]
         for arm in rotated:
-            if counts[account] >= QUEUE_LIMIT:
+            if len(items) >= MATRIX_LIMIT or (queue_limit and counts[account] >= queue_limit):
                 dropped += 1
                 continue
             counts[account] += 1
@@ -145,11 +156,15 @@ def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag):
     if mode == "real" and not accounts:
         raise ValueError("a real run names at least one account (the accounts input, or the variable "
                          "SYMPHONY_CLAUDE_ACCOUNTS)")
-    items, dropped = plan_items(pairs, arms, accounts, tag)
+    for account in accounts:
+        if not ACCOUNT.fullmatch(account):
+            raise ValueError(f"an account's name is letters, digits and underscores, as its secret's name is: {account!r}")
+    items, dropped = plan_items(pairs, arms, accounts, tag, QUEUE_LIMIT if mode == "real" else 0)
     notes = []
     if dropped:
-        notes.append(f"{dropped} items left out: GitHub queues at most {QUEUE_LIMIT} jobs per account; "
-                     f"dispatch the same tag again once these finish")
+        notes.append(f"{dropped} items left out: GitHub runs at most {MATRIX_LIMIT} jobs from one matrix"
+                     + (f" and queues at most {QUEUE_LIMIT} per account" if mode == "real" else "")
+                     + "; dispatch the same tag again once these finish")
     return {"mode": mode, "tag": tag, "pairs": len(pairs), "arms": arms, "accounts": accounts,
             "items": items, "survey": survey_tasks(pairs), "dropped": dropped, "notes": notes}
 

@@ -37,11 +37,18 @@ outputs:
     description: "true when an artifact of the name already holds a finished pair"
     value: ${{ steps.finished.outputs.skip }}
   run_dir:
-    description: the directory the pair wrote, to upload
-    value: ${{ steps.pair.outputs.run_dir }}
+    description: the directory the pair writes, to upload whatever happened
+    value: ${{ steps.where.outputs.run_dir }}
 runs:
   using: composite
   steps:
+    - name: Name the pair's directory
+      id: where
+      shell: bash
+      env:
+        RUN_NAME: ${{ inputs.name }}
+      run: echo "run_dir=${COOPERBENCH_DIR:-$HOME/cooperbench}/logs/$RUN_NAME" >> "$GITHUB_OUTPUT"
+
     - name: Free the disk for the task image
       shell: bash
       run: bash bench/cooperbench/actions/free_disk.sh

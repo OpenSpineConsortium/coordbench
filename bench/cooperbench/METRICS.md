@@ -18,7 +18,7 @@ which no workflow run makes.
 | Paired significance between settings | none in the paper | Paired comparisons (exact McNemar) |
 | Naive-merge conflict rate; semantic failures (clean merge, tests fail) | Fig 5b, Sec 5 | Naive-merge conflicts |
 | Merge cascade: naive, union, learned resolver | Table 6 | Merge cascade (Table 6); the resolver's step needs a model server and says so |
-| Turns and the share of steps spent on messages | Fig 5a, Sec 5 | Communication (turns, speaker runs, overhead: sends / tool calls) |
+| Turns (Fig 6a) and the share of events spent on messages (Fig 5c) | Fig 6a, Fig 5c, Sec 5 | Communication (turns, speaker runs, overhead: sends / tool calls) |
 | Speech acts: Plan, Question, Answer, Update, Ack | Fig 5c | Speech acts, judge; a keyword baseline in the heuristics |
 | Concrete references, line numbers and file paths | Sec 5 | Concrete references (Mann-Whitney between conflict and no-conflict pairs) |
 | Communication errors: unresponsiveness, hallucination, repetition | Sec 5, Fig 6, App F | Failure modes, judge |
@@ -34,7 +34,7 @@ which no workflow run makes.
 | --- | --- | --- |
 | Solo against coop, and 2, 3 and 4 agents (68.6, 46.5, 30.0%) | The Curse of Coordination | Pass rates and Coordination gap; the 3- and 4-agent sets are not run (PARITY row 15) |
 | Up to 20% of steps spent on messages | The Curse of Coordination | Communication |
-| Expectation, commitment and communication failures (63% expectation) | The Curse of Coordination | Failure modes, judge |
+| Expectation, commitment and communication failures (63% expectation) | The Curse of Coordination | Not a report section: `annotate.py causes` draws failed pairs and writes review packets for a person to label, and `annotate.py tally` counts the labels with Wilson intervals |
 | Coop with git against coop without, and solo (27.76 / 26.23 / 48.60 for Gemini 3 Flash) | The Curious Case of Miscoordination | Git ablation (its columns, the blog's rows printed under the table) |
 | The five git failure patterns (blame, sagas, and the rest) | The Curious Case of Miscoordination | Failure modes, judge (emergent: the git-setting labels) |
 
@@ -67,7 +67,7 @@ with these and the team's metrics above.
 ## What a fake run shows
 
 A run in fake mode fails every pair by design, since its agent implements
-nothing; its report is read for the Runs table (every pair attempted,
-Errors 0), the Communication table (the fake agent's one message to its
+nothing; its report is read for the Pass rates table (every pair
+attempted, 0 in its Errors column), the Communication table (the fake agent's one message to its
 peer) and, in the sdlc arm, the claim, pull request and merge counts in
 metrics.json, which say the protocol's path was walked.
