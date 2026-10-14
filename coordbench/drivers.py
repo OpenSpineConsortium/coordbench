@@ -715,6 +715,12 @@ def stop_claude(container):
         pass
 
 
+# How CliRun says the agent ran out the pair's time limit: the start of
+# its end_reason, which run.py pair_finished and the Actions kit's
+# artifacts.py read to keep such a pair rather than run it again.
+TIMED_OUT = "timed out after "
+
+
 class CliRun:
     """One headless Claude Code, on a thread of its own so that every agent
     of a run starts at the same moment."""
@@ -729,7 +735,7 @@ class CliRun:
         try:
             docker(*claude_exec_arguments(self.job), timeout=self.job.timeout_s, output=self.job.log_path)
         except subprocess.TimeoutExpired:
-            self.problem = f"timed out after {self.job.timeout_s:.0f} seconds"
+            self.problem = f"{TIMED_OUT}{self.job.timeout_s:.0f} seconds"
             stop_claude(self.job.container)
         except Exception as problem:  # the thread must report, never die silently
             self.problem = f"{type(problem).__name__}: {problem}"

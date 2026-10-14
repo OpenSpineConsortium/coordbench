@@ -59,8 +59,11 @@ itself only drives shell scripts, so it spends almost none of the usage.
   them is the owner's call (the environment's settings, Network access);
   the task containers also resolve only the hosts the environment reaches
   directly, so a test that downloads at run time would then still need its
-  files baked into the overlay image rather than fetched. Until then the
-  run covers the 42 pairs, and the report says which pairs each arm ran.
+  files baked into the overlay image rather than fetched. GitHub's runners
+  reach the three hosts: the survey of 2026-10-14 (bench.yml in survey
+  mode, tag survey-1) graded every feature of all 20 tasks there, so the
+  pre-registered list, pairs.txt, holds the 50 pairs, and the report says
+  which pairs each arm ran.
 - A team run with a shared remote on pallets_click/2068, given a
   placeholder token, brought every piece up (the agents' containers on the
   team network, the git server, the task list seeded in Redis, the team's
@@ -119,11 +122,22 @@ that prints its environment writes the token into its stream, its
 transcript and what it told its peer, and a pair's files may be published
 as a workflow's artifact. The run says on stderr when it found one, and a
 pair with a file that holds the token and could not be rewritten is an
-error, not a result. The scrub reads the token's exact bytes in plain and
-gzip files only: an archive an agent packed (.tar.gz, .zip), a git
-object under a workspace kept with --keep, or the token encoded some
-other way, is outside it, as is the log of a hub started elsewhere
-(--hub), which is that hub's to keep.
+error, not a result. The scrub rewrites the token's exact bytes in plain
+and gzip files only: an archive an agent packed (.tar.gz, .zip), a git
+object under the team arm's shared/ copy or a workspace kept with
+--keep, or the token encoded some other way, is outside it, as is the
+log of a hub started elsewhere (--hub), which is that hub's to keep.
+`run.py scrub --run-dir DIR` runs the scrub once more over a run
+directory, removing first every symlink and special file in it (the
+upload would follow a symlink to a file the scrub never read), and
+reads every file back, the members of an archive named .tar, .tar.gz,
+.tgz or .zip (each read as its bytes) and the git objects where a
+repository keeps them (loose ones and packfiles, inflated, with each
+delta applied to its base) included, and exits 2 when any still holds
+the token or could not be read; the workflow's jobs run it
+before an upload, after stopping any agent container still up, and
+publish nothing it refused. The team arm's shared/ is copied into every
+pair and published with it.
 
 ## In GitHub Actions
 
@@ -138,44 +152,88 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
 - fake: every pair with fake_claude as the agent, so the whole path (the
   images, the containers, the hub, the git server, the scorer and the
   artifacts) runs and no usage is spent. A pull request that changes the
-  kit, the workflow or the runner runs one pair this way.
-- real: Claude Code on the owner's accounts. Every real job waits in the
-  environment bench until a reviewer approves the run; it reads its
+  kit (bench/cooperbench/), the workflow or the package coordbench/ runs
+  one fake pair, pallets_click 2068's features 1 and 6, under three arms
+  (solo, coop-git and sdlc) as its check.
+- real: Claude Code on the owner's accounts. One job, approve, waits in
+  the environment bench until a reviewer approves the dispatch, once;
+  every real job needs it and carries no environment of its own, since a
+  job that waits in the environment behind its concurrency group asks
+  for its own click when its turn comes. Each real job reads its
   account's token from the organization secret SYMPHONY_CLAUDE_<slot>,
   the slot a number from 1 to 8, and runs in the concurrency group of its
-  slot, one job at a
-  time, up to 100 waiting, first in first out as far as GitHub keeps it;
-  a dispatch holds at most 256 jobs, GitHub's limit on one matrix. The
-  100 is the group's across every dispatch, so a second dispatch while
-  the first still queues gets its jobs past that number cancelled by
-  GitHub: plan.py keeps each dispatch under it, and the next dispatch of
-  the same tag waits until the first has drained. The workflow names the
-  eight slots' secrets one by one rather than looking one up by a computed
-  name, which would hand the runner every secret the repository can see.
+  slot, one job at a time, up to 100 waiting, first in first out as far
+  as GitHub keeps it; a dispatch holds at most 256 jobs, GitHub's limit
+  on one matrix. The 100 is the group's across every real dispatch,
+  whatever its tag, so a second dispatch while an earlier one still
+  queues gets its jobs past that number cancelled by GitHub: plan.py
+  keeps each dispatch under it, and nothing checks the queue for you, so
+  make a real dispatch only when no earlier real run is still queued or
+  in progress (Actions > Bench lists every dispatch as Bench, without its
+  tag; a run's tag is in its plan job's summary). One dispatch holds the whole list only
+  with at least ceil(pairs x arms / 100) accounts: three for the 50
+  pairs under five arms; with fewer, the plan says how many items it
+  left out and the next dispatch of the tag takes them.
+  The workflow names the eight slots' secrets one by one rather than
+  looking one up by a computed name, which would hand the runner every
+  secret the repository can see. The approval gates this workflow's use
+  of the accounts and not the secrets themselves, which any workflow of
+  this repository, on any branch, may name: the secrets are shared with
+  this repository alone, and only people with write access run workflows
+  here.
 
 The owner sets up, once and in this order: the environment bench in this
 repository with the owner as a required reviewer, first, since a real
-dispatch before it exists would make the environment with no reviewer;
-the plan job reads the environment and refuses a real run until it has
-one (actions/environment.py), so nothing runs unapproved, and the run is
-dispatched again once the reviewer is set; then an organization secret
-SYMPHONY_CLAUDE_<slot> per account, the slot a number from 1 up (so
-SYMPHONY_CLAUDE_1 for the first account, SYMPHONY_CLAUDE_2 for the
-second, up to 8), its value from `claude setup-token` on that account,
-shared with this repository; and the repository variable
+dispatch before it exists would make the environment with no reviewer
+(GitHub makes an environment a workflow names, so bench may already be
+there, with no rule, and then only needs its reviewer); the plan job
+reads the environment and refuses a real run until it has one who may
+approve this dispatch (actions/environment.py; a rule against
+self-review with the owner as its only reviewer refuses too), so nothing
+runs unapproved, and the run is dispatched again once the reviewer is
+set (on the environment's page: Required reviewers ticked with the
+owner added, Prevent self-review left unticked since the owner both
+dispatches and approves, and Deployment branches and tags limited to
+main); then an organization secret SYMPHONY_CLAUDE_<slot> per account,
+the slot a number from 1 up (so SYMPHONY_CLAUDE_1 for the first account,
+SYMPHONY_CLAUDE_2 for the second, up to 8), its value from `claude
+setup-token` on that account, with Repository access set to Selected
+repositories and this one ticked (this repository is public, so Private
+repositories leaves it out, and All repositories would hand the token
+to every workflow of the organization), which the plan job checks slot
+by slot before any job runs; and the repository variable
 SYMPHONY_CLAUDE_ACCOUNTS with the slots in use, separated by commas
-(`1,2,3` for three accounts). The token's value is never in a log: run.py passes
-it to the agents by name, and after each pair scrubs it out of every file
-the pair left (above).
+(`1,2,3` for three accounts). A real dispatch is approved on its run's
+page: Review deployments, tick bench, Approve and deploy. The token's value is never in a log:
+run.py passes it to the agents by name, after each pair scrubs it out of
+every file the pair left (above), and before anything is uploaded the
+job scrubs the pair's directory once more and reads every file back,
+archives included, publishing nothing that still holds it or could not
+be read.
 
 A dispatch names a tag; its artifacts are `<tag>__<arm>__<repo>__<task>__f1_f6`,
-kept 90 days, and a dispatch of the same tag skips every pair whose
-artifact holds a scored pair with no agent in Error, so a run that
-stopped on a usage limit is finished by dispatching it again. The pairs come from PLAN.md's list
+kept 90 days, with a marker `<name>__done` beside each finished one
+(scored, no agent failed: in Error for a cause outside the benchmark, a
+usage limit or a refused sign-in among them; one that ran out its time
+is kept with its scored patch, PLAN.md's Resume). A dispatch of the same
+tag plans no job for a pair whose marker is there and skips one whose
+artifact holds a finished pair, scores from its files a pair whose
+agents did not fail but that was never scored, and runs again a pair an
+agent of which failed, so a run that stopped on a usage limit is
+finished by dispatching it again, at most three dispatches in all;
+GitHub's "Re-run failed jobs" on the run does the same for its failed
+jobs, each re-run attempt replacing the attempt's artifact. A fake
+dispatch's artifacts carry the tag `fake-<tag>`, and a real dispatch
+refuses a tag that starts with `fake-` or `smoke-`, so a rehearsal never
+stands in for the benchmark. The pairs come from PLAN.md's list
 (`@bench/cooperbench/pairs.txt`), from `flash`, or from entries such as
-`pallets_click_task/2068`. The report is the artifact
-`report-<tag>-<run id>` and the job summary; METRICS.md says where each
-of the paper's statistics is in it.
+`pallets_click_task/2068`; an agent's minutes are the `timeout_min`
+input, 120 at most in real mode and 30 in fake. The report is the
+artifact `report-<tag>-<run id>`, the job summary and the report job's
+log; METRICS.md says where each of the paper's statistics is in it, and
+its Dataset section carries the runner survey's gradeability when the
+dispatch names the survey's tag (`survey_tag`), since the survey runs
+under a tag of its own.
 
 ## Steps, in the new session
 
@@ -219,15 +277,21 @@ and 12 each for the other three arms, 42 sessions in all.
 
 The authors' own claude_code team run on the 10-pair core subset cost
 about $8.50 at API prices, about $0.43 per agent session with Sonnet 4.5.
-The flash subset over four arms is 50 solo sessions and 100 for each of
-the other three arms, 350 sessions in all, about $150 at API prices
-(294 sessions, about $125, for the 42 pairs that grade here). On
-a subscription that is usage drawn from the plan's limits, not a bill,
-and it will likely span several usage windows. A pair whose agents stop
+The flash subset over the four arms of that run is 50 solo sessions and
+100 for each of the other three arms, 350 sessions in all, about $150 at
+API prices. The dispatch in Actions runs five arms, so a pair is nine
+sessions (one solo and two for each other arm): pairs.txt's 50 pairs are
+450 sessions, about $195 at the authors' rate, and the pilot on
+pallets_click 2068 (six pairs) 54 sessions, about $23. On a subscription
+that is usage drawn from the plan's limits, not a bill, and an account
+runs one job at a time, so a run spans days and several usage windows. A pair whose agents stop
 on a usage limit is marked Error, and running the same command again
-later runs it again; finished pairs are kept. The pilot is about 42
-sessions, near $18 at API prices. With CONCURRENCY=1 a pair takes 5 to 20
-minutes per arm.
+later runs it again; finished pairs are kept, a pair whose agent ran
+out its 120 minutes among them, since its patch is scored. The cloud
+session's pilot above, run_arms.sh's four arms over the same six pairs,
+is 42 sessions, about $18 at API prices, and pilot.sh's six arms there
+66 sessions, about $28. With CONCURRENCY=1 a pair takes 5 to 20 minutes
+per arm.
 
 The container has 4 CPUs, 15 GB of memory and about 26 GB of free disk.
 The task images are 0.1 to 4.2 GB compressed and about twice that on disk,

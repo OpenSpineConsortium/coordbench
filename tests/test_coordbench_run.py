@@ -7,10 +7,12 @@ results. Nothing here starts a container or a Claude."""
 
 import contextlib
 import gzip
+import hashlib
 import importlib.util
 import io
 import json
 import os
+import random
 import re
 import shutil
 import stat
@@ -24,6 +26,7 @@ import types
 import unittest
 import urllib.error
 import urllib.request
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -401,6 +404,47 @@ class RecordingDriver:
 
     def wait(self, job):
         return drivers.AgentOutcome(status="Submitted", patch=PATCHES.get(job.agent, ""))
+
+
+class StreamingDriver(RecordingDriver):
+    """A driver whose agents stream to the host until their containers
+    are removed, as the claude-cli driver's docker exec does: each
+    stream's thread writes its last line, the stand-in for the credential
+    in it (the test puts PLANTED in the environment as the token), once
+    docker rm -f names its container, and then ends. Each join says
+    whether the removal came first, the order a teardown needs: a join
+    before it waits out its timeout while the agent still streams."""
+
+    def __init__(self, docker, refuse_after=None):
+        super().__init__()
+        self.docker = docker
+        self.refuse_after = refuse_after
+        self.joined_after_removal = []
+
+    def removed(self, container):
+        return any(container in args[2:] for args in self.docker.matching("rm", "-f"))
+
+    def start(self, job):
+        if self.refuse_after is not None and len(self.jobs) >= self.refuse_after:
+            raise KeyboardInterrupt
+        super().start(job)
+        driver = self
+
+        def stream_until_removed():
+            deadline = time.time() + 5
+            while not driver.removed(job.container) and time.time() < deadline:
+                time.sleep(0.01)
+            with open(job.log_path, "a", encoding="utf-8") as stream:
+                stream.write(f"my environment: CLAUDE_CODE_OAUTH_TOKEN={PLANTED}\n")
+
+        class Stream(threading.Thread):
+            def join(self, timeout=None):
+                driver.joined_after_removal.append(driver.removed(job.container))
+                super().join(timeout)
+
+        handle = types.SimpleNamespace(thread=Stream(target=stream_until_removed))
+        handle.thread.start()
+        return handle
 
 
 # A subagent's transcript as Claude Code writes one: the prompt, then one
@@ -951,6 +995,118 @@ class Provisioning(RunnerCase):
         self.assert_timings_well_formed(result["timings"])
         self.assertEqual(phases(result["timings"]), [("hub", None), ("git_remote", None), ("teardown", None)])
         self.assertRegex(err, r"timings: hub [0-9.]+ s, git_remote [0-9.]+ s, teardown [0-9.]+ s\n")
+
+
+    def test_a_failure_after_the_agents_started_tears_them_down_and_records_the_error(self):
+        """The plan's write comes after the agents start streaming to the
+        host (the disk full is the realistic cause): the pair is an
+        error like a failed provision, its containers removed and its
+        files scrubbed, never left running with no record."""
+        calls = []
+
+        def failing_save(plan):
+            calls.append(plan["run_id"])
+            if len(calls) == 1:
+                raise OSError("No space left on device")
+
+        with mock.patch.object(runner, "save_plan", side_effect=failing_save):
+            code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 1)
+        self.assertIn("No space left on device", err)
+        result = json.loads((self.pair() / "result.json").read_text())
+        self.assertIn("OSError: No space left on device", result["error"])
+        self.assertEqual(result["error_kind"], "infrastructure")
+        self.assertEqual({a["status"] for a in result["agents"].values()}, {"Error"})
+        self.assertFalse((self.pair() / "eval.json").exists())
+        self.assertTrue([c for c in self.docker.commands() if c[:2] == ["rm", "-f"]])
+        self.assertEqual(self.scorer.calls, [])
+        self.assertFalse(runner.pair_finished(self.pair()))
+
+    def planting(self):
+        """The stand-in as the agents' token, so the scrub replaces it
+        wherever a test or a stream writes it."""
+        return mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED})
+
+    def assert_streams_scrubbed(self, count):
+        streams = sorted(self.pair().glob("*_stream.jsonl"))
+        self.assertEqual(len(streams), count)
+        for stream in streams:
+            self.assertNotIn(PLANTED, stream.read_text())
+            self.assertIn(runner.SCRUBBED, stream.read_text())
+
+    def test_a_failure_whose_own_record_fails_still_stops_the_agents_before_the_scrub(self):
+        """A full disk fails the record's writes as it failed the plan's:
+        the containers are removed, then the threads that write the
+        agents' streams waited for, which the removal ends, all the same
+        and before the scrub, so a stream's last line is scrubbed too; and
+        the caller gets PairFailed, so prepare stops the hub it started
+        and a run goes on."""
+        driver = StreamingDriver(self.docker)
+        full = OSError(28, "No space left on device")
+        with mock.patch.object(runner, "save_plan", side_effect=full), \
+                mock.patch.object(runner, "write_outputs", side_effect=full), \
+                self.planting(), contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(runner.PairFailed):
+                self.prepare("coop", driver=driver)
+        self.assertIn("recording the failure failed too: OSError", err.getvalue())
+        self.assertEqual(driver.joined_after_removal, [True, True])
+        self.assert_streams_scrubbed(2)
+
+    def test_a_failure_said_to_a_closed_stderr_still_stops_the_agents_and_scrubs(self):
+        """Saying the pair's error is part of recording it, so a stderr
+        gone (a run piped into head) fails the say inside the record,
+        never before the teardown and the scrub."""
+        driver = StreamingDriver(self.docker)
+        with mock.patch.object(runner, "save_plan", side_effect=OSError(28, "No space left on device")), \
+                mock.patch.object(runner, "say", side_effect=BrokenPipeError(32, "Broken pipe")), self.planting():
+            with self.assertRaises(OSError):
+                self.prepare("coop", driver=driver)
+        self.assertEqual(driver.joined_after_removal, [True, True])
+        self.assert_streams_scrubbed(2)
+
+    def test_an_interrupt_between_two_starts_stops_the_started_agent_and_scrubs(self):
+        """The first agent streams from its start, so an interrupt before
+        the second one starts still removes the first's container, waits
+        for its stream and scrubs it, as finish_pair does however it ends;
+        and the run on the hub is closed."""
+        driver = StreamingDriver(self.docker, refuse_after=1)
+        with self.assertRaises(KeyboardInterrupt), self.planting(), quietly():
+            self.prepare("coop", driver=driver)
+        self.assertEqual(driver.joined_after_removal, [True])
+        self.assert_streams_scrubbed(1)
+        self.assertEqual(self.hub.run_count(), 0)
+
+    def test_an_interrupt_while_provisioning_tears_down_and_scrubs(self):
+        real = runner.provision_agent
+
+        def provision_then_interrupt(plan, agent, hub, options):
+            if agent is plan["agents"][1]:
+                (Path(plan["run_dir"]) / "provisioned.log").write_text(f"token {PLANTED}\n")
+                raise KeyboardInterrupt
+            return real(plan, agent, hub, options)
+
+        with mock.patch.object(runner, "provision_agent", side_effect=provision_then_interrupt), \
+                self.assertRaises(KeyboardInterrupt), self.planting(), quietly():
+            self.prepare("coop")
+        started = [args[3] for args in self.docker.matching("run", "-d", "--name")]
+        self.assertEqual(len(started), 1)
+        self.assertTrue([args for args in self.docker.matching("rm", "-f") if started[0] in args])
+        self.assertEqual((self.pair() / "provisioned.log").read_text(), f"token {runner.SCRUBBED}\n")
+        self.assertEqual(self.hub.run_count(), 0)
+
+    def test_a_shared_copy_that_cannot_be_made_still_lets_the_teardown_remove_everything(self):
+        """The team arm's scratchpad is copied out before the teardown; a
+        copy whose directory cannot be made (a full disk, here a file in
+        its way) is said and costs the pair nothing, so the containers
+        and the volume still go."""
+        plan, _, _ = self.prepare("team")
+        (Path(plan["run_dir"]) / runner.SHARED_COPY).write_text("in the way\n")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            runner.teardown(plan)
+        self.assertIn(f"copying {runner.SHARED_DIR} before the teardown failed", err.getvalue())
+        commands = self.docker.commands()
+        self.assertIn(["rm", "-f", *[a["container"] for a in plan["agents"]]], commands)
+        self.assertIn(["volume", "rm", "-f", f"coordbench-shared-{plan['run_id']}"], commands)
 
 
 class TheClaudeCliDriver(RunnerCase):
@@ -1550,6 +1706,64 @@ class Runs(RunnerCase):
         self.assertEqual(len(self.scorer.calls), 2)
         self.assertTrue((self.pair() / "eval.json").exists())
 
+    def test_a_finished_pair_whose_scoring_failed_is_scored_again_and_one_scored_is_not(self):
+        """The Actions kit fetches such a pair for its scoring (artifacts.py
+        calls it unscored), so a run that skipped it for having an
+        eval.json would leave it unscored on every dispatch of the tag;
+        the trajectory the viewers read is made again with the new
+        verdict, as rescore makes it."""
+        self.main(*self.run_arguments("coop", "--features", "1,6"))
+        evaluation = json.loads((self.pair() / "eval.json").read_text())
+        (self.pair() / "eval.json").write_text(json.dumps({**evaluation, "both_passed": False,
+                                                           "error": "DockerError: the sandbox did not start"}))
+        runner.export_pair({"run_dir": str(self.pair()), "cooperbench_dir": str(self.cooperbench), "run_id": "t"})
+
+        def exported_verdict():
+            with gzip.open(self.pair() / "trajectory.json.gz", "rt", encoding="utf-8") as exported:
+                return json.load(exported)["metadata"]["coordbench"]["outcome"]["both_passed"]
+
+        self.assertIs(exported_verdict(), False)
+        self.assertFalse(runner.scored(self.pair()))
+        before = len(self.container_work())
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.container_work()), before, "no container, no agent")
+        self.assertEqual(len(self.scorer.calls), 2)
+        self.assertIsNone(json.loads((self.pair() / "eval.json").read_text())["error"])
+        self.assertTrue(runner.scored(self.pair()))
+        self.assertIs(exported_verdict(), True)
+        summary = json.loads((self.logs / "t" / "summary.json").read_text())
+        self.assertEqual((summary["eval"]["passed"], summary["eval"]["skipped"]), (1, 0))
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual((code, len(self.scorer.calls)), (0, 2))
+        self.assertIn("skipped", err)
+
+    def test_a_pair_whose_agent_ran_out_its_time_is_scored_kept_and_no_error(self):
+        """A timed-out agent is marked Error, as CooperBench marks it, and
+        its pair is kept with its patch scored (pair_finished); the run's
+        exit status says the same, so the workflow's job is not red and
+        its marker is uploaded, and the next run leaves the pair alone."""
+        self.docker.claude_times_out = True
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 0, err)
+        result = json.loads((self.pair() / "result.json").read_text())
+        self.assertEqual(len(result["agents"]), 2)
+        for agent in result["agents"].values():
+            self.assertEqual(agent["status"], "Error")
+            self.assertTrue(agent["end_reason"].startswith(drivers.TIMED_OUT), agent)
+        self.assertTrue((self.pair() / "eval.json").exists())
+        self.assertTrue(runner.pair_finished(self.pair()))
+        before = len(self.container_work())
+        code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual((code, len(self.container_work())), (0, before))
+        self.assertIn("skipped", err)
+        # An agent that failed for another cause is still the pair's error.
+        failed = drivers.AgentOutcome(status="Error", end_reason="Usage limit reached")
+        timed_out = drivers.AgentOutcome(status="Error", end_reason=f"{drivers.TIMED_OUT}7200 seconds")
+        self.assertEqual(runner.verdict({"a": timed_out}, {"both_passed": True}), "pass")
+        self.assertEqual(runner.verdict({"a": timed_out, "b": failed}, {"both_passed": True}), "error")
+        self.assertEqual(runner.verdict({"a": timed_out}, {"error": "DockerError: gone"}), "error")
+
     def test_rescore_scores_from_the_patches_and_never_starts_an_agent(self):
         """An agent in Error makes a pair unfinished, so run would run it
         again with its agents; rescore scores it from its patches alone,
@@ -1579,6 +1793,23 @@ class Runs(RunnerCase):
         code, _, err = self.main("rescore", "--run-dir", str(pair), "--force")
         self.assertEqual((code, len(self.scorer.calls)), (0, scored + 2))
         self.assertEqual(self.main("rescore", "--run-dir", str(self.tmp / "nothing"))[0], 1)
+
+    def test_rescore_scores_again_a_pair_whose_scoring_failed_whatever_its_setting(self):
+        """rescore decides as run does (scored): a pair whose eval.json
+        holds an error has no verdict, solo or merged, with a cascade
+        block or without."""
+        for setting in ("solo", "coop"):
+            with self.subTest(setting=setting):
+                self.main(*self.run_arguments(setting, "--features", "1,6"))
+                pair = self.pair(setting)
+                evaluation = json.loads((pair / "eval.json").read_text())
+                (pair / "eval.json").write_text(json.dumps({**evaluation, "error": "DockerError: gone"}))
+                scored = len(self.scorer.calls)
+                code, _, err = self.main("rescore", "--run-dir", str(pair))
+                self.assertEqual((code, len(self.scorer.calls)), (0, scored + 1), err)
+                self.assertTrue(runner.scored(pair))
+                code, _, err = self.main("rescore", "--run-dir", str(pair))
+                self.assertEqual((code, len(self.scorer.calls)), (0, scored + 1), err)
 
     def test_prepare_then_finish_with_the_session_driver(self):
         code, out, err = self.main("prepare", "--arm", "coop", "--repo", REPO, "--task", str(TASK),
@@ -2787,6 +3018,268 @@ class MachineFailuresAndReferenceMerges(RunnerCase):
 
 
 
+class TheRerunRule(unittest.TestCase):
+    """pair_finished: CooperBench's rule, an agent in Error reruns the
+    pair, but for an agent that ran out the pair's time, whose scored
+    attempt is kept (PARITY.md, row 23)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-rerun-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def written(self, result):
+        (self.tmp / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        return self.tmp
+
+    def test_a_pair_whose_agent_ran_out_its_time_is_finished_and_one_that_failed_is_not(self):
+        timed_out = {"status": "Error", "error": f"{drivers.TIMED_OUT}7200 seconds",
+                     "end_reason": f"{drivers.TIMED_OUT}7200 seconds"}
+        self.assertTrue(runner.pair_finished(self.written(
+            {"agents": {"agent1": {"status": "Submitted"}, "agent2": timed_out}})))
+        self.assertTrue(runner.pair_finished(self.written({"agent": timed_out})))
+        self.assertFalse(runner.pair_finished(self.written(
+            {"agents": {"agent1": {"status": "Error", "error": None, "end_reason": "Usage limit reached"}}})))
+        self.assertFalse(runner.pair_finished(self.written(
+            {"agents": {"agent1": {"status": "Error", "error": None, "end_reason": drivers.NO_RESULT}}})))
+        self.assertFalse(runner.pair_finished(self.written({"error": "HubError: gone", "agents": {}})))
+        self.assertTrue(runner.pair_finished(self.written({"agents": {"agent1": {"status": "LimitsExceeded"}}})))
+        self.assertTrue(runner.agent_ran_out_of_time(timed_out))
+        self.assertFalse(runner.agent_ran_out_of_time({"status": "Error"}))
+
+
+# A blob's type in a packfile (git's object.h).
+BLOB = 3
+
+
+def packed_header(kind, size):
+    """A packed object's type-and-size header, as git writes it."""
+    byte = (kind << 4) | (size & 0x0F)
+    size >>= 4
+    out = bytearray()
+    while size:
+        out.append(byte | 0x80)
+        byte = size & 0x7F
+        size >>= 7
+    out.append(byte)
+    return bytes(out)
+
+
+def base_distance_bytes(distance):
+    """An offset delta's distance back to its base, as git's pack-objects
+    writes it: each byte before the last one less than its value."""
+    out = [distance & 0x7F]
+    distance >>= 7
+    while distance:
+        distance -= 1
+        out.insert(0, 0x80 | (distance & 0x7F))
+        distance >>= 7
+    return bytes(out)
+
+
+def packfile(*objects):
+    """A git packfile as git writes one: the header, each object's
+    type-and-size header, a delta's base, its zlib stream, and the SHA-1
+    of it all. An object is a blob's bytes, ("ofs", index, delta) for an
+    offset delta on the object at that index, or ("ref", id, delta) for a
+    ref delta on the object of that id."""
+    out = bytearray(b"PACK" + (2).to_bytes(4, "big") + len(objects).to_bytes(4, "big"))
+    starts = []
+    for entry in objects:
+        starts.append(len(out))
+        if isinstance(entry, bytes):
+            out += packed_header(BLOB, len(entry)) + zlib.compress(entry)
+            continue
+        how, base, delta = entry
+        if how == "ofs":
+            out += packed_header(runner.OFS_DELTA, len(delta)) + base_distance_bytes(starts[-1] - starts[base])
+        else:
+            out += packed_header(runner.REF_DELTA, len(delta)) + base
+        out += zlib.compress(delta)
+    return bytes(out) + hashlib.sha1(out).digest()
+
+
+def size_bytes(size):
+    """A delta's size: seven bits a byte, the lowest first."""
+    out = bytearray()
+    while size > 0x7F:
+        out.append(0x80 | (size & 0x7F))
+        size >>= 7
+    out.append(size)
+    return bytes(out)
+
+
+def delta_on(base, *steps):
+    """A git delta on base: each step ("copy", offset, size) or ("insert",
+    bytes), encoded as git's diff-delta encodes it."""
+    body, target = bytearray(), 0
+    for step in steps:
+        if step[0] == "insert":
+            assert 1 <= len(step[1]) <= 127, "git inserts at most 127 bytes at a time"
+            body += bytes([len(step[1])]) + step[1]
+            target += len(step[1])
+            continue
+        _, offset, size = step
+        command, arguments = 0x80, bytearray()
+        for bit in range(4):
+            if (offset >> (8 * bit)) & 0xFF:
+                command |= 1 << bit
+                arguments.append((offset >> (8 * bit)) & 0xFF)
+        for bit in range(3):
+            if (size >> (8 * bit)) & 0xFF:
+                command |= 0x10 << bit
+                arguments.append((size >> (8 * bit)) & 0xFF)
+        body += bytes([command]) + arguments
+        target += size
+    return size_bytes(len(base)) + size_bytes(target) + bytes(body)
+
+
+def blob_id(content):
+    return hashlib.sha1(b"blob %d\0" % len(content) + content).digest()
+
+
+class PackReading(unittest.TestCase):
+    """pack_contents: a packfile's objects as git shows them, deltas
+    applied, so a credential the scrub must find is seen whole however a
+    delta cut it, and whatever git would refuse is refused."""
+
+    # A line longer than one insert run: git inserts at most 127 bytes at
+    # a time, so a delta that adds this line cuts the planted value in two.
+    LINE = b"x" * 110 + b"export TOKEN=" + PLANTED.encode() + b"\n"
+    BASE = b"".join(b"line %d of the file the agent changed\n" % n for n in range(12))
+
+    def test_a_value_an_offset_delta_inserts_in_two_runs_is_seen_whole(self):
+        delta = delta_on(self.BASE, ("copy", 0, len(self.BASE)), ("insert", self.LINE[:127]),
+                         ("insert", self.LINE[127:]))
+        self.assertNotIn(PLANTED.encode(), delta, "the delta's own bytes cut the value")
+        pack = packfile(self.BASE, ("ofs", 0, delta))
+        self.assertEqual(runner.pack_contents(pack), [self.BASE, self.BASE + self.LINE])
+        self.assertEqual([packed.kind for packed in runner.packed_objects(pack)], [BLOB, runner.OFS_DELTA])
+
+    def test_a_ref_delta_finds_its_base_after_it_and_a_delta_may_build_on_a_delta(self):
+        middle = self.BASE + self.LINE
+        last = middle + b"one more line\n"
+        pack = packfile(("ref", blob_id(self.BASE), delta_on(self.BASE, ("copy", 0, len(self.BASE)),
+                                                             ("insert", self.LINE[:127]),
+                                                             ("insert", self.LINE[127:]))),
+                        self.BASE,
+                        ("ofs", 0, delta_on(middle, ("copy", 0, len(middle)), ("insert", b"one more line\n"))))
+        self.assertEqual(sorted(runner.pack_contents(pack)), sorted([middle, self.BASE, last]))
+
+    def test_the_objects_of_packs_git_writes_read_back_as_git_holds_them(self):
+        # No user's or system's git configuration takes part, and no
+        # maintenance of git's own races the cleanup.
+        environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0",
+                       "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false"}
+        with tempfile.TemporaryDirectory(prefix="coordbench-pack-test-") as scratch:
+            subprocess.run(["git", "init", "-q", scratch], env=environment, check=True, timeout=60)
+            lines = [b"line %d: text that repeats, with a number %d\n" % (n, n * 7) for n in range(200)]
+            versions = []
+            for version in range(12):
+                text = list(lines)
+                text.insert(50 + version, b"version %d: " % version + b"x" * 150 + PLANTED.encode() + b"\n")
+                versions.append(b"".join(text))
+            ids = b"".join(subprocess.run(["git", "-C", scratch, "hash-object", "-w", "--stdin"], input=content,
+                                          env=environment, capture_output=True, check=True, timeout=60).stdout
+                           for content in versions)
+            for flags, delta in (([], runner.REF_DELTA), (["--delta-base-offset"], runner.OFS_DELTA)):
+                with self.subTest(flags=flags):
+                    pack = subprocess.run(["git", "-C", scratch, "pack-objects", "--stdout", *flags], input=ids,
+                                          env=environment, capture_output=True, check=True, timeout=60).stdout
+                    self.assertIn(delta, [packed.kind for packed in runner.packed_objects(pack)])
+                    self.assertEqual(sorted(runner.pack_contents(pack)), sorted(versions))
+
+    def test_the_decompressor_is_handed_a_chunk_at_a_time_never_the_rest_of_the_pack(self):
+        noise = random.Random(7)
+        pack = packfile(*(noise.randbytes(1024) for _ in range(300)))
+        fed = []
+        real = zlib.decompressobj
+
+        class Counting:
+            def __init__(self):
+                self.inner = real()
+
+            def decompress(self, data):
+                fed.append(len(data))
+                return self.inner.decompress(data)
+
+            def __getattr__(self, name):
+                return getattr(self.inner, name)
+
+        with mock.patch.object(runner.zlib, "decompressobj", Counting):
+            self.assertEqual(len(runner.pack_contents(pack)), 300)
+        self.assertGreater(len(pack), 4 * runner.INFLATE_CHUNK)
+        self.assertLessEqual(max(fed), runner.INFLATE_CHUNK)
+        self.assertLess(sum(fed), 2 * len(pack))
+
+    def test_a_copy_with_no_size_bytes_copies_64_kib_as_git_writes_it(self):
+        # git's diff-delta writes a copy of 0x10000 bytes, its largest,
+        # with no size byte at all: the size 0 stands for 0x10000.
+        base = bytes(range(256)) * 300
+        delta = size_bytes(len(base)) + size_bytes(0x10000 + 3) + b"\x80" + b"\x03end"
+        self.assertEqual(runner.pack_contents(packfile(base, ("ofs", 0, delta))), [base, base[:0x10000] + b"end"])
+
+    def test_what_git_refuses_is_refused(self):
+        good = packfile(self.BASE, ("ofs", 0, delta_on(self.BASE, ("copy", 0, 10))))
+        self.assertEqual(len(runner.pack_contents(good)), 2)
+
+        def sealed(body):
+            return body + hashlib.sha1(body).digest()
+
+        def one_object(header_and_stream):
+            return sealed(b"PACK" + (2).to_bytes(4, "big") + (1).to_bytes(4, "big") + header_and_stream)
+
+        size = len(self.BASE)
+        # A copy that runs ten bytes past the base, made up by an insert so
+        # the result has the size the delta names: only the copy's own
+        # bound catches it.
+        past = size_bytes(size) + size_bytes(15) + delta_on(self.BASE, ("copy", size - 5, 15),
+                                                            ("insert", b"0123456789"))[len(size_bytes(size)) + 1:]
+        too_long = b"\xff" * 12 + b"\x01"
+        refused = {
+            "a checksum that does not match": (good[:-1] + bytes([good[-1] ^ 1]), "checksum"),
+            "bytes after the last object": (sealed(good[:-20] + b"\0"), "after the packfile's last object"),
+            "a truncated pack": (sealed(good[:-25]), "truncated"),
+            "a base not in the pack": (packfile(("ref", bytes(20), delta_on(self.BASE, ("copy", 0, 10)))),
+                                       "base is not in the packfile"),
+            "a copy past the base": (packfile(self.BASE, ("ofs", 0, past)), "past the end of its base"),
+            "a base of another size": (packfile(self.BASE, ("ofs", 0, size_bytes(5) + size_bytes(1) + b"\x01a")),
+                                       "base of another size"),
+            "the reserved instruction": (packfile(self.BASE, ("ofs", 0, size_bytes(size) + size_bytes(1) + b"\x00")),
+                                         "reserved instruction"),
+            "an insert past the delta's end": (packfile(self.BASE, ("ofs", 0, size_bytes(size) + size_bytes(5)
+                                                                    + b"\x05ab")), "insert runs past its end"),
+            "a result of another size": (packfile(self.BASE, ("ofs", 0, size_bytes(size) + size_bytes(9) + b"\x01a")),
+                                         "less than the size it names"),
+            "a type git does not have": (one_object(packed_header(5, 1) + zlib.compress(b"a")), "type 5"),
+            "a size its header does not give": (one_object(packed_header(3, 2) + zlib.compress(b"a")),
+                                                "not the one its header gives"),
+            "not a pack": (b"KCAP" + good[4:], "not a packfile"),
+            # What would cost time or memory before any size is compared:
+            # numbers longer than git's 64 bits, a stream that inflates
+            # past its header, a size past what the scrub reads.
+            "a header longer than git reads": (one_object(b"\xb0" + too_long + zlib.compress(b"a")),
+                                               "header longer than git reads"),
+            "a distance longer than git reads": (sealed(b"PACK" + (2).to_bytes(4, "big") + (2).to_bytes(4, "big")
+                                                        + packed_header(BLOB, size) + zlib.compress(self.BASE)
+                                                        + packed_header(runner.OFS_DELTA, 1) + too_long
+                                                        + zlib.compress(b"\x01")),
+                                                 "distance longer than git reads"),
+            "a delta size longer than git reads": (packfile(self.BASE, ("ofs", 0, too_long + b"\x01a")),
+                                                   "delta size longer than git reads"),
+            "an object that inflates past its header": (one_object(packed_header(3, 1) + zlib.compress(b"a" * 1000)),
+                                                        "larger than its header gives"),
+            "an object past what the scrub reads": (one_object(packed_header(3, runner.LARGEST_OBJECT + 1)
+                                                               + zlib.compress(b"a")), "more than the scrub reads"),
+            "a delta past what the scrub reads": (packfile(self.BASE, ("ofs", 0, size_bytes(size)
+                                                                       + size_bytes(runner.LARGEST_OBJECT + 1)
+                                                                       + b"\x01a")), "more than the scrub reads"),
+        }
+        for why, (pack, said) in refused.items():
+            with self.subTest(why=why), self.assertRaisesRegex(ValueError, said):
+                runner.pack_contents(pack)
+
+
 class Scrubbing(unittest.TestCase):
     """scrub_credentials on its own: every file under the directories, a
     gzip file through gzip, the longest value first, a short placeholder
@@ -2903,6 +3396,113 @@ class Scrubbing(unittest.TestCase):
         self.assertIn("a_stream.jsonl", str(caught.exception))
         self.assertIn("could not be rewritten", str(caught.exception))
         self.assertEqual((self.tmp / "b_stream.jsonl").read_text(), runner.SCRUBBED + "\n")
+
+    def test_the_scrub_command_rewrites_a_run_directory_and_refuses_to_publish_what_it_cannot_clean(self):
+        run_dir = self.tmp / "run"
+        (run_dir / "coop").mkdir(parents=True)
+        (run_dir / "coop" / "stream.jsonl").write_text(f"a {PLANTED} b\n")
+        (run_dir / "coop" / "clean.txt").write_text("nothing here\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+        self.assertEqual((run_dir / "coop" / "stream.jsonl").read_text(), f"a {runner.SCRUBBED} b\n")
+        self.assertIn("1 files", err.getvalue())
+        self.assertIn("no file holds", err.getvalue())
+        # The credential inside an archive an agent packed, or a file that cannot be read: not published.
+        with tarfile.open(run_dir / "coop" / "packed.tar.gz", "w:gz") as packed:
+            data = io.BytesIO(PLANTED.encode())
+            info = tarfile.TarInfo("env.txt")
+            info.size = len(PLANTED)
+            packed.addfile(info, data)
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn("packed.tar.gz: holds the agents' credential inside an archive", err.getvalue())
+        (run_dir / "coop" / "packed.tar.gz").unlink()
+        (run_dir / "coop" / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00 not gzip")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn("broken.gz: could not be read", err.getvalue())
+        # A git object the team arm's shared/ copy brings is read inflated: a loose object, a packfile.
+        (run_dir / "coop" / "broken.gz").unlink()
+        objects = run_dir / "coop" / "shared" / ".git" / "objects"
+        (objects / "ab").mkdir(parents=True)
+        (objects / "pack").mkdir()
+        loose = objects / "ab" / ("c" * 38)
+        loose.write_bytes(zlib.compress(b"blob 60\0the token " + PLANTED.encode() + b" in a committed file\n"))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn(f"{loose}: holds the agents' credential inside a git object", err.getvalue())
+        loose.write_bytes(zlib.compress(b"blob 5\0hello"))
+        pack = objects / "pack" / "pack-1.pack"
+        pack.write_bytes(packfile(b"a" * 300, b"export TOKEN=" + PLANTED.encode() + b"\n", b"tail"))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn(f"{pack}: holds the agents' credential inside a git object", err.getvalue())
+        pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail")[:-40])
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn(f"{pack}: could not be read", err.getvalue())
+        pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail"))
+        (objects / "pack" / "pack-1.idx").write_bytes(b"\xfftOc" + bytes(40))
+        self.assertEqual(runner.git_object_kind(pack), "pack")
+        self.assertEqual(runner.git_object_kind(loose), "loose")
+        self.assertIsNone(runner.git_object_kind(objects / "pack" / "pack-1.idx"))
+        self.assertIsNone(runner.git_object_kind(run_dir / "coop" / "clean.txt"))
+        # A clean archive passes, no credential in the environment is nothing to find, and no directory is 2.
+        with tarfile.open(run_dir / "coop" / "packed.tar", "w") as packed:
+            info = tarfile.TarInfo("note.txt")
+            info.size = 5
+            packed.addfile(info, io.BytesIO(b"hello"))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "", "COORDBENCH_CLAUDE_TOKEN": ""}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(self.tmp / "missing")]), 2)
+        self.assertIn("nothing to scrub", err.getvalue())
+
+    def test_the_scrub_command_removes_symlinks_and_special_files_which_the_upload_would_follow(self):
+        """actions/upload-artifact follows a symlink and packs what it
+        points at, which the scrub never reads; so the command removes
+        every symlink (to a file or a directory, outside the run or not)
+        and special file before it reads anything, whatever the
+        environment holds, and leaves what they point at alone."""
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (outside / "env.txt").write_text(f"CLAUDE_CODE_OAUTH_TOKEN={PLANTED}\n")
+        run_dir = self.tmp / "run"
+        (run_dir / "coop" / "shared").mkdir(parents=True)
+        (run_dir / "coop" / "clean.txt").write_text("nothing here\n")
+        (run_dir / "coop" / "shared" / "env.txt").symlink_to(outside / "env.txt")
+        (run_dir / "coop" / "shared" / "dir").symlink_to(outside, target_is_directory=True)
+        (run_dir / "coop" / "dangling").symlink_to(self.tmp / "nothing")
+        links = ["coop/dangling", "coop/shared/dir", "coop/shared/env.txt"]
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(run_dir / "coop" / "pipe")
+            links.append("coop/pipe")
+        kept = runner.unscrubbed(run_dir, [PLANTED])
+        self.assertEqual(sorted(line.split(": ", 1)[0] for line in kept), sorted(str(run_dir / link) for link in links))
+        self.assertIn("is a symlink, which the upload would follow", "\n".join(kept))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+        self.assertIn(f"removed {len(links)} symlinks and special files", err.getvalue())
+        self.assertIn("no file holds", err.getvalue())
+        self.assertEqual(sorted(str(path.relative_to(run_dir)) for path in run_dir.rglob("*")),
+                         ["coop", "coop/clean.txt", "coop/shared"])
+        self.assertEqual((outside / "env.txt").read_text(), f"CLAUDE_CODE_OAUTH_TOKEN={PLANTED}\n")
+        # With no credential in the environment, a fake run's, a link goes all the same.
+        (run_dir / "coop" / "again").symlink_to(outside / "env.txt")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "", "COORDBENCH_CLAUDE_TOKEN": ""}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+        self.assertFalse((run_dir / "coop" / "again").is_symlink())
 
     def test_a_pair_scrubs_its_own_hub_events_and_the_hub_s_files_wait_for_the_hub_to_stop(self):
         run_dir = self.tmp / "run" / "arm" / "pair"

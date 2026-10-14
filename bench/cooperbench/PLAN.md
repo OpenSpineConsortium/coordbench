@@ -16,14 +16,15 @@ doing both features?
 
 ## Pairs
 
-bench/cooperbench/pairs.txt: the flash subset's tasks whose gold patches
-graded in the cloud session, 17 tasks and 43 pairs, less whatever the
-survey on GitHub's runners (bench.yml in survey mode) shows does not grade
-there or does not fit a runner's disk, plus whatever of the three
-network-bound tasks grades there; the list is fixed from the survey's
-table before the first real dispatch and the dispatch reads it as
-`@bench/cooperbench/pairs.txt`. Every arm runs every pair of the list, so
-the arms are compared on the same pairs.
+bench/cooperbench/pairs.txt: the flash subset whole, 20 tasks and 50
+pairs, fixed on 2026-10-14 from the survey on GitHub's runners (bench.yml
+in survey mode, tag survey-1, run 38549172370), which graded every
+feature's gold patch of every task on a runner's disk, the three tasks
+that download at test time included (openai_tiktoken 0, dottxt_ai_outlines
+1706, llama_index 18813), which the cloud session's network policy had
+kept out of the first list of 17 tasks and 43 pairs. The dispatch reads it
+as `@bench/cooperbench/pairs.txt`. Every arm runs every pair of the list,
+so the arms are compared on the same pairs.
 
 ## Arms
 
@@ -33,26 +34,52 @@ agents with messages; coop-git, the two with a shared git remote as well
 (the authors' "Curious case of miscoordination" setting); team, the
 authors' later harness with a lead, a task list and a scratchpad. The
 no-communication baseline coop-nocomm is left out to save usage, and can
-be added as a sixth arm by the dispatch input.
+be added as a sixth arm by the dispatch input; six arms over 50 pairs are
+300 jobs, more than one matrix's 256, so a sixth arm takes two dispatches
+of the tag.
 
 ## Settings
 
 - Agents: Claude Code, the version setup.sh pins, through coordbench's
   claude-cli driver on CooperBench 63b9d44 with its one patch; model
   claude-sonnet-5-5 for every agent; the MCP tool surface; WebFetch and
-  WebSearch off; no turn cap; 120 minutes per agent; one seed. Each
-  (pair, arm) is one job on ubuntu-24.04, so no pair sees another's
-  containers.
+  WebSearch off; no turn cap; 120 minutes per agent, the most the
+  workflow allows, so a job ends inside its own limit with the scoring
+  and the upload still to run; one seed. Each (pair, arm) is one job on
+  ubuntu-24.04, so no pair sees another's containers.
 - Accounts: the owner's, one job at a time per account, every arm of a
   pair on the same account (plan.py), so an account's usage window is
   spent on a pair's arms together rather than on one arm; the order the
   jobs run in is GitHub's queue's, first in first out as far as it keeps
-  it, so the arm rotation is a tendency, not a guarantee.
-- Resume: a pair whose artifact holds a scored pair with no agent in
-  Error is not run again; a pair that ended in Error (a usage limit among
-  the causes) runs again on the next dispatch of the same tag, on a fresh
-  runner, and its new artifact is the one the report reads, the earlier
-  attempt's staying on GitHub under the same name until it expires.
+  it, so the arm rotation is a tendency, not a guarantee. Three or more
+  accounts hold the whole list in one dispatch (250 jobs, each account's
+  share under the 100 its queue takes); on one or two, the same tag is
+  dispatched again once the first dispatch has drained, and the resume
+  carries on.
+- Resume: a pair whose artifact holds a scored pair with no agent
+  failed is finished, and the next dispatch of the same tag plans no job
+  for it (its marker artifact says so) and skips it if one runs; a pair
+  whose agents did not fail but whose scoring failed or never ran is
+  scored again from the files its artifact holds, with no agent started;
+  a pair an agent of which failed runs again, on a fresh runner, and the
+  retry replaces the attempt. An agent failed when its status is Error
+  for a cause outside the benchmark: a usage limit, a refused sign-in, a
+  container gone, a stream that ended without a result, or the harness's
+  own error (result.json's error). An agent that ran out the 120 minutes
+  is also marked Error, as CooperBench marks it, but its pair is kept:
+  the time limit is the benchmark's own, its patch is scored as any
+  other's, and a rerun would most likely run out again, spending two
+  hours of usage to replace a sample (PARITY.md, row 23). The stopping
+  rule: the tag is dispatched until no planned pair is left to run, at
+  most three times; a pair still failed after the third dispatch stands
+  as an error, a failure in the primary rate, and the report's attempt
+  counts say which. The report reads, for each pair, the newest artifact
+  of its name that holds a finished pair, else the newest whose agents
+  did not fail but that is unscored, else the newest, so a rerun that
+  itself failed never hides a scored sample; the earlier attempts stay
+  on GitHub under the same name until they expire. A fake dispatch's tag
+  reads fake-<tag>, and a real dispatch refuses such a tag, so a
+  rehearsal's artifacts never stand in for real pairs.
 - Judging: the free heuristics only, in the run; the model-judged
   measures (communication errors, symptoms, speech acts, emergent
   behaviours) are run afterwards by hand, on purpose, if at all.
@@ -62,8 +89,27 @@ be added as a sixth arm by the dispatch input.
 eval.json's both_passed, CooperBench's own verdict: the pair passes when
 the merged patch passes both features' hidden tests (a conflicting merge
 passes only on agent1's patch, as 63b9d44 scores it). The rate is k/n over
-every attempted pair, an error counting as a failure, the paper's
-definition; the rate on finished pairs is reported beside it.
+every pair of the list, each by its newest finished attempt, else its
+newest unscored one, else its newest (Resume), an error counting as a
+failure, the paper's definition; an earlier attempt whose agent failed
+was run again (Resume, at most three dispatches) and is not counted, so
+an arm whose agents crash more gets more second chances, and the
+report's attempt counts say how many; an attempt that ran out its time
+is kept and scored, never run again. A planned pair whose job left no record at all (cut short before
+run.py wrote its result) is not in n: the report lists such items at its
+top, from the dispatch's plan, and the next dispatch runs them. The rate
+on finished pairs is reported beside it.
+
+The primary comparison is sdlc against coop on both_passed, two-sided
+at alpha 0.05 by the exact McNemar test over the pairs both arms scored;
+sdlc against solo, coop-git and team are secondary, and the ten pairwise
+tests the report prints are read as such. The McNemar test takes the
+pairs as independent trials, which pairs of one task are not (the
+bootstrap intervals resample task sets for that reason); a test that
+respects the task sets, a sign-flip permutation over them for the paired
+difference, is the follow-up to the report, and until it is there a
+significant McNemar p on discordant pairs that cluster in one or two
+tasks is read with that in mind.
 
 ## Analysis, in report.py as it stands
 
@@ -79,7 +125,7 @@ definition; the rate on finished pairs is reported beside it.
 4. Cost and time per pair, turns, the overhead of messaging, concrete
    references, difficulty curves, and one row per pair.
 
-What 43 pairs can show: with the paper's rates (solo near 47%, coop near
+What 50 pairs can show: with the paper's rates (solo near 47%, coop near
 26%) the discordant pairs of a solo-versus-coop comparison are about a
 third of the list, and an exact McNemar test at that size detects a gap
 of roughly 25 points or more; a gap of 10 points between sdlc and coop
