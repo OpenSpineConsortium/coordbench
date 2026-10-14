@@ -29,8 +29,12 @@ mkdir -p "$logs/survey"
 for report in "$logs/$TAG"-survey-*/*.json "$logs/$survey_tag"-survey-*/*.json; do
     case $report in *.summary.json) ;; *) [ -f "$report" ] && cp "$report" "$logs/survey/" ;; esac
 done
-# What could not be read, first, so a report over fewer pairs says so.
-python3 -I - "$REPORT_DIR/artifacts.jsonl" > "$REPORT_DIR/report.md" <<'PY'
+# What could not be read, and what this dispatch planned that has no
+# artifact at all (a job that ended before run.py wrote one), first, so
+# a report over fewer pairs says so: the rates count the pairs with a
+# record, and these are the attempted pairs they leave out.
+printf '%s' "${PLAN_MATRIX:-}" > "$REPORT_DIR/plan_matrix.json"
+python3 -I - "$REPORT_DIR/artifacts.jsonl" "$REPORT_DIR/plan_matrix.json" > "$REPORT_DIR/report.md" <<'PY'
 import json, sys
 lines = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
 problems = [f"- {line['name']}: {line['error']}" for line in lines if "error" in line]
@@ -38,6 +42,15 @@ problems += [f"- {line['warning']}" for line in lines if "warning" in line]
 if problems:
     print("## Artifacts left out\n")
     print("\n".join(problems) + "\n")
+text = open(sys.argv[2], encoding="utf-8").read().strip()
+planned = json.loads(text).get("include", []) if text else []
+found = {line["name"] for line in lines if "name" in line}
+missing = [item["artifact"] for item in planned if item.get("artifact") not in found]
+if missing:
+    print("## Planned items with no artifact\n")
+    print("These (pair, arm) items were planned by this dispatch and left no artifact, so no rate counts them; "
+          "the next dispatch of the tag runs them.\n")
+    print("\n".join(f"- {name}" for name in missing) + "\n")
 PY
 if [ "$MODE" = survey ]; then
     printf '%s' "${SURVEY_PLAN:-}" > "$REPORT_DIR/survey_plan.json"
@@ -46,12 +59,17 @@ if [ "$MODE" = survey ]; then
     python3 bench/cooperbench/actions/survey_report.py "$logs" "$TAG" $plan_file >> "$REPORT_DIR/report.md"
 else
     runs=()
+    # Each unpacked artifact under its arm, which the download reads from
+    # the second part of the name (the double underscores keep it apart
+    # from the dashes in a tag or an arm such as coop-git); a line with
+    # no run_name is an error line, and a survey artifact is no run.
     while IFS= read -r line; do
-        name=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("run_name", ""))' "$line")
-        [ -z "$name" ] && continue
-        arm=$(python3 -c 'import sys; print(sys.argv[1].split("-")[1])' "${name#"$TAG"-}")
-        [ "$arm" = survey ] && continue
-        runs+=(--run "$arm=$name")
+        entry=$(python3 -c 'import json,sys
+line = json.loads(sys.argv[1])
+if line.get("run_name") and line.get("arm") != "survey":
+    print(line["arm"] + "=" + line["run_name"])' "$line")
+        [ -z "$entry" ] && continue
+        runs+=(--run "$entry")
     done < "$REPORT_DIR/artifacts.jsonl"
     if [ ${#runs[@]} -eq 0 ]; then
         echo "no run artifact named ${TAG}__*; nothing to report" | tee -a "$REPORT_DIR/report.md"

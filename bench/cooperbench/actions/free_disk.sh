@@ -5,6 +5,10 @@
 # this job never uses. Each removal is best effort; the free space is
 # printed before and after so a job's log says what it had.
 set -u
+if [ "${GITHUB_ACTIONS:-}" != true ]; then
+    echo "free_disk.sh is for a GitHub-hosted runner: it deletes toolchains and every unused Docker image" >&2
+    exit 0
+fi
 df -h / | tail -1
 for path in /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
             /usr/local/share/powershell /usr/share/swift /usr/local/share/chromium; do

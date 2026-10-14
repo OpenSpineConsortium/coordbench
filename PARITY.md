@@ -1542,13 +1542,21 @@ Status: not measured.
 - Left undone: re-rating with another model would not give the same label;
   it waits for the authors' labels.
 
-**23. Rerun rule (corrected).** Status: equivalent.
+**23. Rerun rule (corrected).** Status: equivalent but for the time limit.
 - CooperBench: rerun a pair any of whose agents ended in Error (coop.py
-  75-81; solo reads the singular agent, solo.py 44-49).
+  75-81; solo reads the singular agent, solo.py 44-49), an agent killed
+  at the 7200 s timeout among them (claude_code/parsers.py: no result
+  event is Error).
 - coordbench: coordbench/run.py pair_finished, the same rule over both
   shapes, which also reruns a pair whose result.json has a top-level error
-  (a harness failure); run_one scores again, without its agents, a
-  finished pair that lacks eval.json. A pair run again in the same
+  (a harness failure) and keeps a pair whose agent ran out its time
+  (agent_ran_out_of_time: drivers.CliRun's end_reason starts "timed out
+  after"), since that attempt's patch is scored as CooperBench scores it
+  and a rerun would most likely run out again, spending the account's
+  usage to replace a sample, the attempt count then set by how often the
+  owner dispatched; the Actions kit's artifacts.py reads the same rule
+  (bench/cooperbench/PLAN.md, Resume). run_one scores again, without its
+  agents, a finished pair that lacks eval.json. A pair run again in the same
   directory has the earlier attempt's files packed into
   previous-<time>.tar.gz first (run.py set_aside_earlier_attempt), and
   run.py rescore scores pairs from their patches without ever starting

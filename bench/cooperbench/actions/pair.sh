@@ -3,7 +3,8 @@
 # runner, prepare the pair's task image, run one arm on one pair with the
 # claude-cli driver, and run the free judge heuristics on what it left.
 # The settings come in the environment: MODE (fake or real), ARM, REPO,
-# TASK, FEATURES (as f1_f6), RUN_NAME, MODEL, and in a real run
+# TASK, FEATURES (as f1_f6), RUN_NAME, MODEL, RESCORE_DIR (where the
+# workflow put an unscored pair's files, if it did), and in a real run
 # CLAUDE_CODE_OAUTH_TOKEN, which run.py hands to the agents by name only.
 # In a fake run the agents are bench/cooperbench/fake_claude, so no token
 # is wanted and none is read.
@@ -24,6 +25,15 @@ if [ "$MODE" != real ]; then
     unset CLAUDE_CODE_OAUTH_TOKEN COORDBENCH_CLAUDE_TOKEN
 fi
 bash bench/cooperbench/setup.sh
+# A pair scored again from its artifact's files: the workflow fetched
+# them beside the clone (RESCORE_DIR), since setup.sh clones CooperBench
+# into an empty directory only; now they go where run.py finds a
+# finished pair and scores it without starting its agents.
+if [ -n "${RESCORE_DIR:-}" ] && [ -d "$RESCORE_DIR/$RUN_NAME" ]; then
+    mkdir -p "$COOPERBENCH_DIR/logs"
+    rm -rf "${COOPERBENCH_DIR:?}/logs/$RUN_NAME"
+    mv "$RESCORE_DIR/$RUN_NAME" "$COOPERBENCH_DIR/logs/$RUN_NAME"
+fi
 COORDBENCH_SKIP_GRADEABLE=1 bash bench/cooperbench/prepare_task.sh "$REPO" "$TASK"
 
 features=${FEATURES//_f/,}

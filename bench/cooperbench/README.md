@@ -119,15 +119,18 @@ that prints its environment writes the token into its stream, its
 transcript and what it told its peer, and a pair's files may be published
 as a workflow's artifact. The run says on stderr when it found one, and a
 pair with a file that holds the token and could not be rewritten is an
-error, not a result. The scrub reads the token's exact bytes in plain and
-gzip files only: an archive an agent packed (.tar.gz, .zip), a git
-object under a workspace kept with --keep, or the token encoded some
-other way, is outside it, as is the log of a hub started elsewhere
-(--hub), which is that hub's to keep. `run.py scrub --run-dir DIR` runs
-the scrub once more over a run directory and reads every file back,
-archives' members included, and exits 2 when any still holds the token
-or could not be read; the workflow's jobs run it before an upload and
-publish nothing it refused.
+error, not a result. The scrub rewrites the token's exact bytes in plain
+and gzip files only: an archive an agent packed (.tar.gz, .zip), a git
+object under the team arm's shared/ copy or a workspace kept with
+--keep, or the token encoded some other way, is outside it, as is the
+log of a hub started elsewhere (--hub), which is that hub's to keep.
+`run.py scrub --run-dir DIR` runs the scrub once more over a run
+directory and reads every file back, archives' members and git objects
+(loose ones and packfiles, inflated) included, and exits 2 when any
+still holds the token or could not be read; the workflow's jobs run it
+before an upload, after stopping any agent container still up, and
+publish nothing it refused. The team arm's shared/ is copied into every
+pair and published with it.
 
 ## In GitHub Actions
 
@@ -188,11 +191,14 @@ be read.
 
 A dispatch names a tag; its artifacts are `<tag>__<arm>__<repo>__<task>__f1_f6`,
 kept 90 days, with a marker `<name>__done` beside each finished one
-(scored, no agent in Error). A dispatch of the same tag plans no job for
-a pair whose marker is there and skips one whose artifact holds a
-finished pair, scores from its files a pair whose agents submitted but
-that was never scored, and runs again a pair that ended in Error, so a
-run that stopped on a usage limit is finished by dispatching it again;
+(scored, no agent failed: in Error for a cause outside the benchmark, a
+usage limit or a refused sign-in among them; one that ran out its time
+is kept with its scored patch, PLAN.md's Resume). A dispatch of the same
+tag plans no job for a pair whose marker is there and skips one whose
+artifact holds a finished pair, scores from its files a pair whose
+agents did not fail but that was never scored, and runs again a pair an
+agent of which failed, so a run that stopped on a usage limit is
+finished by dispatching it again, at most three dispatches in all;
 GitHub's "Re-run failed jobs" on the run does the same for its failed
 jobs, each re-run attempt replacing the attempt's artifact. A fake
 dispatch's artifacts carry the tag `fake-<tag>`, and a real dispatch
@@ -255,7 +261,8 @@ the other three arms, 350 sessions in all, about $150 at API prices
 a subscription that is usage drawn from the plan's limits, not a bill,
 and it will likely span several usage windows. A pair whose agents stop
 on a usage limit is marked Error, and running the same command again
-later runs it again; finished pairs are kept. The pilot is about 42
+later runs it again; finished pairs are kept, a pair whose agent ran
+out its 120 minutes among them, since its patch is scored. The pilot is about 42
 sessions, near $18 at API prices. With CONCURRENCY=1 a pair takes 5 to 20
 minutes per arm.
 

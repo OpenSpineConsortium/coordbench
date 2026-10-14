@@ -227,6 +227,23 @@ def chosen_timeout(mode, text):
     return minutes
 
 
+REGISTERED_PAIRS = "@bench/cooperbench/pairs.txt"
+
+
+def registration_notes(mode, pairs_text, arms):
+    """What a real run changed against PLAN.md's registered list and arms,
+    said in the plan's notes, so the job summary shows it before the
+    reviewer's click."""
+    notes = []
+    if mode != "real":
+        return notes
+    if pairs_text.strip() != REGISTERED_PAIRS:
+        notes.append(f"the pairs are not the registered list {REGISTERED_PAIRS} (PLAN.md): {pairs_text.strip()!r}")
+    if arms != list(ARMS):
+        notes.append(f"the arms are not PLAN.md's {','.join(ARMS)}: {','.join(arms)}")
+    return notes
+
+
 def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag, finished=(), present=None,
          timeout_text="", arms_dir=ARMS_DIR):
     pairs = chosen_pairs(dataset_dir, pairs_text)
@@ -238,7 +255,7 @@ def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag, finished=
     if mode != "survey":
         items, done, dropped = plan_items(pairs, arms, accounts, tag, QUEUE_LIMIT if mode == "real" else 0,
                                           set(finished))
-    notes = []
+    notes = registration_notes(mode, pairs_text, arms)
     if done:
         notes.append(f"{done} items finished by an earlier dispatch of the tag and left out")
     if dropped:
@@ -277,12 +294,16 @@ def listed_finished(mode, tag):
     if mode == "survey":
         return set(), None
     try:
-        found, _ = artifacts.list_artifacts(artifacts.settings())
-    except (KeyError, artifacts.READ_PROBLEMS) as problem:
+        found, cut = artifacts.list_artifacts(artifacts.settings())
+    except (KeyError, *artifacts.READ_PROBLEMS) as problem:
         return set(), f"could not list the finished items ({problem}); every item is planned and the jobs skip " \
                       f"the finished ones"
+    note = None
+    if cut:
+        note = f"the artifact listing was cut at {artifacts.PAGE * artifacts.MOST_PAGES}; a finished item older " \
+               f"than that is planned again and its job skips it"
     names = artifacts.by_name(found, f"{mode_tag(mode, tag)}__")
-    return {name[:-len(artifacts.DONE_SUFFIX)] for name in names if name.endswith(artifacts.DONE_SUFFIX)}, None
+    return {name[:-len(artifacts.DONE_SUFFIX)] for name in names if name.endswith(artifacts.DONE_SUFFIX)}, note
 
 
 def secrets_present(environ=None):
@@ -312,9 +333,10 @@ def main(argv=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,40}", args.tag):
         parser.error("the tag is letters, digits, dots and dashes, up to 41 characters")
     finished, note = read_names(args.finished), None
-    if args.list_finished:
-        finished, note = listed_finished(args.mode, args.tag)
     try:
+        mode_tag(args.mode, args.tag)
+        if args.list_finished:
+            finished, note = listed_finished(args.mode, args.tag)
         result = plan(args.dataset_dir, args.mode, args.pairs, args.arms, args.accounts, args.tag,
                       finished, secrets_present(), args.timeout_min, args.arms_dir)
     except (ValueError, OSError) as problem:

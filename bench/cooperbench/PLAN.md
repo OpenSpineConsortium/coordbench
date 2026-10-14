@@ -49,16 +49,27 @@ be added as a sixth arm by the dispatch input.
   spent on a pair's arms together rather than on one arm; the order the
   jobs run in is GitHub's queue's, first in first out as far as it keeps
   it, so the arm rotation is a tendency, not a guarantee.
-- Resume: a pair whose artifact holds a scored pair with no agent in
-  Error is finished, and the next dispatch of the same tag plans no job
+- Resume: a pair whose artifact holds a scored pair with no agent
+  failed is finished, and the next dispatch of the same tag plans no job
   for it (its marker artifact says so) and skips it if one runs; a pair
-  whose agents submitted but whose scoring failed or never ran is scored
-  again from the files its artifact holds, with no agent started; a pair
-  that ended in Error (a usage limit among the causes) runs again, on a
-  fresh runner. The report reads, for each pair, the newest artifact of
-  its name that holds a finished pair, else the newest, so a rerun that
-  itself failed never hides a scored sample; the earlier attempts stay on
-  GitHub under the same name until they expire. A fake dispatch's tag
+  whose agents did not fail but whose scoring failed or never ran is
+  scored again from the files its artifact holds, with no agent started;
+  a pair an agent of which failed runs again, on a fresh runner, and the
+  retry replaces the attempt. An agent failed when its status is Error
+  for a cause outside the benchmark: a usage limit, a refused sign-in, a
+  container gone, a stream that ended without a result, or the harness's
+  own error (result.json's error). An agent that ran out the 120 minutes
+  is also marked Error, as CooperBench marks it, but its pair is kept:
+  the time limit is the benchmark's own, its patch is scored as any
+  other's, and a rerun would most likely run out again, spending two
+  hours of usage to replace a sample (PARITY.md, row 23). The stopping
+  rule: the tag is dispatched until no planned pair is left to run, at
+  most three times; a pair still failed after the third dispatch stands
+  as an error, a failure in the primary rate, and the report's attempt
+  counts say which. The report reads, for each pair, the newest artifact
+  of its name that holds a finished pair, else the newest, so a rerun
+  that itself failed never hides a scored sample; the earlier attempts
+  stay on GitHub under the same name until they expire. A fake dispatch's tag
   reads fake-<tag>, and a real dispatch refuses such a tag, so a
   rehearsal's artifacts never stand in for real pairs.
 - Judging: the free heuristics only, in the run; the model-judged
@@ -70,11 +81,26 @@ be added as a sixth arm by the dispatch input.
 eval.json's both_passed, CooperBench's own verdict: the pair passes when
 the merged patch passes both features' hidden tests (a conflicting merge
 passes only on agent1's patch, as 63b9d44 scores it). The rate is k/n over
-every pair of the list, each by its last attempt, an error counting as a
-failure, the paper's definition; an earlier attempt that ended in Error
-was run again (Resume) and is not counted, so an arm whose agents crash
-more gets more second chances, and the report's attempt counts say how
-many. The rate on finished pairs is reported beside it.
+every pair of the list, each by its newest finished attempt, else its
+newest (Resume), an error counting as a failure, the paper's definition; an earlier attempt whose agent failed
+was run again (Resume, at most three dispatches) and is not counted, so
+an arm whose agents crash more gets more second chances, and the
+report's attempt counts say how many; an attempt that ran out its time
+is kept and scored, never run again. A planned pair whose job left no record at all (cut short before
+run.py wrote its result) is not in n: the report lists such items at its
+top, from the dispatch's plan, and the next dispatch runs them. The rate
+on finished pairs is reported beside it.
+
+The primary comparison is sdlc against coop on both_passed, two-sided
+at alpha 0.05 by the exact McNemar test over the pairs both arms scored;
+sdlc against solo, coop-git and team are secondary, and the ten pairwise
+tests the report prints are read as such. The McNemar test takes the
+pairs as independent trials, which pairs of one task are not (the
+bootstrap intervals resample task sets for that reason); a test that
+respects the task sets, a sign-flip permutation over them for the paired
+difference, is the follow-up to the report, and until it is there a
+significant McNemar p on discordant pairs that cluster in one or two
+tasks is read with that in mind.
 
 ## Analysis, in report.py as it stands
 

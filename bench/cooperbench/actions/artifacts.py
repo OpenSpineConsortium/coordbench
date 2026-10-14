@@ -5,20 +5,22 @@ dispatches so a run resumes, and beside each finished one a marker
 
 - `finished NAME [--mode MODE]` says what the artifacts of that name hold,
   the newest first: exit 0 when one holds a finished pair (scored, no
-  agent in Error, and in real mode no fake agent), so the job skips the
-  pair; 3 when the newest holds a pair whose agents all submitted but
-  that is unscored, so the job fetches it and scores it without running
-  the agents again; 1 when there is none or the newest is unfinished, so
-  the pair runs; 2 when the artifacts could not be read, which a real job
-  treats as a failure rather than a reason to spend the pair's usage.
-- `fetch NAME DIR` unpacks the newest artifact of the name into
+  agent in Error but one that ran out its time, and in real mode no fake
+  agent), so the job skips the pair; 3 when the newest holds a pair
+  whose agents did not fail but that is unscored, so the job fetches it
+  and scores it without running the agents again; 1 when there is none
+  or the newest is unfinished, so the pair runs; 2 when the artifacts
+  could not be read, which a real job treats as a failure rather than a
+  reason to spend the pair's usage.
+- `fetch NAME DIR [--mode MODE]` unpacks the attempt `finished` chose
+  (the newest finished, else the newest unscored, else the newest) into
   DIR/<run name>/, for that rescore.
 - `check-dir DIR [--mode MODE]` says whether a pair directory on this
   runner holds a finished pair, by the same rule: exit 0 or 1.
 - `list-finished TAG` prints the name of every pair artifact of the tag
   whose marker is there, one per line, for plan.py --finished.
 - `download TAG DIR [--survey-tag TAG2]` fetches every artifact whose name
-  starts with TAG__ (the newest finished of each name, else the newest)
+  starts with TAG__ (of each name the attempt `finished` would choose)
   and the survey artifacts of TAG2 (TAG2__survey__*), unpacks each into
   DIR/<run name>/, the run name being the artifact's parts joined by
   dashes, as plan.py made it, and prints one JSON line per artifact, an
@@ -48,6 +50,10 @@ PAGE = 100
 MOST_PAGES = 50
 DONE_SUFFIX = "__done"
 FAKE_VERSION = "0.0.0-fake"
+# The start of the end_reason coordbench/drivers.py CliRun writes for an
+# agent that ran out the pair's time limit (drivers.TIMED_OUT, kept the
+# same here since this script imports nothing of coordbench).
+TIMED_OUT = "timed out after "
 READ_PROBLEMS = (urllib.error.URLError, OSError, ValueError, KeyError, zipfile.BadZipFile)
 
 
@@ -120,20 +126,28 @@ def fetch_zip(conf, artifact_id, opener=None):
         return blob.read()
 
 
+def agent_failed(agent):
+    """run.py's rule: an agent in Error is no sample (a usage limit, a
+    refused sign-in, a container gone), unless it ran out the pair's time
+    limit, which is the benchmark's own limit reached, an outcome whose
+    patch is scored; so such a pair is kept, not run again."""
+    return agent.get("status") == "Error" and not str(agent.get("end_reason") or "").startswith(TIMED_OUT)
+
+
 def pair_state(result, evaluation, mode="fake"):
     """What a pair's result.json and eval.json say, as run.py's
     pair_finished reads a pair directory: "finished" when the eval has no
-    error beside a result none of whose agents ended in Error, "unscored"
-    when the agents all submitted but the eval is missing or errored, so
-    the pair is scored again without running them, else "unfinished" (an
-    agent in Error, a usage limit among the causes, is run again by the
-    next dispatch, as PLAN.md says). In real mode a pair any of whose
-    agents was the fake agent is unfinished, so a fake artifact never
-    stands in for a real pair."""
+    error beside a result none of whose agents failed (agent_failed),
+    "unscored" when no agent failed but the eval is missing or errored, so
+    the pair is scored again without running the agents, else
+    "unfinished" (an agent in Error, a usage limit among the causes, is
+    run again by the next dispatch, as PLAN.md says). In real mode a pair
+    any of whose agents was the fake agent is unfinished, so a fake
+    artifact never stands in for a real pair."""
     if not isinstance(result, dict) or result.get("error"):
         return "unfinished"
     agents = result.get("agents") if isinstance(result.get("agents"), dict) else {"solo": result.get("agent")}
-    if not agents or any(not isinstance(a, dict) or a.get("status") == "Error" for a in agents.values()):
+    if not agents or any(not isinstance(a, dict) or agent_failed(a) for a in agents.values()):
         return "unfinished"
     if mode == "real" and any(str(a.get("claude_code_version") or "").startswith(FAKE_VERSION) for a in agents.values()):
         return "unfinished"
@@ -194,15 +208,29 @@ def unpack(data, directory):
 
 
 def artifact_states(conf, artifacts, mode, opener=None):
-    """Each artifact with its state, newest first, stopping at the first
-    finished one, since that is the one a download keeps."""
+    """Each artifact with its state and its bytes, newest first, stopping
+    at the first finished one, since that is the one a download keeps;
+    the bytes are kept so the chosen one is not fetched twice."""
     states = []
     for artifact in artifacts:
-        state = zip_state(fetch_zip(conf, artifact["id"], opener), mode)
-        states.append((artifact, state))
+        data = fetch_zip(conf, artifact["id"], opener)
+        state = zip_state(data, mode)
+        states.append((artifact, state, data))
         if state == "finished":
             break
     return states
+
+
+def chosen_state(states):
+    """The attempt of a name that stands for the pair: the newest finished
+    one, whatever came after it; else the newest unscored one, whose
+    agents did not fail and whose files are scored again for free rather
+    than the pair run again on usage; else the newest, which runs again."""
+    for wanted in ("finished", "unscored"):
+        for entry in states:
+            if entry[1] == wanted:
+                return entry
+    return states[0]
 
 
 def run_of(artifact):
@@ -220,31 +248,33 @@ def command_finished(conf, name, mode="fake", opener=None):
     except READ_PROBLEMS as problem:
         print(f"{name}: could not read the artifacts ({problem})")
         return 2
-    for artifact, state in states:
-        if state == "finished":
-            print(f"{name}: finished in {run_of(artifact)}")
-            return 0
-    newest, state = states[0]
+    artifact, state, _ = chosen_state(states)
+    if state == "finished":
+        print(f"{name}: finished in {run_of(artifact)}")
+        return 0
     if state == "unscored":
-        print(f"{name}: the agents submitted in {run_of(newest)} but the pair is unscored; it is scored again")
+        print(f"{name}: the agents did not fail in {run_of(artifact)} but the pair is unscored; it is scored again")
         return 3
-    print(f"{name}: an agent ended in Error or the pair is not a real one; it runs again")
+    print(f"{name}: an agent failed or the pair is not a real one; it runs again")
     return 1
 
 
-def command_fetch(conf, name, directory, opener=None):
+def command_fetch(conf, name, directory, mode="fake", opener=None):
+    """Unpack the attempt `finished` chose into DIR/<run name>/, for the
+    rescore: the same rule, so the files scored are the ones it named."""
     try:
         artifacts, _ = list_artifacts(conf, name, opener)
-        newest = newest_by_name(artifacts).get(name)
-        if newest is None:
+        found = by_name(artifacts).get(name, [])
+        if not found:
             print(f"{name}: no artifact to fetch")
             return 1
+        artifact, state, data = chosen_state(artifact_states(conf, found, mode, opener))
         target = Path(directory) / run_name_of(name)
-        unpack(fetch_zip(conf, newest["id"], opener), target)
+        unpack(data, target)
     except READ_PROBLEMS as problem:
         print(f"{name}: could not fetch the artifact ({problem})")
         return 2
-    print(f"{name}: fetched {run_of(newest)} into {target}")
+    print(f"{name}: fetched {run_of(artifact)} ({state}) into {target}")
     return 0
 
 
@@ -266,12 +296,10 @@ def command_list_finished(conf, tag, opener=None):
 
 
 def chosen_artifact(conf, found, mode, opener=None):
-    """The newest artifact of a name that holds a finished pair, else the
-    newest, so a failed rerun never hides a scored sample."""
-    for artifact, state in artifact_states(conf, found, mode, opener):
-        if state == "finished":
-            return artifact
-    return found[0]
+    """The artifact of a name that stands for the pair (chosen_state), with
+    its bytes, so a failed rerun never hides a scored sample."""
+    artifact, _, data = chosen_state(artifact_states(conf, found, mode, opener))
+    return artifact, data
 
 
 def wanted_names(artifacts, tag, survey_tag=None):
@@ -290,14 +318,14 @@ def command_download(conf, tag, directory, mode="fake", survey_tag=None, opener=
     for name, found in sorted(named.items()):
         target = Path(directory) / run_name_of(name)
         try:
-            artifact = chosen_artifact(conf, found, mode, opener)
-            unpack(fetch_zip(conf, artifact["id"], opener), target)
+            artifact, data = chosen_artifact(conf, found, mode, opener)
+            unpack(data, target)
         except READ_PROBLEMS as problem:
             print(json.dumps({"name": name, "error": f"{type(problem).__name__}: {problem}"}))
             continue
-        print(json.dumps({"name": name, "run_name": run_name_of(name), "path": str(target),
-                          "created_at": artifact["created_at"], "size": artifact.get("size_in_bytes"),
-                          "attempts": len(found)}))
+        print(json.dumps({"name": name, "arm": name.split("__")[1], "run_name": run_name_of(name),
+                          "path": str(target), "created_at": artifact["created_at"],
+                          "size": artifact.get("size_in_bytes"), "attempts": len(found)}))
     if not named:
         print(f"no artifact named {tag}__*", file=sys.stderr)
     return 0
@@ -309,9 +337,10 @@ def main(argv=None):
     finished = commands.add_parser("finished", help="exit 0 when the named artifact holds a finished pair")
     finished.add_argument("name")
     finished.add_argument("--mode", choices=("fake", "real"), default="fake")
-    fetch = commands.add_parser("fetch", help="unpack the newest artifact of the name into the directory")
+    fetch = commands.add_parser("fetch", help="unpack the attempt `finished` chose into the directory")
     fetch.add_argument("name")
     fetch.add_argument("directory")
+    fetch.add_argument("--mode", choices=("fake", "real"), default="fake")
     check = commands.add_parser("check-dir", help="exit 0 when the directory holds a finished pair")
     check.add_argument("directory")
     check.add_argument("--mode", choices=("fake", "real"), default="fake")
@@ -329,7 +358,7 @@ def main(argv=None):
     if args.command == "finished":
         return command_finished(conf, args.name, args.mode)
     if args.command == "fetch":
-        return command_fetch(conf, args.name, args.directory)
+        return command_fetch(conf, args.name, args.directory, args.mode)
     if args.command == "list-finished":
         return command_list_finished(conf, args.tag)
     return command_download(conf, args.tag, args.directory, args.mode, args.survey_tag)

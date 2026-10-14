@@ -491,13 +491,31 @@ def result_agents(result):
     return {"solo": result["agent"]} if isinstance(result.get("agent"), dict) else {}
 
 
+def agent_ran_out_of_time(agent):
+    """Whether the claude-cli driver ended the agent at the pair's time
+    limit (drivers.CliRun.run): the benchmark's own limit, reached, is an
+    outcome of the pair, whose patch is scored as any other's, not a
+    failure of the harness."""
+    return str(agent.get("end_reason") or "").startswith(drivers.TIMED_OUT)
+
+
+def agent_failed(agent):
+    """An agent whose attempt is no sample: Error from a usage limit, a
+    refused sign-in, a container gone, the stream ended without a result;
+    one that ran out its time is kept (agent_ran_out_of_time)."""
+    return agent.get("status") == "Error" and not agent_ran_out_of_time(agent)
+
+
 def pair_finished(run_dir):
     """CooperBench reruns a pair any of whose agents ended in Error
-    (coop.py and team.py read "agents", solo.py the singular "agent")."""
+    (coop.py and team.py read "agents", solo.py the singular "agent");
+    coordbench keeps one whose agent ran out its time (PARITY.md, row 23),
+    since that attempt is scored and a rerun would most likely run out
+    again, spending the account's usage to replace a sample."""
     result = read_json(Path(run_dir) / "result.json")
     if not result or result.get("error"):
         return False
-    return not any(a.get("status") == "Error" for a in result_agents(result).values())
+    return not any(agent_failed(a) for a in result_agents(result).values())
 
 
 # The hub.
@@ -747,25 +765,91 @@ def archive_holds(path, values):
     return False
 
 
+LOOSE_OBJECT = re.compile(r"[0-9a-f]{38}")
+
+
+def git_object_kind(path):
+    """"loose" for a file at objects/xx/<38 hex>, "pack" for one at
+    objects/pack/*.pack, else None: a repository an agent made under the
+    team arm's shared/ (or a workspace kept with --keep) keeps its files
+    zlib-compressed, where the scrub's plain search cannot see the
+    credential; a bare repository has objects/ at its root, so the
+    directory above objects/ is not looked at."""
+    if path.parent.parent.name != "objects":
+        return None
+    if path.parent.name == "pack" and path.name.endswith(".pack"):
+        return "pack"
+    if len(path.parent.name) == 2 and LOOSE_OBJECT.fullmatch(path.name):
+        return "loose"
+    return None
+
+
+def pack_contents(data):
+    """Each object of a git packfile inflated, in order: after the 12-byte
+    header, each object is a varint header (its type and size, and for a
+    delta its base, an offset varint or a 20-byte id) then a zlib stream,
+    whose end the decompressor finds. A delta's inserted bytes come out
+    in the clear, so a value added whole to a file is seen; a truncated
+    or malformed file raises, and the caller treats it as unreadable."""
+    if data[:4] != b"PACK":
+        raise ValueError("not a packfile")
+    view = memoryview(data)
+    count = int.from_bytes(data[8:12], "big")
+    offset = 12
+    for _ in range(count):
+        byte = data[offset]
+        offset += 1
+        kind = (byte >> 4) & 7
+        while byte & 0x80:
+            byte = data[offset]
+            offset += 1
+        if kind == 6:
+            byte = data[offset]
+            offset += 1
+            while byte & 0x80:
+                byte = data[offset]
+                offset += 1
+        elif kind == 7:
+            offset += 20
+        inflater = zlib.decompressobj()
+        content = inflater.decompress(view[offset:])
+        if not inflater.eof:
+            raise ValueError("a truncated object")
+        offset = len(data) - len(inflater.unused_data)
+        yield content
+
+
+def git_object_holds(path, kind, values):
+    """Whether a git object file holds the credential once inflated."""
+    needles = [value.encode("utf-8") for value in values]
+    data = path.read_bytes()
+    if kind == "loose":
+        return any(needle in zlib.decompress(data) for needle in needles)
+    return any(any(needle in content for needle in needles) for content in pack_contents(data))
+
+
 def unscrubbed(directory, values):
     """Every file under the directory that still holds the credential,
-    that holds it inside an archive, or that could not be read, each with
-    why, for a run whose files are about to be published."""
+    that holds it inside an archive or a git object, or that could not be
+    read, each with why, for a run whose files are about to be published."""
     kept = []
     for path in sorted(Path(directory).rglob("*")):
         if not path.is_file() or path.is_symlink():
             continue
+        inside = "inside an archive" if is_archive(path) else "inside a git object" if git_object_kind(path) else ""
         try:
             if is_archive(path):
                 held = archive_holds(path, values)
+            elif git_object_kind(path):
+                held = git_object_holds(path, git_object_kind(path), values)
             else:
                 data = read_for_scrub(path)
                 held = any(value.encode("utf-8") in data for value in values)
-        except (OSError, EOFError, zlib.error, tarfile.TarError, zipfile.BadZipFile) as problem:
+        except (OSError, EOFError, IndexError, ValueError, zlib.error, tarfile.TarError, zipfile.BadZipFile) as problem:
             kept.append(f"{path}: could not be read ({problem})")
             continue
         if held:
-            kept.append(f"{path}: holds the agents' credential" + (" inside an archive" if is_archive(path) else ""))
+            kept.append(f"{path}: holds the agents' credential" + (f" {inside}" if inside else ""))
     return kept
 
 
@@ -773,8 +857,9 @@ def command_scrub(args):
     """Scrub a run directory once more and say whether it may be
     published: exit 0 when no file under it holds the agents' credential
     (none is in the environment, or every file was read and found clean),
-    2 when one does, or holds it inside an archive, or could not be read,
-    which the job treats as a pair with no result rather than publish it.
+    2 when one does, or holds it inside an archive or a git object, or
+    could not be read, which the job treats as a pair with no result
+    rather than publish it.
     The workflow runs this after run.py ended however it ended, since the
     run's own scrub runs only when the pair finishes."""
     directory = Path(args.run_dir)
@@ -1687,8 +1772,18 @@ def prepare_pair(settings, hub, driver, repo, task_id, features):
     except BaseException:
         abandon(plan, hub)
         raise
-    handles = start_agents(plan, driver)
-    save_plan(plan)
+    # The agents stream to the host from the moment they start, so a
+    # failure after that (the plan's write, the disk full) must tear them
+    # down and scrub what they wrote, as a failure before it does.
+    try:
+        handles = start_agents(plan, driver)
+        save_plan(plan)
+    except Exception as problem:
+        record_failure(plan, hub, problem)
+        raise PairFailed(plan["error"]) from problem
+    except BaseException:
+        abandon(plan, hub)
+        raise
     return plan, handles
 
 

@@ -125,7 +125,7 @@ class Planner(unittest.TestCase):
         self.assertEqual((len(fake["items"]), fake["dropped"]), (240, 0))
         real = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "1", "t")
         self.assertEqual((len(real["items"]), real["dropped"]), (100, 260))
-        self.assertIn("256 jobs from one matrix and queues at most 100 per account", real["notes"][0])
+        self.assertTrue(any("256 jobs from one matrix and queues at most 100 per account" in n for n in real["notes"]))
         with self.assertRaises(ValueError):
             plan.plan(self.dataset, "real", "flash", "solo", "1, nine", "t")
 
@@ -155,6 +155,48 @@ class Planner(unittest.TestCase):
         self.assertIn("SYMPHONY_CLAUDE_3", str(refused.exception))
         self.assertIsNone(plan.secrets_present({}))
         self.assertEqual(plan.secrets_present({"HAS_SECRET_1": "true", "HAS_SECRET_2": "false"}), {"1"})
+
+    def test_a_listing_that_fails_or_is_cut_plans_every_item_and_says_so(self):
+        environ = {"GITHUB_REPOSITORY": "o/r", "GITHUB_TOKEN": "t", "GITHUB_API_URL": "https://api.example"}
+
+        class Refusing:
+            def open(self, request, timeout=None):
+                raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+        with mock.patch.dict(os.environ, environ, clear=False), \
+                mock.patch.object(artifacts, "OPENER", Refusing()):
+            finished, note = plan.listed_finished("fake", "t")
+        self.assertEqual(finished, set())
+        self.assertIn("could not list the finished items", note)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t"}, clear=True):
+            finished, note = plan.listed_finished("fake", "t")
+        self.assertEqual(finished, set())
+        self.assertIn("could not list", note)
+        many = [{"id": n, "name": f"fake-t__solo__r__{n}__f1_f2__done", "created_at": "2026-10-02T00:00:00Z",
+                 "expired": False} for n in range(artifacts.PAGE * artifacts.MOST_PAGES + 1)]
+        with mock.patch.dict(os.environ, environ, clear=False), \
+                mock.patch.object(artifacts, "OPENER", FakeGitHub(many, {})):
+            finished, note = plan.listed_finished("fake", "t")
+        self.assertEqual(len(finished), artifacts.PAGE * artifacts.MOST_PAGES)
+        self.assertIn("listing was cut", note)
+        self.assertEqual(plan.listed_finished("survey", "t"), (set(), None))
+
+    def test_a_real_dispatch_with_a_fake_tag_is_refused_before_the_listing(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err, self.assertRaises(SystemExit) as stop:
+            plan.main(["--dataset-dir", str(self.dataset), "--mode", "real", "--pairs", "flash", "--accounts", "1",
+                       "--tag", "fake-1", "--list-finished"])
+        self.assertEqual(stop.exception.code, 2)
+        self.assertIn("fake-", err.getvalue())
+
+    def test_a_real_plan_notes_a_pair_list_or_arms_that_are_not_the_registered_ones(self):
+        arms = list(plan.ARMS)
+        self.assertEqual(plan.registration_notes("real", plan.REGISTERED_PAIRS, arms), [])
+        self.assertEqual(plan.registration_notes("fake", "flash", ["solo"]), [])
+        notes = plan.registration_notes("real", "flash", ["solo", "coop"])
+        self.assertEqual(len(notes), 2)
+        self.assertIn("not the registered list @bench/cooperbench/pairs.txt", notes[0])
+        self.assertIn("not PLAN.md's solo,coop,coop-git,team,sdlc: solo,coop", notes[1])
+        real = plan.plan(self.dataset, "real", "flash", "solo", "1", "t")
+        self.assertIn("not the registered list", real["notes"][0])
 
     def test_the_timeout_has_a_default_and_a_bound_per_mode(self):
         self.assertEqual(plan.chosen_timeout("real", ""), 120)
@@ -193,9 +235,9 @@ class Planner(unittest.TestCase):
         self.assertEqual([i["arm"] for i in json.loads(lines["matrix"])["include"]], ["sdlc"])
         self.assertEqual(json.loads(lines["survey"]), {"include": [{"repo": "go_chi_task", "task": 26}]})
         self.assertIn("1 items finished by an earlier dispatch", lines["notes"])
-        with self.assertRaises(SystemExit):
+        with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
             plan.main(["--dataset-dir", str(self.dataset), "--mode", "fake", "--tag", "bad tag"])
-        with self.assertRaises(SystemExit):
+        with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
             plan.main(["--dataset-dir", str(self.dataset), "--mode", "real", "--accounts", "1", "--tag", "fake-t"])
 
     def test_an_empty_pairs_input_is_the_whole_subset(self):
@@ -283,6 +325,27 @@ class Artifacts(unittest.TestCase):
         self.assertEqual(artifacts.zip_state(zipped({"coop/r/task1/f1_f2/result.json": json.dumps(
             {"agents": {"agent1": {"status": "Submitted"}}})})), "unscored")
 
+    def test_an_agent_that_ran_out_its_time_is_kept_and_one_that_failed_is_run_again(self):
+        """A timeout is the benchmark's own limit reached, scored as any
+        other attempt (run.py pair_finished reads the same end_reason);
+        an Error for any other cause is no sample."""
+        timed_out = {"status": "Error", "error": "timed out after 7200 seconds",
+                     "end_reason": "timed out after 7200 seconds"}
+        scored = {"both_passed": True, "error": None}
+        result = {"agents": {"agent1": {"status": "Submitted"}, "agent2": timed_out}}
+        self.assertEqual(artifacts.pair_state(result, scored), "finished")
+        self.assertEqual(artifacts.pair_state(result, None), "unscored")
+        limited = {"status": "Error", "error": None, "end_reason": "Usage limit reached"}
+        self.assertEqual(artifacts.pair_state({"agents": {"agent1": limited}}, scored), "unfinished")
+        self.assertEqual(artifacts.pair_state({"agent": timed_out}, scored), "finished")
+        self.assertEqual(artifacts.pair_state({"agent": {"status": "Error", "end_reason": None}}, scored), "unfinished")
+        sys.path.insert(0, str(ROOT / "coordbench"))
+        try:
+            import drivers
+        finally:
+            sys.path.pop(0)
+        self.assertEqual(artifacts.TIMED_OUT, drivers.TIMED_OUT)
+
     def test_in_real_mode_a_fake_agent_s_pair_is_not_finished(self):
         fake = zipped({"coop/r/task1/f1_f2/result.json": json.dumps({"agents": {
             "agent1": {"status": "Submitted", "claude_code_version": "0.0.0-fake.1330271801"},
@@ -345,11 +408,86 @@ class Artifacts(unittest.TestCase):
                                                         opener=Garbled(self.github.listed, {})), 2)
         self.assertEqual(printed.getvalue().count("could not read the artifacts"), 2)
 
-    def test_fetch_unpacks_the_newest_of_the_name(self):
+    def test_the_opener_stops_at_the_redirect_so_the_token_never_crosses_hosts(self):
+        """GitHub answers the zip request with a redirect to its blob
+        store; urllib's own redirect handler would send the Authorization
+        header again to that host, and StopRedirect is what stops it."""
+        import email
+        import urllib.response
+
+        class Transport(urllib.request.BaseHandler):
+            handler_order = 100
+
+            def __init__(self, zips):
+                self.zips = zips
+                self.requests = []
+
+            def https_open(self, request):
+                url = request.full_url
+                self.requests.append((url, dict(request.header_items())))
+                if "/actions/artifacts/" in url and url.endswith("/zip"):
+                    headers = email.message_from_string(f"Location: https://blob.example/{url.rsplit('/', 2)[1]}\n")
+                    return self.answer(io.BytesIO(b""), headers, url, 302, "Found")
+                return self.answer(io.BytesIO(self.zips[int(url.rsplit("/", 1)[1])]),
+                                   email.message_from_string(""), url, 200, "OK")
+
+            @staticmethod
+            def answer(body, headers, url, code, reason):
+                answer = urllib.response.addinfourl(body, headers, url, code)
+                answer.msg = reason
+                return answer
+        data = zipped({"x": "y"})
+        guarded = Transport({5: data})
+        opener = urllib.request.build_opener(artifacts.StopRedirect, guarded)
+        self.assertEqual(artifacts.fetch_zip(self.CONF, 5, opener), data)
+        blob = [headers for url, headers in guarded.requests if url.startswith("https://blob.example/")]
+        self.assertEqual(len(blob), 1)
+        self.assertNotIn("Authorization", {key for key in blob[0]})
+        self.assertIn(artifacts.StopRedirect, [type(handler) for handler in artifacts.OPENER.handlers])
+        # Without it, urllib follows the redirect with the first request's headers, token included.
+        unguarded = Transport({5: data})
+        self.assertEqual(urllib.request.build_opener(unguarded).open(urllib.request.Request(
+            f"{self.CONF['api']}/repos/{self.CONF['repository']}/actions/artifacts/5/zip",
+            headers={"Authorization": "Bearer t"})).read(), data)
+        blob = [headers for url, headers in unguarded.requests if url.startswith("https://blob.example/")]
+        self.assertIn("Authorization", {key for key in blob[0]})
+
+    def test_fetch_unpacks_the_attempt_finished_chose(self):
         with mock.patch("sys.stdout", new_callable=io.StringIO):
-            self.assertEqual(artifacts.command_fetch(self.CONF, "t__team__r__1__f1_f2", self.tmp, self.github), 0)
-            self.assertEqual(artifacts.command_fetch(self.CONF, "t__none__r__1__f1_f2", self.tmp, self.github), 1)
+            self.assertEqual(artifacts.command_fetch(self.CONF, "t__team__r__1__f1_f2", self.tmp, opener=self.github), 0)
+            self.assertEqual(artifacts.command_fetch(self.CONF, "t__none__r__1__f1_f2", self.tmp, opener=self.github), 1)
         self.assertTrue((self.tmp / "t-team-r-1-f1_f2" / "team" / "r" / "task1" / "f1_f2" / "result.json").is_file())
+
+    def test_an_older_unscored_attempt_is_scored_again_rather_than_the_pair_run_on_usage(self):
+        """A rerun that failed after an attempt whose agents submitted:
+        finished answers 3 for that older attempt, fetch takes it, and
+        download keeps it; a finished attempt wins over both, whatever
+        came after it."""
+        submitted = json.dumps({"agents": {"agent1": {"status": "Submitted"}}})
+        failed = json.dumps({"agents": {"agent1": {"status": "Error", "end_reason": "Usage limit reached"}}})
+        scored = json.dumps({"both_passed": True})
+        listed = [{"id": 21, "name": "u__coop__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": False},
+                  {"id": 22, "name": "u__coop__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False},
+                  {"id": 23, "name": "u__coop__r__1__f1_f2", "created_at": "2026-10-01T00:00:00Z", "expired": False}]
+        zips = {21: zipped({"coop/r/task1/f1_f2/result.json": failed, "coop/r/task1/f1_f2/note": "newest"}),
+                22: zipped({"coop/r/task1/f1_f2/result.json": submitted, "coop/r/task1/f1_f2/note": "unscored"}),
+                23: zipped({"coop/r/task1/f1_f2/result.json": failed})}
+        github = FakeGitHub(listed, zips)
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            self.assertEqual(artifacts.command_finished(self.CONF, "u__coop__r__1__f1_f2", opener=github), 3)
+            self.assertEqual(artifacts.command_fetch(self.CONF, "u__coop__r__1__f1_f2", self.tmp, opener=github), 0)
+            artifacts.command_download(self.CONF, "u", self.tmp / "all", opener=github)
+        self.assertIn("2026-10-02", printed.getvalue().splitlines()[0])
+        self.assertEqual((self.tmp / "u-coop-r-1-f1_f2" / "coop" / "r" / "task1" / "f1_f2" / "note").read_text(), "unscored")
+        self.assertEqual((self.tmp / "all" / "u-coop-r-1-f1_f2" / "coop" / "r" / "task1" / "f1_f2" / "note").read_text(),
+                         "unscored")
+        line = json.loads(printed.getvalue().splitlines()[-1])
+        self.assertEqual((line["arm"], line["attempts"]), ("coop", 3))
+        # Each command read the three attempts once and fetched the chosen one no second time.
+        self.assertEqual(sum(url.startswith("https://blob.example/") for url, _ in github.requests), 9)
+        zips[23] = zipped({"coop/r/task1/f1_f2/result.json": submitted, "coop/r/task1/f1_f2/eval.json": scored})
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(artifacts.command_finished(self.CONF, "u__coop__r__1__f1_f2", opener=FakeGitHub(listed, zips)), 0)
 
     def test_a_run_directory_is_checked_by_the_same_rule(self):
         pair = self.tmp / "run" / "coop" / "r" / "task1" / "f1_f2"
@@ -463,16 +601,38 @@ class FakeAgent(unittest.TestCase):
     claude, in a scratch repository: Claude Code's stream-json out, a
     patch.txt left, and the sdlc arm's commands used when they are there."""
 
+    # No user's or system's git configuration takes part (a signing key
+    # or a hook there would fail every test), and git's detached
+    # maintenance never races the cleanup (symphony-template#63).
+    GIT_SETTINGS = {"gc.auto": "0", "gc.autoDetach": "false", "maintenance.auto": "false",
+                    "maintenance.autoDetach": "false", "receive.autogc": "false"}
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-fake-agent-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                            "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_COUNT": str(len(self.GIT_SETTINGS))}
+        for index, (key, value) in enumerate(self.GIT_SETTINGS.items()):
+            self.environment[f"GIT_CONFIG_KEY_{index}"] = key
+            self.environment[f"GIT_CONFIG_VALUE_{index}"] = value
         self.repo = self.tmp / "repo"
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
-                        "--allow-empty", "-m", "base"], check=True)
+        self.git("init", "-q", str(self.repo))
+        self.git("-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                 "--allow-empty", "-m", "base")
+
+    def git(self, *arguments, **keywords):
+        """git in the test's environment; a repository made here takes the
+        settings into its own config too, for the receive-pack a push
+        starts, which the environment does not reach."""
+        done = subprocess.run(["git", *arguments], env=self.environment, check=True, **keywords)
+        if arguments[0] == "init":
+            for key, value in self.GIT_SETTINGS.items():
+                subprocess.run(["git", "-C", arguments[-1], "config", key, value], env=self.environment, check=True)
+        return done
 
     def run_fake(self, prompt, shell="sh", extra_path=None, agent="agent1"):
-        environment = {**os.environ, "COORD_RPC_URL": f"http://hub/rpc/{agent}"}
+        environment = {**self.environment, "COORD_RPC_URL": f"http://hub/rpc/{agent}"}
         if extra_path:
             environment["PATH"] = f"{extra_path}:{environment['PATH']}"
         return subprocess.run([shell, str(KIT / "fake_claude"), "-p", "--output-format", "stream-json", "--", prompt],
@@ -506,34 +666,34 @@ class FakeAgent(unittest.TestCase):
             (tools / name).write_text(f'#!/bin/sh\necho "{name} $*" >> "{log}"\n')
             (tools / name).chmod(0o755)
         remote = self.tmp / "team.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "remote", "add", "team", str(remote)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "push", "-q", "team", "HEAD:main"], check=True)
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("-C", str(self.repo), "remote", "add", "team", str(remote))
+        self.git("-C", str(self.repo), "push", "-q", "team", "HEAD:main")
         result = self.run_fake("Your issue is **#3**. Write patch.txt.", extra_path=str(tools), agent="agent2")
         self.assertEqual(log.read_text().splitlines(), ["sdlc-claim 3", "sdlc-pr 3", "sdlc-ready 3"])
-        branches = subprocess.run(["git", "-C", str(remote), "branch", "--format=%(refname:short)"],
-                                  capture_output=True, text=True, check=True).stdout.split()
+        branches = self.git("-C", str(remote), "branch", "--format=%(refname:short)",
+                            capture_output=True, text=True).stdout.split()
         self.assertIn("claude/3", branches)
         self.assertIn("claimed, opened and readied #3", result.stdout)
         self.assertTrue((self.repo / "patch.txt").exists())
 
-    def sdlc_tools(self, ready_answer, claim_status=0):
+    def sdlc_tools(self, ready_answer, claim_status=0, ready_script=None):
         tools = self.tmp / "tools"
         tools.mkdir(exist_ok=True)
         (tools / "sdlc-claim").write_text(f"#!/bin/sh\nexit {claim_status}\n")
         (tools / "sdlc-pr").write_text("#!/bin/sh\nexit 0\n")
-        (tools / "sdlc-ready").write_text(f"#!/bin/sh\necho '{ready_answer}'\n")
+        (tools / "sdlc-ready").write_text(ready_script or f"#!/bin/sh\necho '{ready_answer}'\n")
         for name in ("sdlc-claim", "sdlc-pr", "sdlc-ready"):
             (tools / name).chmod(0o755)
         remote = self.tmp / "team.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "remote", "add", "team", str(remote)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "push", "-q", "team", "HEAD:main"], check=True)
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("-C", str(self.repo), "remote", "add", "team", str(remote))
+        self.git("-C", str(self.repo), "push", "-q", "team", "HEAD:main")
         return tools, remote
 
     def test_a_coordination_command_that_fails_ends_the_agent_in_error(self):
         tools, _ = self.sdlc_tools("draft", claim_status=1)
-        environment = dict(os.environ, COORD_RPC_URL="http://hub/agent2", PATH=f"{tools}:{os.environ['PATH']}")
+        environment = dict(self.environment, COORD_RPC_URL="http://hub/agent2", PATH=f"{tools}:{os.environ['PATH']}")
         result = subprocess.run(["sh", str(KIT / "fake_claude"), "-p", "--", "Your issue is **#3**."],
                                 cwd=self.repo, capture_output=True, text=True, env=environment)
         self.assertEqual(result.returncode, 1)
@@ -551,12 +711,12 @@ class FakeAgent(unittest.TestCase):
         self.assertIn("coordbench_fake_agent2.txt", own)
         # Another agent's work on team/main is not the agent's own until the pull request merged.
         other = self.tmp / "other"
-        subprocess.run(["git", "clone", "-q", "-b", "main", str(remote), str(other)], check=True)
+        self.git("clone", "-q", "-b", "main", str(remote), str(other))
         (other / "coordbench_fake_agent1.txt").write_text("another agent's change\n")
-        subprocess.run(["git", "-C", str(other), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(other), "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "-m", "x"],
-                       check=True)
-        pushed = subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:main"], capture_output=True, text=True)
+        self.git("-C", str(other), "add", "-A")
+        self.git("-C", str(other), "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "-m", "x")
+        pushed = subprocess.run(["git", "-C", str(other), "push", "-q", "origin", "HEAD:main"], capture_output=True,
+                                text=True, env=self.environment)
         self.assertEqual(pushed.returncode, 0, pushed.stderr)
         self.assertNotIn("coordbench_fake_agent1.txt", own)
         (tools / "sdlc-ready").write_text("#!/bin/sh\necho 'merged'\n")
@@ -564,6 +724,56 @@ class FakeAgent(unittest.TestCase):
         self.assertIn("(merged)", result.stdout)
         integrated = (self.repo / "patch.txt").read_text()
         self.assertIn("coordbench_fake_agent1.txt", integrated)
+
+
+    def test_main_moved_makes_it_merge_main_in_and_ready_again(self):
+        """sdlc-ready exits 3 with its text on stderr when main moved past
+        the branch (the gate's EXIT_MAIN_MOVED), as cli.py does: the agent
+        merges team/main in, pushes, and asks again."""
+        calls = self.tmp / "ready.calls"
+        tools, remote = self.sdlc_tools("", ready_script=f"""#!/bin/sh
+count=$(cat "{calls}" 2>/dev/null || echo 0)
+count=$((count + 1))
+echo "$count" > "{calls}"
+if [ "$count" = 1 ]; then
+    echo 'main moved: fetch team, merge team/main in, push, and call sdlc-ready again' >&2
+    exit 3
+fi
+echo 'merged: claude/3 is in main as abc1234'
+""")
+        other = self.tmp / "other"
+        self.git("clone", "-q", "-b", "main", str(remote), str(other))
+        (other / "coordbench_fake_agent1.txt").write_text("another agent's change\n")
+        self.git("-C", str(other), "add", "-A")
+        self.git("-C", str(other), "commit", "-q", "-m", "x")
+        self.git("-C", str(other), "push", "-q", "origin", "HEAD:main")
+        result = self.run_fake("Your issue is **#3**.", extra_path=str(tools), agent="agent2")
+        self.assertIn("(merged)", result.stdout)
+        self.assertEqual(calls.read_text().strip(), "2")
+        on_branch = subprocess.run(["git", "-C", str(remote), "log", "--format=%s", "claude/3"], env=self.environment,
+                                   capture_output=True, text=True, check=True).stdout
+        self.assertIn("x", on_branch.splitlines())
+        self.assertIn("coordbench_fake_agent1.txt", (self.repo / "patch.txt").read_text())
+        for line in result.stdout.splitlines():
+            json.loads(line)
+        # Any other status is a failure, with the command's first line in the reason.
+        (tools / "sdlc-ready").write_text("#!/bin/sh\necho 'refused: no such issue' >&2\nexit 1\n")
+        environment = dict(self.environment, COORD_RPC_URL="http://hub/agent3", PATH=f"{tools}:{os.environ['PATH']}")
+        failed = subprocess.run(["sh", str(KIT / "fake_claude"), "-p", "--", "Your issue is **#4**."],
+                                cwd=self.repo, capture_output=True, text=True, env=environment)
+        self.assertEqual(failed.returncode, 1)
+        last = json.loads(failed.stdout.splitlines()[-1])
+        self.assertEqual(last["result"], "sdlc-ready 4 failed (1): refused: no such issue")
+
+    def test_every_event_is_valid_json_whatever_the_texts_hold(self):
+        environment = {**self.environment, "COORD_RPC_URL": 'http://hub/rpc/agent "one"\\two',
+                       "ANTHROPIC_MODEL": 'a "quoted"\nmodel'}
+        result = subprocess.run(["sh", str(KIT / "fake_claude"), "-p", "--output-format", "stream-json", "--", "x"],
+                                cwd=self.repo, capture_output=True, text=True, env=environment, check=True)
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(events[0]["model"], 'a "quoted" model')
+        self.assertIn('agent "one"\\two', events[0]["session_id"])
+        self.assertEqual(events[-1]["type"], "result")
 
 
 class EnvironmentGate(unittest.TestCase):
@@ -662,6 +872,12 @@ class Workflow(unittest.TestCase):
         match = re.search(r"\n  [a-z-]+:\n", rest)
         return self.workflow[start:start + len(name) + 4 + (match.start() if match else len(rest))]
 
+    def test_no_job_runs_on_an_empty_matrix_which_github_fails(self):
+        for name in ("run", "run-real", "approve"):
+            with self.subTest(job=name):
+                self.assertIn("needs.plan.outputs.count != '0'", self.job(name))
+        self.assertIn("count: ${{ steps.plan.outputs.count }}", self.job("plan"))
+
     def test_the_jobs_are_cut_at_their_own_lines(self):
         self.assertTrue(self.job("run").startswith("  run:\n"))
         self.assertIn("mode: fake", self.job("run"))
@@ -710,7 +926,12 @@ class Workflow(unittest.TestCase):
                 self.assertIn("timeout_min: ${{ needs.plan.outputs.timeout_min }}", job)
         self.assertIn("if: always()\n", self.job("report"))
         action = "\n".join(line for line in self.action.splitlines() if not line.lstrip().startswith("#"))
-        self.assertIn("if: ${{ !cancelled() && steps.finished.outputs.skip != 'true' }}", action)
+        self.assertIn("if: ${{ !cancelled() && steps.finished.outcome == 'success' && "
+                      "steps.finished.outputs.skip != 'true' }}", action)
+        self.assertIn('fetch "$ARTIFACT" "$RUNNER_TEMP/rescore" --mode "$MODE"', action)
+        self.assertIn("RESCORE_DIR: ${{ runner.temp }}/rescore", action)
+        pair = (ACTIONS / "pair.sh").read_text(encoding="utf-8")
+        self.assertLess(pair.index("bash bench/cooperbench/setup.sh"), pair.index('mv "$RESCORE_DIR/$RUN_NAME"'))
         self.assertIn("run: bash bench/cooperbench/actions/pair.sh", action)
         self.assertIn("bash bench/cooperbench/actions/scrub.sh", action)
         self.assertLess(action.index("artifacts.py finished"), action.index("free_disk.sh"))
@@ -724,10 +945,35 @@ class Workflow(unittest.TestCase):
             self.assertIn(f"{name}: ${{{{ github.event_name == 'pull_request' && ", self.workflow)
         self.assertNotIn("inputs.pairs ||", self.workflow)
         self.assertIn("vars.SYMPHONY_CLAUDE_ACCOUNTS", self.workflow)
-        self.assertIn(f"COOPERBENCH_COMMIT: 63b9d44", self.workflow)
+        self.assertIn("COOPERBENCH_COMMIT: 63b9d44", self.workflow)
         pinned = re.findall(r"uses: ([a-z-]+/[a-z-]+)@(v\d+)", self.workflow + self.action)
         self.assertTrue(pinned)
         self.assertEqual({action for action, _ in pinned}, {"actions/checkout", "actions/upload-artifact"})
+
+    def test_no_secret_but_the_eight_slots_reaches_any_job_and_nothing_widens_the_read_only_permissions(self):
+        code = "\n".join(line for line in self.workflow.splitlines() if not line.lstrip().startswith("#"))
+        self.assertEqual(set(re.findall(r"secrets[.\[]\s*([A-Za-z0-9_]+)", code)),
+                         {f"SYMPHONY_CLAUDE_{slot}" for slot in plan.SLOTS})
+        self.assertNotRegex(code, r"toJSON\(\s*secrets|secrets\s*\)|secrets\s*\}")
+        self.assertEqual(code.count("permissions:"), 1)
+        for use in re.findall(r"uses: (\S+)", self.workflow + self.action):
+            with self.subTest(uses=use):
+                self.assertTrue(use.startswith("./") or re.fullmatch(r"[\w-]+/[\w-]+@v\d+", use), use)
+
+    def test_the_workflow_and_setup_sh_pin_the_same_cooperbench_commit(self):
+        setup = (KIT / "setup.sh").read_text(encoding="utf-8")
+        full = re.search(r"^commit=([0-9a-f]{7,40})", setup, re.M).group(1)
+        short = re.search(r"COOPERBENCH_COMMIT: ([0-9a-f]+)", self.workflow).group(1)
+        self.assertGreaterEqual(len(short), 7)
+        self.assertTrue(full.startswith(short), (full, short))
+
+    def test_free_disk_runs_only_on_a_hosted_runner(self):
+        script = (ACTIONS / "free_disk.sh").read_text(encoding="utf-8")
+        self.assertLess(script.index('if [ "${GITHUB_ACTIONS:-}" != true ]'), script.index("rm -rf"))
+        done = subprocess.run(["bash", str(ACTIONS / "free_disk.sh")], env={**os.environ, "GITHUB_ACTIONS": ""},
+                              capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stdout), (0, ""))
+        self.assertIn("GitHub-hosted runner", done.stderr)
 
     def test_the_artifact_names_are_the_planner_s(self):
         self.assertIn("name: ${{ matrix.artifact }}", self.workflow)
@@ -738,6 +984,20 @@ class Workflow(unittest.TestCase):
         self.assertEqual(artifacts.DONE_SUFFIX, "__done")
         self.assertIn("SURVEY_TAG: ${{ inputs.survey_tag }}", self.job("report"))
         self.assertIn("SURVEY_PLAN: ${{ needs.plan.outputs.survey }}", self.job("report"))
+        self.assertIn("PLAN_MATRIX: ${{ needs.plan.outputs.matrix }}", self.job("report"))
+
+    def test_the_dispatch_defaults_to_the_registered_pair_list(self):
+        self.assertIn('default: "@bench/cooperbench/pairs.txt"', self.workflow)
+        self.assertEqual(plan.REGISTERED_PAIRS, "@bench/cooperbench/pairs.txt")
+
+    def test_the_scrub_step_stops_what_may_still_write_before_it_rewrites(self):
+        scrub = (ACTIONS / "scrub.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in scrub.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIn('pkill -f "[c]oordbench/run.py run"', code)
+        self.assertIn("docker ps -q --filter label=coordbench.run", code)
+        self.assertLess(code.index("docker rm -f"), code.index("run.py scrub --run-dir"))
+        runner = (ROOT / "coordbench" / "run.py").read_text(encoding="utf-8")
+        self.assertIn('"--label", f"coordbench.run={plan[\'run_id\']}"', runner)
 
     def test_the_readme_and_the_plan_name_the_workflow_and_the_owner_s_settings(self):
         readme = (KIT / "README.md").read_text(encoding="utf-8")

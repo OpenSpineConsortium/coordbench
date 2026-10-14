@@ -2,8 +2,8 @@ name: Run one CooperBench pair
 description: >-
   One (pair, arm) of .github/workflows/bench.yml on this runner: skip the
   pair when an artifact of its name already holds a finished pair, else
-  free the disk and run pair.sh (or, for a pair whose agents submitted
-  but that was never scored, fetch its files and score them without
+  free the disk and run pair.sh (or, for a pair whose agents did not
+  fail but that was never scored, fetch its files and score them without
   running the agents again), then scrub the pair's directory once more
   and check it before anything is published. The fake and real jobs of
   the workflow share these steps; the uploads stay in the job, since they
@@ -105,7 +105,10 @@ runs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
         ARTIFACT: ${{ inputs.artifact }}
-      run: python3 bench/cooperbench/actions/artifacts.py fetch "$ARTIFACT" "${COOPERBENCH_DIR:-$HOME/cooperbench}/logs"
+        MODE: ${{ inputs.mode }}
+      # Beside the clone, not in it: setup.sh clones CooperBench into an
+      # empty directory only, and pair.sh moves the files in after it.
+      run: python3 bench/cooperbench/actions/artifacts.py fetch "$ARTIFACT" "$RUNNER_TEMP/rescore" --mode "$MODE"
 
     - name: Run the pair
       if: steps.finished.outputs.skip != 'true'
@@ -120,12 +123,14 @@ runs:
         RUN_NAME: ${{ inputs.name }}
         MODEL: ${{ inputs.model }}
         TIMEOUT_MIN: ${{ inputs.timeout_min }}
+        RESCORE_DIR: ${{ runner.temp }}/rescore
       run: bash bench/cooperbench/actions/pair.sh
 
     - name: Scrub the pair's files once more and check them before anything is published
       # After the pair however it ended, but not after a cancel, when the
-      # runner is tearing the job down: nothing is published then.
-      if: ${{ !cancelled() && steps.finished.outputs.skip != 'true' }}
+      # runner is tearing the job down: nothing is published then; nor
+      # when the artifacts could not be read, which ran no pair.
+      if: ${{ !cancelled() && steps.finished.outcome == 'success' && steps.finished.outputs.skip != 'true' }}
       id: scrub
       shell: bash
       env:

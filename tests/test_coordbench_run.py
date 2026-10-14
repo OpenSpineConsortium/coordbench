@@ -24,6 +24,7 @@ import types
 import unittest
 import urllib.error
 import urllib.request
+import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -951,6 +952,32 @@ class Provisioning(RunnerCase):
         self.assert_timings_well_formed(result["timings"])
         self.assertEqual(phases(result["timings"]), [("hub", None), ("git_remote", None), ("teardown", None)])
         self.assertRegex(err, r"timings: hub [0-9.]+ s, git_remote [0-9.]+ s, teardown [0-9.]+ s\n")
+
+
+    def test_a_failure_after_the_agents_started_tears_them_down_and_records_the_error(self):
+        """The plan's write comes after the agents start streaming to the
+        host (the disk full is the realistic cause): the pair is an
+        error like a failed provision, its containers removed and its
+        files scrubbed, never left running with no record."""
+        calls = []
+
+        def failing_save(plan):
+            calls.append(plan["run_id"])
+            if len(calls) == 1:
+                raise OSError("No space left on device")
+
+        with mock.patch.object(runner, "save_plan", side_effect=failing_save):
+            code, _, err = self.main(*self.run_arguments("coop", "--features", "1,6"))
+        self.assertEqual(code, 1)
+        self.assertIn("No space left on device", err)
+        result = json.loads((self.pair() / "result.json").read_text())
+        self.assertIn("OSError: No space left on device", result["error"])
+        self.assertEqual(result["error_kind"], "infrastructure")
+        self.assertEqual({a["status"] for a in result["agents"].values()}, {"Error"})
+        self.assertFalse((self.pair() / "eval.json").exists())
+        self.assertTrue([c for c in self.docker.commands() if c[:2] == ["rm", "-f"]])
+        self.assertEqual(self.scorer.calls, [])
+        self.assertFalse(runner.pair_finished(self.pair()))
 
 
 class TheClaudeCliDriver(RunnerCase):
@@ -2787,6 +2814,53 @@ class MachineFailuresAndReferenceMerges(RunnerCase):
 
 
 
+class TheRerunRule(unittest.TestCase):
+    """pair_finished: CooperBench's rule, an agent in Error reruns the
+    pair, but for an agent that ran out the pair's time, whose scored
+    attempt is kept (PARITY.md, row 23)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-rerun-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def written(self, result):
+        (self.tmp / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        return self.tmp
+
+    def test_a_pair_whose_agent_ran_out_its_time_is_finished_and_one_that_failed_is_not(self):
+        timed_out = {"status": "Error", "error": f"{drivers.TIMED_OUT}7200 seconds",
+                     "end_reason": f"{drivers.TIMED_OUT}7200 seconds"}
+        self.assertTrue(runner.pair_finished(self.written(
+            {"agents": {"agent1": {"status": "Submitted"}, "agent2": timed_out}})))
+        self.assertTrue(runner.pair_finished(self.written({"agent": timed_out})))
+        self.assertFalse(runner.pair_finished(self.written(
+            {"agents": {"agent1": {"status": "Error", "error": None, "end_reason": "Usage limit reached"}}})))
+        self.assertFalse(runner.pair_finished(self.written(
+            {"agents": {"agent1": {"status": "Error", "error": None, "end_reason": drivers.NO_RESULT}}})))
+        self.assertFalse(runner.pair_finished(self.written({"error": "HubError: gone", "agents": {}})))
+        self.assertTrue(runner.pair_finished(self.written({"agents": {"agent1": {"status": "LimitsExceeded"}}})))
+        self.assertTrue(runner.agent_ran_out_of_time(timed_out))
+        self.assertFalse(runner.agent_ran_out_of_time({"status": "Error"}))
+
+
+def packfile(*contents):
+    """A git packfile of blobs, as git writes one: the header, each
+    object's type-and-size varint then its zlib stream, and a checksum
+    the reader does not check."""
+    out = bytearray(b"PACK" + (2).to_bytes(4, "big") + len(contents).to_bytes(4, "big"))
+    for content in contents:
+        size = len(content)
+        byte = (3 << 4) | (size & 0x0F)
+        size >>= 4
+        while size:
+            out.append(byte | 0x80)
+            byte = size & 0x7F
+            size >>= 7
+        out.append(byte)
+        out += zlib.compress(content)
+    return bytes(out) + bytes(20)
+
+
 class Scrubbing(unittest.TestCase):
     """scrub_credentials on its own: every file under the directories, a
     gzip file through gzip, the longest value first, a short placeholder
@@ -2931,8 +3005,36 @@ class Scrubbing(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
         self.assertIn("broken.gz: could not be read", err.getvalue())
-        # A clean archive passes, no credential in the environment is nothing to find, and no directory is 2.
+        # A git object the team arm's shared/ copy brings is read inflated: a loose object, a packfile.
         (run_dir / "coop" / "broken.gz").unlink()
+        objects = run_dir / "coop" / "shared" / ".git" / "objects"
+        (objects / "ab").mkdir(parents=True)
+        (objects / "pack").mkdir()
+        loose = objects / "ab" / ("c" * 38)
+        loose.write_bytes(zlib.compress(b"blob 60\0the token " + PLANTED.encode() + b" in a committed file\n"))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn(f"{loose}: holds the agents' credential inside a git object", err.getvalue())
+        loose.write_bytes(zlib.compress(b"blob 5\0hello"))
+        pack = objects / "pack" / "pack-1.pack"
+        pack.write_bytes(packfile(b"a" * 300, b"export TOKEN=" + PLANTED.encode() + b"\n", b"tail"))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn(f"{pack}: holds the agents' credential inside a git object", err.getvalue())
+        pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail")[:-40])
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn(f"{pack}: could not be read", err.getvalue())
+        pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail"))
+        (objects / "pack" / "pack-1.idx").write_bytes(b"\xfftOc" + bytes(40))
+        self.assertEqual(runner.git_object_kind(pack), "pack")
+        self.assertEqual(runner.git_object_kind(loose), "loose")
+        self.assertIsNone(runner.git_object_kind(objects / "pack" / "pack-1.idx"))
+        self.assertIsNone(runner.git_object_kind(run_dir / "coop" / "clean.txt"))
+        # A clean archive passes, no credential in the environment is nothing to find, and no directory is 2.
         with tarfile.open(run_dir / "coop" / "packed.tar", "w") as packed:
             info = tarfile.TarInfo("note.txt")
             info.size = 5
