@@ -123,8 +123,8 @@ transcript and what it told its peer, and a pair's files may be published
 as a workflow's artifact. The run says on stderr when it found one, and a
 pair with a file that holds the token and could not be rewritten is an
 error, not a result. The scrub rewrites the token's exact bytes in plain
-and gzip files only: an archive an agent packed (a tar or a zip, by its
-name or its first bytes), a git object under the team arm's shared/
+and gzip files only: an archive an agent packed (a tar, a zip or an ar
+archive, by its name or its bytes), a git object under the team arm's shared/
 copy or a workspace kept with --keep, or the token encoded some other
 way (base64, say), is outside it, as is the log of a hub started
 elsewhere (--hub), which is that hub's to keep.
@@ -132,16 +132,26 @@ elsewhere (--hub), which is that hub's to keep.
 directory, removing first every symlink and special file in it (the
 upload would follow a symlink to a file the scrub never read), and
 reads every file back through every layer it is packed in, each opened
-by what its first bytes say it is, whatever the file's name or place:
-gzip, xz and bzip2 streams, tar and zip members, git's loose objects,
-packfiles (with each delta applied to its base) and bundles, an archive
-inside an archive, up to eight layers and 4 GiB a file. It exits 2 when
-a file or a layer still holds the token, a name does, a file could not
-be read, or a layer is one it cannot open (zstd, 7z, rar, lz4); what it
-says names a path with the token replaced. The workflow's jobs run it
-before an upload, after stopping any agent container still up, and
-publish nothing it refused; a fake run, which has no token, reads its
-files back for a stand-in. The team arm's shared/ is copied into every
+by what its bytes say it is, whatever the file's name or place: gzip,
+xz, lzma and bzip2 streams, tar members (a ustar or v7 header, stepping
+over one that does not read, as GNU tar does), zip members (a zipapp's
+too), ar members (a .deb), git's loose objects, packfiles (with each
+delta applied to its base) and bundles, an archive inside an archive,
+up to eight layers deep, with one budget for the whole directory (1 GiB
+unpacked, each stream, member or object counting 1 KiB). It exits 2
+when a file or a layer still holds the token, a path's name does, the
+budget or the depth runs out, or a file does not open: a stream cut
+short, a format it cannot open (zstd, 7z, rar, lz4, .Z, lzip), an
+incremental bundle (its pack's deltas need objects it does not carry)
+or a SHA-256 repository's pack. A repository's history is the
+exception: what its objects hold (a project's own zstd or cut gzip test
+fixture) is searched as far as it opens and never refused for it,
+though the same file in a work tree is. Every line it writes names a
+path with the token replaced. The workflow's jobs run it before an
+upload, after stopping any agent container still up, and publish
+nothing it refused; a fake run, which has no token, reads its files
+back for a stand-in, so the rehearsal refuses what a real run's
+read-back would. The team arm's shared/ is copied into every
 pair and published with it.
 
 ## In GitHub Actions

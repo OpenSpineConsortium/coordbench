@@ -135,10 +135,7 @@ runs:
       shell: bash
       env:
         RUN_DIR: ${{ steps.where.outputs.run_dir }}
-        # A fake run has no credential, so it reads its files back for a
-        # stand-in that none of them holds: the rehearsal then refuses
-        # what the read-back would refuse in a real run's files.
-        COORDBENCH_CLAUDE_TOKEN: ${{ inputs.mode == 'fake' && 'coordbench-fake-run-stand-in' || '' }}
+        MODE: ${{ inputs.mode }}
       run: |
         if bash bench/cooperbench/actions/scrub.sh; then
           echo "publish=true" >> "$GITHUB_OUTPUT"

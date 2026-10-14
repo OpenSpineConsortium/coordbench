@@ -688,9 +688,15 @@ def is_archive(path):
 
 
 def read_for_scrub(path):
+    """A file's bytes, a .gz file's inflated: at most LARGEST_EXPANSION of
+    them, past which the file is left whole for the read-back, which
+    refuses it, rather than let it take the runner's memory."""
     if path.suffix == ".gz":
         with gzip.open(path, "rb") as source:
-            return source.read()
+            data = source.read(LARGEST_EXPANSION + 1)
+        if len(data) > LARGEST_EXPANSION:
+            raise ValueError("it inflates to more than the scrub reads")
+        return data
     return path.read_bytes()
 
 
@@ -713,7 +719,7 @@ def scrub_file(path, values):
     if is_archive(path):
         return False
     data = read_for_scrub(path)
-    if packed_kind(data) in CONTAINERS:
+    if CONTAINERS.intersection(packed_kinds(data)):
         return False
     cleaned = scrub_bytes(data, values)
     if cleaned == data:
@@ -740,7 +746,7 @@ def scrub_paths(paths, values):
                 rewritten.append(path)
         except CredentialKept as problem:
             kept.append(str(problem))
-        except (OSError, EOFError, zlib.error) as problem:
+        except (OSError, EOFError, ValueError, zlib.error) as problem:
             say(scrub_text(f"scrubbing {path} failed: {problem}", values))
     if kept:
         raise CredentialKept("\n".join(kept))
@@ -778,23 +784,36 @@ INFLATE_CHUNK = 64 * 1024
 # delta that names more is refused as unreadable rather than let it take
 # the runner's memory.
 LARGEST_OBJECT = 1 << 30
-# The most the read-back takes out of one file, all its layers together
-# (what it inflates, and what it reads out of an archive's members), and
-# how many layers deep it opens: a pair's own files come to megabytes, so
-# a file past either is refused as unreadable rather than let a small
-# file that unpacks without end take the runner's memory or time.
-LARGEST_EXPANSION = 4 << 30
+# The most the read-back takes out of a run directory, every file and
+# every layer together: what it inflates, what it reads out of members,
+# and ITEM_COST for each stream, member or object it opens, so a file of
+# many tiny streams costs as much as one that inflates far; and how many
+# layers deep it opens. A pair's own files come to megabytes, so a
+# directory past either is refused as unreadable rather than let a small
+# file that unpacks without end take the runner's memory or time. What
+# a layer gives is grown in place, so the memory it takes is about what
+# the budget let it unpack.
+LARGEST_EXPANSION = 1 << 30
+ITEM_COST = 1 << 10
 DEEPEST_NESTING = 8
 # How much a decompressor or a member is asked for at a time, so the
-# budget is charged before the memory is spent.
+# budget is charged a step at a time; and the first input a stream's
+# decompressor is handed, doubled up to INFLATE_CHUNK, so a short stream
+# copies little of what follows it.
 EXPANSION_STEP = 1 << 20
+FIRST_CHUNK = 1 << 10
 # git reads a size or an offset in at most 64 bits, so a header that runs
 # on past them is refused, as git refuses it, before it costs time.
 LONGEST_NUMBER_BITS = 64
 
 
+class LimitReached(ValueError):
+    """The read-back reached LARGEST_EXPANSION or DEEPEST_NESTING, which
+    refuses the file wherever it is met, a repository's content included."""
+
+
 class Budget:
-    """What the read-back may still take out of one file
+    """What the read-back may still take out of a run directory
     (LARGEST_EXPANSION)."""
 
     def __init__(self, left=None):
@@ -802,7 +821,7 @@ class Budget:
 
     def take(self, size):
         if size > self.left:
-            raise ValueError("a file that unpacks to more than the scrub reads")
+            raise LimitReached("more to unpack than the scrub reads")
         self.left -= size
 
 
@@ -855,6 +874,7 @@ def packed_objects(data, budget=None):
     view = memoryview(data)[:-20]
     objects, offset = [], 12
     for _ in range(int.from_bytes(data[8:12], "big")):
+        budget.take(ITEM_COST)
         start = offset
         kind, size, offset = object_header(view, offset)
         base = None
@@ -1024,128 +1044,208 @@ def copy_instruction(delta, command, position):
     return start, length or 0x10000, position
 
 
-# What a file's first bytes say it is packed in, for the read-back, which
-# opens each layer by what it is rather than by the file's name or place:
-# an agent may pack, compress or commit what it printed under any name
-# (a tarball named .tar.xz, a wheel, a repository's quarantined objects),
-# and the scrub's plain search sees none of it. The containers among them
-# hold members whose sizes a replacement would break, so the scrub leaves
-# them whole as it does ARCHIVE_SUFFIXES, and the read-back refuses them
-# when they hold the credential. A zlib stream begins with two bytes only,
-# so bytes that begin like one are searched for what they give and never
-# called unreadable for it; the rest are read whole or refused.
-GZIP_MAGIC, XZ_MAGIC = b"\x1f\x8b", b"\xfd7zXZ\x00"
+# The formats the read-back opens, each found by what the bytes say of
+# themselves rather than by the file's name or place: an agent may pack,
+# compress or commit what it printed under any name (a tarball named
+# .tar.xz, a wheel, a zipapp, a repository's quarantined objects), and the
+# scrub's plain search sees none of it. Most are sure signs, a magic
+# number at the start, and a file that carries one and does not open is
+# refused. A zlib stream (as git writes each loose object) and an lzma
+# stream begin with a few bytes only, and a zip with something before it
+# is found by the directory at its end, so these are weak signs: bytes
+# that carry one are searched as far as they open and never refused for
+# it. The containers hold members whose sizes a replacement would break,
+# so the scrub leaves them whole as it does ARCHIVE_SUFFIXES, and the
+# read-back refuses them when they hold the credential.
+GZIP_MAGIC, XZ_MAGIC, AR_MAGIC = b"\x1f\x8b", b"\xfd7zXZ\x00", b"!<arch>\n"
 BZIP2_START = re.compile(rb"BZh[1-9](\x31\x41\x59\x26\x53\x59|\x17\x72\x45\x38\x50\x90)")
 BUNDLE_HEADERS = (b"# v2 git bundle\n", b"# v3 git bundle\n")
+ZIP_STARTS = (b"PK\x03\x04", b"PK\x05\x06")
+# Where a zip's end record is looked for: the last 64 KiB, its comment's
+# most, and the record and zip64's locator and record before it.
+ZIP_TAIL = (1 << 16) + 22 + 20 + 56
+TAR_CHECKSUM = re.compile(rb" *([0-7]{1,7})[ \0]*")
 UNOPENED_FORMATS = ((b"\x28\xb5\x2f\xfd", "zstd"), (b"7z\xbc\xaf\x27\x1c", "7z"),
-                    (b"Rar!\x1a\x07", "rar"), (b"\x04\x22\x4d\x18", "lz4"))
-CONTAINERS = ("tar", "zip", "git packfile", "git bundle")
+                    (b"Rar!\x1a\x07", "rar"), (b"\x04\x22\x4d\x18", "lz4"),
+                    (b"\x1f\x9d", "compress (.Z)"), (b"LZIP", "lzip"))
+CONTAINERS = frozenset({"tar", "zip", "prefixed zip", "ar", "git packfile", "git bundle"})
+WEAK_KINDS = frozenset({"zlib", "lzma", "prefixed zip"})
+# The kinds whose content is a repository's: its history holds whatever
+# the project committed (a test's zstd or cut gzip fixture among them),
+# so what such content holds is searched as far as it opens and never
+# refused for a layer that does not open; a limit still refuses.
+OBJECT_KINDS = frozenset({"git packfile", "zlib"})
+ZEROS = re.compile(rb"\0*")
+AR_SIZE = re.compile(rb" *([0-9]{1,10}) *")
 
 
-def packed_kind(data):
-    """The format the bytes are packed in, by their first bytes, or None
+def packed_kinds(data):
+    """Every format the bytes may be packed in, the sure signs first; []
     for bytes the read-back searches only as they are."""
+    kinds = []
     if data[:3] == GZIP_MAGIC + b"\x08":
-        return "gzip"
-    if data[:6] == XZ_MAGIC:
-        return "xz"
-    if BZIP2_START.match(data[:10]):
-        return "bzip2"
-    if data[:4] == b"PACK" and int.from_bytes(data[4:8], "big") in (2, 3):
-        return "git packfile"
-    if data.startswith(BUNDLE_HEADERS):
-        return "git bundle"
-    if data[:4] in (b"PK\x03\x04", b"PK\x05\x06"):
-        return "zip"
+        kinds.append("gzip")
+    elif data[:6] == XZ_MAGIC:
+        kinds.append("xz")
+    elif BZIP2_START.match(data[:10]):
+        kinds.append("bzip2")
+    elif data[:4] == b"PACK" and int.from_bytes(data[4:8], "big") in (2, 3):
+        kinds.append("git packfile")
+    elif data.startswith(BUNDLE_HEADERS):
+        kinds.append("git bundle")
+    elif data.startswith(ZIP_STARTS):
+        kinds.append("zip")
+    elif data.startswith(AR_MAGIC):
+        kinds.append("ar")
+    else:
+        kinds += [name for magic, name in UNOPENED_FORMATS if data.startswith(magic)]
+    if is_tar(data):
+        kinds.append("tar")
+    if "zip" not in kinds and zipfile.is_zipfile(io.BytesIO(bytes(data[-ZIP_TAIL:]))):
+        kinds.append("prefixed zip")
+    if not kinds and len(data) > 2 and data[0] == 0x78 and (data[0] << 8 | data[1]) % 31 == 0:
+        kinds.append("zlib")
+    if not kinds and is_lzma_alone(data):
+        kinds.append("lzma")
+    return kinds
+
+
+def is_tar(data):
+    """A tar's first header: ustar's magic at 257 or, for a v7 tar, which
+    has none, a checksum at 148 that sums the header as tar sums it."""
+    if len(data) < 512 or not data[0]:
+        return False
     if data[257:262] == b"ustar":
-        return "tar"
-    for magic, name in UNOPENED_FORMATS:
-        if data.startswith(magic):
-            return name
-    if len(data) > 2 and data[0] == 0x78 and (data[0] << 8 | data[1]) % 31 == 0:
-        return "zlib"
-    return None
+        return True
+    field = TAR_CHECKSUM.fullmatch(data[148:156])
+    if not field:
+        return False
+    header = bytes(data[:148]) + b" " * 8 + bytes(data[156:512])
+    return int(field.group(1), 8) in (sum(header), sum(struct.unpack("512b", header)))
 
 
-def credential_layers(data, needles, budget, depth=0):
+def is_lzma_alone(data):
+    """An lzma stream as xz --format=lzma and Python write one: the
+    default properties, a dictionary of 2^n or 3 * 2^(n-1) bytes, and a
+    size that is unknown or under 256 GiB."""
+    if len(data) < 13 or data[0] != 0x5D:
+        return False
+    dictionary = int.from_bytes(data[1:5], "little")
+    size = int.from_bytes(data[5:13], "little")
+    shaped = dictionary & (dictionary - 1) == 0 or (dictionary // 3) & (dictionary // 3 - 1) == 0
+    return dictionary >= 4096 and shaped and (size == (1 << 64) - 1 or size < 1 << 38)
+
+
+def credential_layers(data, needles, budget, depth=0, strict=True):
     """None when the bytes hold no needle, as they are or once unpacked;
     else the layers opened to find one, outermost first, [] when the bytes
     hold it as they are. The plain search comes first at every layer, so a
     member's name, a link's target, a reference or a comment is searched
-    as a header holds it."""
+    as a header holds it. strict is false for a repository's content
+    (OBJECT_KINDS)."""
     if any(needle in data for needle in needles):
         return []
-    kind = packed_kind(data)
-    if kind is None:
-        return None
-    if depth >= DEEPEST_NESTING:
-        raise ValueError(f"layers nested deeper than the scrub reads, the last {kind}")
-    for inner in UNPACKERS[kind](data, budget):
-        found = credential_layers(inner, needles, budget, depth + 1)
+    for kind in packed_kinds(data):
+        if depth >= DEEPEST_NESTING:
+            raise LimitReached(f"layers nested deeper than the scrub reads, the last {kind}")
+        found = layers_through(kind, data, needles, budget, depth, strict)
         if found is not None:
-            return [kind, *found]
+            return found
     return None
 
 
-def inflated(data, wbits, budget, partial=False):
-    """A zlib or gzip stream's content and what follows it, fed a chunk at
-    a time and asked for a step at a time (EXPANSION_STEP); a stream cut
-    short or broken raises, unless partial, which keeps what came out."""
+def layers_through(kind, data, needles, budget, depth, strict):
+    """credential_layers through one format. A layer that does not open
+    refuses the file, unless its sign is weak (WEAK_KINDS) or the bytes
+    are a repository's content, which are searched as far as they open;
+    a limit refuses it wherever it is met."""
+    tolerant = kind in WEAK_KINDS or not strict
+    layers = UNPACKERS[kind](data, budget)
+    while True:
+        try:
+            label, inner = next(layers)
+        except StopIteration:
+            return None
+        except LimitReached:
+            raise
+        except Exception:
+            if tolerant:
+                return None
+            raise
+        found = credential_layers(inner, needles, budget, depth + 1, strict and kind not in OBJECT_KINDS)
+        if found is not None:
+            return [label, *found]
+
+
+def inflated(data, start, wbits, budget, partial=False):
+    """A zlib or gzip stream's content from start in data, and the offset
+    after it; fed a chunk at a time (FIRST_CHUNK) and asked for a step at a
+    time (EXPANSION_STEP). A stream cut short or broken raises, unless
+    partial, which keeps what came out."""
     inflater = zlib.decompressobj(wbits)
-    parts, position, pending = [], 0, b""
+    view = memoryview(data)
+    out, position, pending, chunk = bytearray(), start, b"", FIRST_CHUNK
     try:
         while not inflater.eof:
-            if not pending:
-                pending = data[position:position + INFLATE_CHUNK]
+            if not pending and position < len(view):
+                pending = view[position:position + chunk]
                 position += len(pending)
+                chunk = min(chunk * 2, INFLATE_CHUNK)
             made = inflater.decompress(pending, EXPANSION_STEP)
             pending = inflater.unconsumed_tail
             budget.take(len(made))
-            parts.append(made)
-            if not made and not pending and position >= len(data):
+            out += made
+            if not made and not pending and position >= len(view):
                 break
     except zlib.error as problem:
         if not partial:
             raise ValueError(f"a stream that does not inflate ({problem})") from None
     if not inflater.eof and not partial:
         raise ValueError("a truncated stream")
-    return b"".join(parts), inflater.unused_data + data[position:]
+    return out, position - len(pending) - len(inflater.unused_data)
 
 
-def decompressed(decompressor, data, budget):
-    """An xz or bzip2 stream's content and what follows it, read the same
-    way."""
-    parts, position = [], 0
+def decompressed(decompressor, data, start, budget):
+    """An xz, lzma or bzip2 stream's content from start, and the offset
+    after it, read the same way."""
+    view = memoryview(data)
+    out, position, chunk = bytearray(), start, FIRST_CHUNK
     try:
         while not decompressor.eof:
-            chunk = b""
+            piece = b""
             if decompressor.needs_input:
-                chunk = data[position:position + INFLATE_CHUNK]
-                if not chunk:
+                piece = view[position:position + chunk]
+                if not piece:
                     raise ValueError("a truncated stream")
-                position += len(chunk)
-            made = decompressor.decompress(chunk, EXPANSION_STEP)
+                position += len(piece)
+                chunk = min(chunk * 2, INFLATE_CHUNK)
+            made = decompressor.decompress(piece, EXPANSION_STEP)
             budget.take(len(made))
-            parts.append(made)
+            out += made
     except (OSError, EOFError, lzma.LZMAError) as problem:
         raise ValueError(f"a stream that does not decompress ({problem})") from None
-    return b"".join(parts), decompressor.unused_data + data[position:]
+    return out, position - len(decompressor.unused_data)
 
 
-def streams(magic, one_stream):
+def streams(kind, magic, one_stream):
     """An unpacker for a format whose streams may follow one another, as
     gzip, xz and bzip2 tools write and read them: their contents joined,
     as the tools give them, then whatever follows the last, which may be
-    packed in another format."""
+    packed in another format. Each stream is read from where the last one
+    ended, so many short streams cost no more than one long one."""
     def unpack(data, budget):
-        parts, rest = [], data
-        while rest.startswith(magic):
-            content, rest = one_stream(rest, budget)
-            parts.append(content)
-            rest = rest.lstrip(b"\0")
-        yield b"".join(parts)
-        if rest:
-            yield rest
+        joined, offset = None, 0
+        while data.startswith(magic, offset):
+            budget.take(ITEM_COST)
+            content, offset = one_stream(data, offset, budget)
+            if joined is None:
+                joined = content
+            else:
+                joined += content
+            offset = ZEROS.match(data, offset).end()
+        yield kind, joined
+        if offset < len(data):
+            yield f"what follows the {kind}", data[offset:]
     return unpack
 
 
@@ -1155,76 +1255,116 @@ LOOSE_HEADER = re.compile(rb"(blob|commit|tree|tag) [0-9]{1,20}\0")
 
 
 def zlib_content(data, budget):
-    content = inflated(data, zlib.MAX_WBITS, budget, partial=True)[0]
+    budget.take(ITEM_COST)
+    content = inflated(data, 0, zlib.MAX_WBITS, budget, partial=True)[0]
     header = LOOSE_HEADER.match(content)
-    yield content[header.end():] if header else content
+    if header:
+        del content[:header.end()]
+    yield "zlib", content
+
+
+def lzma_content(data, budget):
+    budget.take(ITEM_COST)
+    yield "lzma", decompressed(lzma.LZMADecompressor(lzma.FORMAT_ALONE), data, 0, budget)[0]
 
 
 def tar_members(data, budget):
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as packed:
+    """Each regular member's content; a header that does not read is
+    stepped over, as GNU tar steps over it, so no member after it is lost."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:", ignore_zeros=True) as packed:
         for member in packed:
+            budget.take(ITEM_COST)
             if member.isreg():
-                yield read_in_steps(packed.extractfile(member), budget)
+                yield "tar", read_in_steps(packed.extractfile(member), budget)
 
 
 def zip_members(data, budget):
     """Each member's content, which zipfile checks against its CRC; one
-    that is encrypted or packed by a method zipfile lacks raises, and the
-    file is refused as unreadable."""
+    that is encrypted or packed by a method zipfile lacks raises. A zip
+    with something before it (a zipapp's #! line) reads the same way."""
     with zipfile.ZipFile(io.BytesIO(data)) as packed:
         for info in packed.infolist():
+            budget.take(ITEM_COST)
             with packed.open(info) as member:
-                yield read_in_steps(member, budget)
+                yield "zip", read_in_steps(member, budget)
+
+
+def ar_members(data, budget):
+    """Each member of an ar archive (a .deb, a static library): after the
+    global header, a 60-byte header whose size, in decimal, is at 48 to
+    58, then the member, padded to an even length."""
+    offset = len(AR_MAGIC)
+    while offset < len(data):
+        header = data[offset:offset + 60]
+        size = AR_SIZE.fullmatch(header[48:58])
+        if len(header) < 60 or header[58:60] != b"`\n" or not size:
+            raise ValueError("an ar member header that does not read")
+        start, end = offset + 60, offset + 60 + int(size.group(1))
+        if end > len(data):
+            raise ValueError("an ar member that runs past the archive's end")
+        budget.take(ITEM_COST + end - start)
+        yield "ar", data[start:end]
+        offset = end + (end - start) % 2
 
 
 def read_in_steps(stream, budget):
-    parts = []
+    out = bytearray()
     while part := stream.read(EXPANSION_STEP):
         budget.take(len(part))
-        parts.append(part)
-    return b"".join(parts)
+        out += part
+    return out
+
+
+def pack_objects(data, budget):
+    for content in pack_contents(data, budget):
+        yield "git packfile", content
 
 
 def bundle_pack(data, budget):
     """A git bundle's packfile: after its header, its prerequisites and its
-    references, a blank line, then the pack."""
+    references, a blank line, then the pack. An incremental bundle's pack
+    is thin, its deltas made on objects it does not carry, and is refused."""
     end = data.find(b"\n\n")
     if end < 0 or data[end + 2:end + 6] != b"PACK":
         raise ValueError("a git bundle with no packfile after its header")
-    yield data[end + 2:]
+    yield "git bundle", data[end + 2:]
 
 
 def unopened(name):
     def unpack(data, budget):
-        raise ValueError(f"a {name} file, which the scrub cannot open")
+        yield from ()
+        raise ValueError(f"{name}, a format the scrub cannot open")
     return unpack
 
 
 UNPACKERS = {
-    "gzip": streams(GZIP_MAGIC, lambda data, budget: inflated(data, 16 + zlib.MAX_WBITS, budget)),
-    "xz": streams(XZ_MAGIC, lambda data, budget: decompressed(lzma.LZMADecompressor(lzma.FORMAT_XZ), data, budget)),
-    "bzip2": streams(b"BZh", lambda data, budget: decompressed(bz2.BZ2Decompressor(), data, budget)),
-    "git packfile": lambda data, budget: pack_contents(data, budget),
+    "gzip": streams("gzip", GZIP_MAGIC, lambda data, start, budget: inflated(data, start, 16 + zlib.MAX_WBITS, budget)),
+    "xz": streams("xz", XZ_MAGIC,
+                  lambda data, start, budget: decompressed(lzma.LZMADecompressor(lzma.FORMAT_XZ), data, start, budget)),
+    "bzip2": streams("bzip2", b"BZh",
+                     lambda data, start, budget: decompressed(bz2.BZ2Decompressor(), data, start, budget)),
+    "git packfile": pack_objects,
     "git bundle": bundle_pack,
     "zip": zip_members,
+    "prefixed zip": zip_members,
     "tar": tar_members,
+    "ar": ar_members,
     "zlib": zlib_content,
+    "lzma": lzma_content,
     **{name: unopened(name) for _, name in UNOPENED_FORMATS},
 }
-# What a file the read-back cannot read raises, every one of them refusing
-# the file rather than letting an error stop the read-back unanswered.
-UNREADABLE = (OSError, EOFError, ValueError, LookupError, RuntimeError, MemoryError, struct.error,
-              zlib.error, lzma.LZMAError, tarfile.TarError, zipfile.BadZipFile)
 
 
 def unscrubbed(directory, values):
     """Every file under the directory that still holds the credential, as
-    it is or in any layer it is packed in (packed_kind), or that could not
+    it is or in any layer it is packed in (packed_kinds), or that could not
     be read; every path whose name holds it; and every symlink or special
     file, which the scrub never reads and the upload would follow
     (remove_links takes them out first): each with why, the credential
-    replaced, for a run whose files are about to be published."""
+    replaced, for a run whose files are about to be published. One budget
+    holds for the whole directory (LARGEST_EXPANSION)."""
     needles = [value.encode("utf-8") for value in values]
+    budget = Budget()
     kept = []
     for path in sorted(Path(directory).rglob("*")):
         if any(value in path.name for value in values):
@@ -1238,9 +1378,11 @@ def unscrubbed(directory, values):
             kept.append(f"{path}: is not a regular file, which the scrub cannot read")
             continue
         try:
-            layers = credential_layers(path.read_bytes(), needles, Budget())
-        except UNREADABLE as problem:
-            kept.append(f"{path}: could not be read ({problem})")
+            layers = credential_layers(path.read_bytes(), needles, budget)
+        # Whatever a file's bytes make the read-back raise refuses the
+        # file, so no error ends the read-back without saying why.
+        except Exception as problem:
+            kept.append(f"{path}: could not be read ({problem or type(problem).__name__})")
             continue
         if layers is not None:
             kept.append(f"{path}: holds the agents' credential" + (f", read through {', '.join(layers)}" if layers else ""))
