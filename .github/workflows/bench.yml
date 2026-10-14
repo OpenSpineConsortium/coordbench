@@ -1,0 +1,251 @@
+name: Bench
+
+# CooperBench on Symphony's claim protocol, in this repository's own
+# Actions: one job per pair and arm, each running CooperBench's runner and
+# scorer on a GitHub-hosted runner with coordbench's claude-cli driver,
+# and a report job that sets the arms side by side (bench/cooperbench/
+# report.py) from the pairs' artifacts. Three modes, chosen at dispatch:
+# - survey: CooperBench's gradeability check on each task of the pair
+#   list, with no agent, so PLAN.md's pair list can be written from what
+#   grades on a runner.
+# - fake: every pair with bench/cooperbench/fake_claude as the agent, so
+#   the whole path runs and no usage is spent; a pull request that
+#   changes the kit, the workflow or the runner runs one pair this way.
+# - real: the agents are Claude Code on the owner's accounts. Each job
+#   waits in the environment bench until a reviewer approves the run
+#   (the plan job refuses a real run while that environment has no
+#   required reviewer, actions/environment.py), takes its account's
+#   token from the organization secret SYMPHONY_CLAUDE_<slot>, the slot
+#   a number from 1 to 8, and runs in the concurrency group of that
+#   slot, so one account runs one job at a time and up to 100 wait,
+#   first in first out as far as GitHub keeps it; the slots in use are
+#   the variable SYMPHONY_CLAUDE_ACCOUNTS (numbers separated by commas
+#   or blanks) unless the dispatch names them.
+# A pair's files are one artifact, kept 90 days, named
+# <tag>__<arm>__<repo>__<task>__f1_f6; a dispatch of the same tag skips
+# every pair whose artifact holds a scored pair with no agent in Error,
+# so a run that stopped on a usage limit is finished by dispatching it
+# again. No step calls a judge model, and none sees ANTHROPIC_API_KEY.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: survey (gradeability, no agent), fake (no usage) or real
+        type: choice
+        options: [fake, survey, real]
+        default: fake
+      pairs:
+        description: >-
+          flash, or entries such as pallets_click_task/2068 and
+          pallets_jinja_task/1559/f4_f8, or @bench/cooperbench/pairs.txt
+        default: flash
+      arms:
+        description: the arms, from solo coop coop-nocomm coop-git team sdlc
+        default: solo,coop,coop-git,team,sdlc
+      accounts:
+        description: real mode, the account slots to use, from 1 to 8 (default the variable SYMPHONY_CLAUDE_ACCOUNTS)
+        default: ""
+      model:
+        default: claude-sonnet-5-5
+      timeout_min:
+        description: minutes an agent may take
+        default: "120"
+      tag:
+        description: the run's name, letters, digits, dots and dashes; the same tag resumes
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/bench.yml
+      - bench/cooperbench/**
+      - coordbench/**
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  COOPERBENCH_COMMIT: 63b9d44
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      tag: ${{ steps.plan.outputs.tag }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      survey: ${{ steps.plan.outputs.survey }}
+      count: ${{ steps.plan.outputs.count }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read CooperBench's subsets at the pinned commit
+        run: |
+          git clone -q --filter=blob:none --no-checkout https://github.com/cooperbench/CooperBench "$RUNNER_TEMP/cooperbench"
+          git -C "$RUNNER_TEMP/cooperbench" sparse-checkout set --no-cone dataset/subsets
+          git -C "$RUNNER_TEMP/cooperbench" checkout -q "$COOPERBENCH_COMMIT"
+
+      - name: Plan the matrix
+        id: plan
+        env:
+          # A pull request runs one pair of pallets_click 2068 in fake
+          # mode under three arms, the lightest of the task images.
+          MODE: ${{ inputs.mode || 'fake' }}
+          PAIRS: ${{ inputs.pairs || 'pallets_click_task/2068/f1_f6' }}
+          ARMS: ${{ inputs.arms || 'solo,coop-git,sdlc' }}
+          ACCOUNTS: ${{ inputs.accounts || vars.SYMPHONY_CLAUDE_ACCOUNTS }}
+          # A pull request's tag carries the run id, so every push runs
+          # the pair again rather than finding the last push's artifact.
+          TAG: ${{ inputs.tag || format('smoke-pr{0}-{1}', github.event.pull_request.number, github.run_id) }}
+        run: |
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          python3 bench/cooperbench/actions/plan.py --dataset-dir "$RUNNER_TEMP/cooperbench/dataset" \
+            --mode "$MODE" --pairs "$PAIRS" --arms "$ARMS" --accounts "$ACCOUNTS" --tag "$TAG"
+
+      - name: Refuse a real run until the environment bench has a required reviewer
+        # GitHub makes an environment a job names before anyone has made
+        # it, with no rule, and the run-real jobs would then run
+        # unapproved; the plan stops here, before the matrix, instead.
+        if: steps.plan.outputs.mode == 'real'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 bench/cooperbench/actions/environment.py bench
+
+      - name: Say what was planned
+        env:
+          PLANNED: "mode ${{ steps.plan.outputs.mode }}, tag ${{ steps.plan.outputs.tag }}, ${{ steps.plan.outputs.count }} jobs. ${{ steps.plan.outputs.notes }}"
+        run: echo "$PLANNED" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  survey:
+    needs: plan
+    if: needs.plan.outputs.mode == 'survey'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.survey) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free the disk for the task image
+        run: bash bench/cooperbench/actions/free_disk.sh
+      - name: Check the task's features grade on this runner
+        env:
+          REPO: ${{ matrix.repo }}
+          TASK: ${{ matrix.task }}
+          OUT: ${{ runner.temp }}/survey
+        run: bash bench/cooperbench/actions/survey_task.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ needs.plan.outputs.tag }}__survey__${{ matrix.repo }}__${{ matrix.task }}
+          path: ${{ runner.temp }}/survey
+          retention-days: 90
+          if-no-files-found: ignore
+
+  run:
+    needs: plan
+    if: needs.plan.outputs.mode == 'fake'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./bench/cooperbench/actions/run-pair
+        id: pair
+        with:
+          mode: fake
+          arm: ${{ matrix.arm }}
+          repo: ${{ matrix.repo }}
+          task: ${{ matrix.task }}
+          features: ${{ matrix.features }}
+          name: ${{ matrix.name }}
+          artifact: ${{ matrix.artifact }}
+          model: ${{ inputs.model || 'claude-sonnet-5-5' }}
+          timeout_min: ${{ inputs.timeout_min || '20' }}
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.pair.outputs.skip != 'true'
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.pair.outputs.run_dir }}
+          retention-days: 90
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  run-real:
+    needs: plan
+    if: needs.plan.outputs.mode == 'real'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    environment: bench
+    concurrency:
+      group: bench-${{ matrix.account }}
+      queue: max
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      # The slot's secret by a fixed name: a secret looked up by a computed
+      # name, as a format() of the account would, hands the runner every secret the
+      # repository can see, which CodeQL flags; a chain of fixed names
+      # hands it only these eight, and only the slot's own is non-empty.
+      CLAUDE_CODE_OAUTH_TOKEN: >-
+        ${{
+        (matrix.account == '1' && secrets.SYMPHONY_CLAUDE_1) ||
+        (matrix.account == '2' && secrets.SYMPHONY_CLAUDE_2) ||
+        (matrix.account == '3' && secrets.SYMPHONY_CLAUDE_3) ||
+        (matrix.account == '4' && secrets.SYMPHONY_CLAUDE_4) ||
+        (matrix.account == '5' && secrets.SYMPHONY_CLAUDE_5) ||
+        (matrix.account == '6' && secrets.SYMPHONY_CLAUDE_6) ||
+        (matrix.account == '7' && secrets.SYMPHONY_CLAUDE_7) ||
+        (matrix.account == '8' && secrets.SYMPHONY_CLAUDE_8) ||
+        ''
+        }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./bench/cooperbench/actions/run-pair
+        id: pair
+        with:
+          mode: real
+          arm: ${{ matrix.arm }}
+          repo: ${{ matrix.repo }}
+          task: ${{ matrix.task }}
+          features: ${{ matrix.features }}
+          name: ${{ matrix.name }}
+          artifact: ${{ matrix.artifact }}
+          model: ${{ inputs.model || 'claude-sonnet-5-5' }}
+          timeout_min: ${{ inputs.timeout_min || '120' }}
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.pair.outputs.skip != 'true'
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ steps.pair.outputs.run_dir }}
+          retention-days: 90
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  report:
+    needs: [plan, survey, run, run-real]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read CooperBench's dataset at the pinned commit
+        run: |
+          git clone -q --filter=blob:none --no-checkout https://github.com/cooperbench/CooperBench "$HOME/cooperbench"
+          git -C "$HOME/cooperbench" checkout -q "$COOPERBENCH_COMMIT"
+      - name: Report every artifact of the tag
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          MODE: ${{ needs.plan.outputs.mode }}
+          REPORT_DIR: ${{ runner.temp }}/report
+        run: bash bench/cooperbench/actions/report.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ needs.plan.outputs.tag }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/report
+          retention-days: 90
