@@ -3612,7 +3612,7 @@ class ReadingBack(unittest.TestCase):
     # detached maintenance never races the cleanup (symphony-template#63).
     GIT_SETTINGS = {"gc.auto": "0", "gc.autoDetach": "false", "maintenance.auto": "false",
                     "maintenance.autoDetach": "false", "receive.autogc": "false"}
-    SECRET = f"export TOKEN={PLANTED}\n".encode() * 40
+    PLANTED_LINES = f"export TOKEN={PLANTED}\n".encode() * 40
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-read-back-test-"))
@@ -3696,7 +3696,7 @@ class ReadingBack(unittest.TestCase):
         self.assertEqual(self.said("repo.tar", self.repository_tarball(repo)), [])
         self.git("-C", str(repo), "gc", "-q")
         self.assertEqual(self.said("repo.tar", self.repository_tarball(repo)), [])
-        self.commit(repo, {"tests/env.tgz": tar_of({"env.txt": self.SECRET}, "gz")}, "an archive")
+        self.commit(repo, {"tests/env.tgz": tar_of({"env.txt": self.PLANTED_LINES}, "gz")}, "an archive")
         self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "gzip")
         self.git("-C", str(repo), "gc", "-q")
         self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "gzip")
@@ -3707,32 +3707,32 @@ class ReadingBack(unittest.TestCase):
                 self.assertRefused(name, fixtures[f"tests/{name}"], why)
 
     def test_layers_are_opened_by_their_bytes_whatever_the_file_is_named_or_where_it_is(self):
-        secret = self.SECRET
-        self.assertHeld("dist/pkg-1.0-py3-none-any.whl", zip_of({"pkg/env.py": secret}), "zip")
-        self.assertHeld("tool.pyz", b"#!/usr/bin/env python3\n" + zip_of({"__main__.py": secret}), "zip")
-        self.assertHeld("work.tar.bz2", tar_of({"env.txt": secret}, "bz2"), "bzip2")
-        self.assertHeld("work.bin", gzipped(secret), "gzip")
-        self.assertHeld("data.lzma", lzma.compress(secret, format=lzma.FORMAT_ALONE), "lzma")
+        lines = self.PLANTED_LINES
+        self.assertHeld("dist/pkg-1.0-py3-none-any.whl", zip_of({"pkg/env.py": lines}), "zip")
+        self.assertHeld("tool.pyz", b"#!/usr/bin/env python3\n" + zip_of({"__main__.py": lines}), "zip")
+        self.assertHeld("work.tar.bz2", tar_of({"env.txt": lines}, "bz2"), "bzip2")
+        self.assertHeld("work.bin", gzipped(lines), "gzip")
+        self.assertHeld("data.lzma", lzma.compress(lines, format=lzma.FORMAT_ALONE), "lzma")
         self.assertHeld("pkg.deb", ar_of({"debian-binary": b"2.0\n", "control.tar.gz": tar_of({"control": b"x"}, "gz"),
-                                          "data.tar.xz": tar_of({"env.txt": secret}, "xz")}), "ar", "xz")
-        self.assertHeld("old.tar", as_v7(tar_of({"inner.gz": gzipped(secret)})), "tar", "gzip")
-        self.assertHeld("shared/.git/objects/incoming-x1/tmp_obj_ab12", zlib.compress(b"blob 9\0" + secret), "zlib")
+                                          "data.tar.xz": tar_of({"env.txt": lines}, "xz")}), "ar", "xz")
+        self.assertHeld("old.tar", as_v7(tar_of({"inner.gz": gzipped(lines)})), "tar", "gzip")
+        self.assertHeld("shared/.git/objects/incoming-x1/tmp_obj_ab12", zlib.compress(b"blob 9\0" + lines), "zlib")
         # A committed archive's object is opened as the archive would be.
-        self.assertHeld("loose", zlib.compress(b"blob 99\0" + gzipped(secret)), "zlib", "gzip")
+        self.assertHeld("loose", zlib.compress(b"blob 99\0" + gzipped(lines)), "zlib", "gzip")
         # A gzip file's members are one content, as zcat gives it, and what follows the last is opened too.
         half = len(PLANTED) // 2
         self.assertHeld("split.gz", gzipped(b"a " + PLANTED[:half].encode()) + gzipped(PLANTED[half:].encode()),
                         "gzip")
-        self.assertHeld("then.gz", gzipped(b"clean") + zip_of({"env.txt": secret}), "what follows the gzip", "zip")
-        streams = lzma.compress(b"clean") + bytes(4) + lzma.compress(secret)
+        self.assertHeld("then.gz", gzipped(b"clean") + zip_of({"env.txt": lines}), "what follows the gzip", "zip")
+        streams = lzma.compress(b"clean") + bytes(4) + lzma.compress(lines)
         self.assertHeld("two.xz", streams, "xz")
-        self.assertHeld("two.bz2", bz2.compress(b"clean") + bz2.compress(secret), "bzip2")
-        self.assertHeld("deep.tgz", tar_of({"inner.zip": zip_of({"env.txt": secret})}, "gz"), "gzip", "tar", "zip")
+        self.assertHeld("two.bz2", bz2.compress(b"clean") + bz2.compress(lines), "bzip2")
+        self.assertHeld("deep.tgz", tar_of({"inner.zip": zip_of({"env.txt": lines})}, "gz"), "gzip", "tar", "zip")
         self.assertEqual(self.said("clean.tgz", tar_of({"inner.zip": zip_of({"note.txt": b"hello" * 99, "dir/": b""}),
                                                          "elsewhere": ("link", "/nowhere")}, "gz")), [])
 
     def test_a_tar_header_that_does_not_read_is_stepped_over_as_gnu_tar_steps_over_it(self):
-        data = bytearray(tar_of({"a.txt": b"a" * 600, "b.txt": b"b" * 10, "env.gz": gzipped(self.SECRET)}))
+        data = bytearray(tar_of({"a.txt": b"a" * 600, "b.txt": b"b" * 10, "env.gz": gzipped(self.PLANTED_LINES)}))
         data[tar_headers(bytes(data))[1] + 148] ^= 0x01
         self.assertHeld("broken.tar", bytes(data), "tar", "gzip")
 
@@ -3879,7 +3879,7 @@ class ReadingBack(unittest.TestCase):
             def __getattr__(self, name):
                 return getattr(self.inner, name)
 
-        data = gzipped(b"") * 3000 + gzipped(self.SECRET)
+        data = gzipped(b"") * 3000 + gzipped(self.PLANTED_LINES)
         with mock.patch.object(runner.zlib, "decompressobj", Counting):
             self.assertHeld("many.gz", data, "gzip")
         self.assertLessEqual(sum(fed), 3001 * runner.FIRST_CHUNK + len(data))
