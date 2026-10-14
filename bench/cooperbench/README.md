@@ -120,20 +120,25 @@ transcript and what it told its peer, and a pair's files may be published
 as a workflow's artifact. The run says on stderr when it found one, and a
 pair with a file that holds the token and could not be rewritten is an
 error, not a result. The scrub rewrites the token's exact bytes in plain
-and gzip files only: an archive an agent packed (.tar.gz, .zip), a git
-object under the team arm's shared/ copy or a workspace kept with
---keep, or the token encoded some other way, is outside it, as is the
-log of a hub started elsewhere (--hub), which is that hub's to keep.
+and gzip files only: an archive an agent packed (a tar or a zip, by its
+name or its first bytes), a git object under the team arm's shared/
+copy or a workspace kept with --keep, or the token encoded some other
+way (base64, say), is outside it, as is the log of a hub started
+elsewhere (--hub), which is that hub's to keep.
 `run.py scrub --run-dir DIR` runs the scrub once more over a run
 directory, removing first every symlink and special file in it (the
 upload would follow a symlink to a file the scrub never read), and
-reads every file back, the members of an archive named .tar, .tar.gz,
-.tgz or .zip (each read as its bytes) and the git objects where a
-repository keeps them (loose ones and packfiles, inflated, with each
-delta applied to its base) included, and exits 2 when any still holds
-the token or could not be read; the workflow's jobs run it
+reads every file back through every layer it is packed in, each opened
+by what its first bytes say it is, whatever the file's name or place:
+gzip, xz and bzip2 streams, tar and zip members, git's loose objects,
+packfiles (with each delta applied to its base) and bundles, an archive
+inside an archive, up to eight layers and 4 GiB a file. It exits 2 when
+a file or a layer still holds the token, a name does, a file could not
+be read, or a layer is one it cannot open (zstd, 7z, rar, lz4); what it
+says names a path with the token replaced. The workflow's jobs run it
 before an upload, after stopping any agent container still up, and
-publish nothing it refused. The team arm's shared/ is copied into every
+publish nothing it refused; a fake run, which has no token, reads its
+files back for a stand-in. The team arm's shared/ is copied into every
 pair and published with it.
 
 ## In GitHub Actions

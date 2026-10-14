@@ -5,8 +5,8 @@
 # scrubs a pair that run.py was killed in the middle of; so this runs
 # `run.py scrub` over RUN_DIR (the files given back to this user after,
 # as pair.sh gives them), which rewrites what still holds the credential
-# and reads every file, archives and git objects included, to see that
-# none does. First whatever may still be writing there is stopped: a
+# and reads every file back, through every layer it is packed in, to see
+# that none does. First whatever may still be writing there is stopped: a
 # run.py that outlived pair.sh and the agent containers it did not tear
 # down (every one carries the label coordbench.run), which stream to
 # the host until their own timeout and would write after the rewrite.
@@ -14,8 +14,9 @@
 # not, or a file could not be read, in which case the directory is
 # deleted so no later step can upload it. RUN_DIR comes in the
 # environment, and in a real run CLAUDE_CODE_OAUTH_TOKEN, which run.py
-# reads by name only; in a fake run no credential is set and there is
-# nothing to find.
+# reads by name only; a fake run has no credential, so its step sets a
+# stand-in, COORDBENCH_CLAUDE_TOKEN, which no file holds, and the
+# rehearsal reads its files back as a real run would.
 set -uo pipefail
 : "${RUN_DIR:?}"
 root=$(cd "$(dirname "$0")/../../.." && pwd)

@@ -5,12 +5,14 @@ output the runner reads; the hub is the real one, in this process on an
 ephemeral port; CooperBench's scorer is a fake with the shape of its
 results. Nothing here starts a container or a Claude."""
 
+import bz2
 import contextlib
 import gzip
 import hashlib
 import importlib.util
 import io
 import json
+import lzma
 import os
 import random
 import re
@@ -26,6 +28,7 @@ import types
 import unittest
 import urllib.error
 import urllib.request
+import zipfile
 import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -3417,7 +3420,7 @@ class Scrubbing(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
-        self.assertIn("packed.tar.gz: holds the agents' credential inside an archive", err.getvalue())
+        self.assertIn("packed.tar.gz: holds the agents' credential, read through gzip", err.getvalue())
         (run_dir / "coop" / "packed.tar.gz").unlink()
         (run_dir / "coop" / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00 not gzip")
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
@@ -3434,14 +3437,14 @@ class Scrubbing(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
-        self.assertIn(f"{loose}: holds the agents' credential inside a git object", err.getvalue())
+        self.assertIn(f"{loose}: holds the agents' credential, read through zlib", err.getvalue())
         loose.write_bytes(zlib.compress(b"blob 5\0hello"))
         pack = objects / "pack" / "pack-1.pack"
         pack.write_bytes(packfile(b"a" * 300, b"export TOKEN=" + PLANTED.encode() + b"\n", b"tail"))
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
-        self.assertIn(f"{pack}: holds the agents' credential inside a git object", err.getvalue())
+        self.assertIn(f"{pack}: holds the agents' credential, read through git packfile", err.getvalue())
         pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail")[:-40])
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
@@ -3449,10 +3452,6 @@ class Scrubbing(unittest.TestCase):
         self.assertIn(f"{pack}: could not be read", err.getvalue())
         pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail"))
         (objects / "pack" / "pack-1.idx").write_bytes(b"\xfftOc" + bytes(40))
-        self.assertEqual(runner.git_object_kind(pack), "pack")
-        self.assertEqual(runner.git_object_kind(loose), "loose")
-        self.assertIsNone(runner.git_object_kind(objects / "pack" / "pack-1.idx"))
-        self.assertIsNone(runner.git_object_kind(run_dir / "coop" / "clean.txt"))
         # A clean archive passes, no credential in the environment is nothing to find, and no directory is 2.
         with tarfile.open(run_dir / "coop" / "packed.tar", "w") as packed:
             info = tarfile.TarInfo("note.txt")
@@ -3526,6 +3525,235 @@ class Scrubbing(unittest.TestCase):
                 runner.scrub_hub(hub)
             self.assertEqual((hub / "hub.log").read_text(), runner.SCRUBBED + "\n")
             self.assertEqual((hub / "other" / "events.jsonl").read_text(), PLANTED + "\n")
+
+
+def tar_of(members, compression=""):
+    """A tar's bytes: each member a name and its bytes, or a name and
+    ("link", target) for a symlink."""
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode=f"w:{compression}") as packed:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            if isinstance(content, tuple):
+                info.type, info.linkname = tarfile.SYMTYPE, content[1]
+                packed.addfile(info)
+            else:
+                info.size = len(content)
+                packed.addfile(info, io.BytesIO(content))
+    return out.getvalue()
+
+
+def zip_of(members, comment=b"", method=zipfile.ZIP_DEFLATED):
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", method) as packed:
+        packed.comment = comment
+        for name, content in members.items():
+            packed.writestr(name, content)
+    return out.getvalue()
+
+
+def gzipped(data, times=1, name=""):
+    for _ in range(times):
+        out = io.BytesIO()
+        with gzip.GzipFile(filename=name, mode="wb", fileobj=out, mtime=0) as packed:
+            packed.write(data)
+        data = out.getvalue()
+    return data
+
+
+class ReadingBack(unittest.TestCase):
+    """unscrubbed, the read-back before an upload: every layer a file is
+    packed in is opened by what its bytes are, whatever its name or
+    place, with the plain search at every layer, so a header's names are
+    searched too; a path's name is searched; what cannot be opened is
+    refused; and nothing it says quotes the credential."""
+
+    # No user's or system's git configuration takes part, and git's
+    # detached maintenance never races the cleanup (symphony-template#63).
+    GIT_SETTINGS = {"gc.auto": "0", "gc.autoDetach": "false", "maintenance.auto": "false",
+                    "maintenance.autoDetach": "false", "receive.autogc": "false"}
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-read-back-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.run_dir = self.tmp / "run"
+        self.run_dir.mkdir()
+
+    def said(self, name, data):
+        """What the read-back says of one file, alone in the run directory."""
+        path = self.run_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        try:
+            return runner.unscrubbed(self.run_dir, [PLANTED])
+        finally:
+            path.unlink()
+
+    def assertHeld(self, name, data, *layers):
+        through = f", read through {', '.join(layers)}" if layers else ""
+        self.assertEqual(self.said(name, data),
+                         [f"{self.run_dir / name}: holds the agents' credential{through}"])
+
+    def assertRefused(self, name, data, why):
+        said = self.said(name, data)
+        self.assertEqual(len(said), 1, said)
+        self.assertRegex(said[0], rf"^{re.escape(str(self.run_dir / name))}: could not be read \(.*{why}")
+
+    def git(self, *arguments):
+        environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                       "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_COUNT": str(len(self.GIT_SETTINGS))}
+        for index, (key, value) in enumerate(self.GIT_SETTINGS.items()):
+            environment[f"GIT_CONFIG_KEY_{index}"] = key
+            environment[f"GIT_CONFIG_VALUE_{index}"] = value
+        subprocess.run(["git", *arguments], env=environment, check=True, capture_output=True, timeout=120)
+        if arguments[0] == "init":
+            for key, value in self.GIT_SETTINGS.items():
+                subprocess.run(["git", "-C", arguments[-1], "config", key, value], check=True, timeout=60)
+
+    def repository_tarball(self, repo, compression):
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode=f"w:{compression}") as packed:
+            packed.add(repo, arcname="repo")
+        return out.getvalue()
+
+    def test_a_tarball_of_a_repository_shows_a_token_committed_and_removed_from_its_history(self):
+        repo = self.tmp / "repo"
+        self.git("init", "-q", str(repo))
+        (repo / "README").write_text("a clean repository\n")
+        self.git("-C", str(repo), "add", "README")
+        self.git("-C", str(repo), "commit", "-q", "-m", "first")
+        self.assertEqual(self.said("repo.tar.xz", self.repository_tarball(repo, "xz")), [])
+        (repo / "env.txt").write_text(f"CLAUDE_CODE_OAUTH_TOKEN={PLANTED}\n")
+        self.git("-C", str(repo), "add", "env.txt")
+        self.git("-C", str(repo), "commit", "-q", "-m", "oops")
+        self.git("-C", str(repo), "rm", "-q", "env.txt")
+        self.git("-C", str(repo), "commit", "-q", "-m", "removed")
+        self.assertHeld("repo.tar.xz", self.repository_tarball(repo, "xz"), "xz", "tar", "zlib")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertFalse(list((repo / ".git" / "objects").glob("??/*")), "gc left loose objects")
+        self.assertHeld("repo.tar.bz2", self.repository_tarball(repo, "bz2"), "bzip2", "tar", "git packfile")
+        self.git("-C", str(repo), "bundle", "create", str(self.tmp / "repo.bundle"), "--all")
+        self.assertHeld("history", (self.tmp / "repo.bundle").read_bytes(), "git bundle", "git packfile")
+
+    def test_layers_are_opened_by_their_bytes_whatever_the_file_is_named_or_where_it_is(self):
+        secret = f"export TOKEN={PLANTED}\n".encode() * 40
+        self.assertHeld("dist/pkg-1.0-py3-none-any.whl", zip_of({"pkg/env.py": secret}), "zip")
+        self.assertHeld("work.tar.bz2", tar_of({"env.txt": secret}, "bz2"), "bzip2")
+        self.assertHeld("work.bin", gzipped(secret), "gzip")
+        self.assertHeld("shared/.git/objects/incoming-x1/tmp_obj_ab12", zlib.compress(b"blob 9\0" + secret), "zlib")
+        # A committed archive's object is opened as the archive would be.
+        self.assertHeld("loose", zlib.compress(b"blob 99\0" + gzipped(secret)), "zlib", "gzip")
+        # A gzip file's members are one content, as zcat gives it, and what follows the last is opened too.
+        half = len(PLANTED) // 2
+        self.assertHeld("split.gz", gzipped(b"a " + PLANTED[:half].encode()) + gzipped(PLANTED[half:].encode()),
+                        "gzip")
+        self.assertHeld("then.gz", gzipped(b"clean") + zip_of({"env.txt": secret}), "gzip", "zip")
+        streams = lzma.compress(b"clean") + bytes(4) + lzma.compress(secret)
+        self.assertHeld("two.xz", streams, "xz")
+        self.assertHeld("two.bz2", bz2.compress(b"clean") + bz2.compress(secret), "bzip2")
+        self.assertHeld("deep.tgz", tar_of({"inner.zip": zip_of({"env.txt": secret})}, "gz"), "gzip", "tar", "zip")
+        self.assertEqual(self.said("clean.tgz", tar_of({"inner.zip": zip_of({"note.txt": b"hello" * 99, "dir/": b""}),
+                                                         "elsewhere": ("link", "/nowhere")}, "gz")), [])
+
+    def test_headers_are_searched_as_they_are_and_the_scrub_leaves_a_container_whole(self):
+        self.assertHeld("notes.zip", zip_of({"note.txt": b"hello"}, comment=PLANTED.encode()))
+        self.assertHeld("named.zip", zip_of({f"{PLANTED}.txt": b"hello"}))
+        self.assertHeld("named.gz", gzipped(b"hello", name=f"{PLANTED}.txt"))
+        self.assertHeld("linked.tgz", tar_of({"env": ("link", f"/run/{PLANTED}")}, "gz"), "gzip")
+        # A container named as anything is left whole by the scrub, and refused by the read-back.
+        container = self.run_dir / "notes.dat"
+        container.write_bytes(zip_of({"env.txt": PLANTED.encode()}, method=zipfile.ZIP_STORED))
+        before = container.read_bytes()
+        self.assertEqual(runner.scrub_credentials([self.run_dir], [PLANTED]), [])
+        self.assertEqual(container.read_bytes(), before)
+        self.assertEqual(runner.unscrubbed(self.run_dir, [PLANTED]), [f"{container}: holds the agents' credential"])
+
+    def test_a_name_that_holds_the_credential_is_refused_and_never_quoted(self):
+        (self.run_dir / f"{PLANTED}.txt").write_text("clean\n")
+        (self.run_dir / f"dir-{PLANTED}").mkdir()
+        (self.run_dir / f"dir-{PLANTED}" / "note.txt").write_text("clean\n")
+        (self.run_dir / f"link-{PLANTED}").symlink_to(self.run_dir / f"{PLANTED}.txt")
+        scrubbed = runner.SCRUBBED
+        self.assertEqual(runner.unscrubbed(self.run_dir, [PLANTED]), [
+            f"{self.run_dir / (scrubbed + '.txt')}: its name holds the agents' credential",
+            f"{self.run_dir / ('dir-' + scrubbed)}: its name holds the agents' credential",
+            f"{self.run_dir / ('link-' + scrubbed)}: its name holds the agents' credential",
+            f"{self.run_dir / ('link-' + scrubbed)}: is a symlink, which the upload would follow to what the "
+            "scrub never read"])
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(self.run_dir)]), 2)
+        self.assertIn(f"removed 1 symlinks and special files, which the upload would follow: link-{scrubbed}",
+                      err.getvalue())
+        self.assertIn("its name holds the agents' credential", err.getvalue())
+        self.assertNotIn(PLANTED, err.getvalue())
+
+    def test_what_the_read_back_cannot_open_is_refused(self):
+        self.assertRefused("archive.tar.zst", b"\x28\xb5\x2f\xfd" + bytes(20), "a zstd file, which the scrub cannot open")
+        self.assertRefused("archive.7z", b"7z\xbc\xaf\x27\x1c" + bytes(20), "a 7z file")
+        stored = bytearray(zip_of({"env.txt": b"hello"}, method=zipfile.ZIP_STORED))
+        stored[8:10] = (93).to_bytes(2, "little")
+        directory = stored.find(b"PK\x01\x02")
+        stored[directory + 10:directory + 12] = (93).to_bytes(2, "little")
+        self.assertRefused("odd.zip", bytes(stored), "compression method")
+        broken = bytearray(zip_of({"env.txt": b"hello " * 50}))
+        broken[40] ^= 0xFF
+        self.assertRefused("broken.whl", bytes(broken), "")
+        self.assertRefused("cut.gz", gzipped(b"hello " * 1000)[:-30], "")
+        self.assertRefused("cut.xz", lzma.compress(b"hello " * 1000)[:-30], "a truncated stream")
+        self.assertRefused("cut.bz2", bz2.compress(b"hello " * 1000)[:-30], "")
+        self.assertRefused("cut.bundle", b"# v2 git bundle\nabc refs/heads/main\n", "no packfile")
+        self.assertRefused("odd.bundle", b"# v3 git bundle\nabc refs/heads/main\n\nnot a pack", "no packfile")
+        self.assertRefused("cut.tar", tar_of({"env.txt": b"hello " * 1000})[:3000], "")
+
+    def test_layers_open_eight_deep_and_no_deeper(self):
+        self.assertHeld("deep.gz", gzipped(PLANTED.encode(), runner.DEEPEST_NESTING), *["gzip"] * runner.DEEPEST_NESTING)
+        self.assertRefused("deeper.gz", gzipped(b"clean", runner.DEEPEST_NESTING + 1), "nested deeper")
+
+    def test_a_file_that_unpacks_past_the_budget_is_refused_and_each_step_is_charged_first(self):
+        big = b"a" * (2 << 20)
+        taken = []
+        real_take = runner.Budget.take
+
+        def recording(budget, size):
+            taken.append(size)
+            return real_take(budget, size)
+
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 1 << 20), mock.patch.object(runner.Budget, "take", recording):
+            for name, data in (("big.gz", gzipped(big)), ("big.xz", lzma.compress(big)), ("big.bz2", bz2.compress(big)),
+                               ("big.zip", zip_of({"a": big})), ("big.tar", tar_of({"a": big})),
+                               ("big.pack", packfile(big)), ("big.zlib", zlib.compress(big))):
+                with self.subTest(name=name):
+                    taken.clear()
+                    self.assertRefused(name, data, "unpacks to more than the scrub reads")
+                    if name != "big.pack":
+                        self.assertLessEqual(max(taken), runner.EXPANSION_STEP)
+            self.assertEqual(self.said("small.gz", gzipped(b"a" * (1 << 19))), [])
+
+    def test_a_fake_run_reads_its_files_back_for_a_stand_in_and_a_real_run_for_its_token(self):
+        action = (ROOT / "bench" / "cooperbench" / "actions" / "run-pair" / "action.yml").read_text(encoding="utf-8")
+        stand_in = re.search(r"COORDBENCH_CLAUDE_TOKEN: \$\{\{ inputs.mode == 'fake' && '([^']+)' \|\| '' \}\}",
+                             action).group(1)
+        self.assertEqual(runner.credential_values({"COORDBENCH_CLAUDE_TOKEN": stand_in}), [stand_in])
+        self.assertEqual(runner.credential_values({"COORDBENCH_CLAUDE_TOKEN": "", "CLAUDE_CODE_OAUTH_TOKEN": PLANTED}),
+                         [PLANTED])
+        (self.run_dir / "coop").mkdir()
+        (self.run_dir / "coop" / "stream.jsonl").write_text("{}\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "", "COORDBENCH_CLAUDE_TOKEN": stand_in}), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(self.run_dir)]), 0)
+        self.assertIn("no file holds the agents' credential", err.getvalue())
+
+    def test_bytes_that_only_begin_like_a_zlib_stream_are_searched_never_refused(self):
+        for text in (b"x^2 + y^2 = r^2\n", b"x  marks the spot\n", b"x\x9c not a stream at all\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.said("notes.txt", text), [])
+        # A loose object cut short is searched as far as it inflates.
+        content = b"blob 99999\0" + f"TOKEN={PLANTED}\n".encode() + b"".join(b"line %d\n" % n for n in range(9000))
+        cut = zlib.compress(content)[:-100]
+        self.assertNotIn(PLANTED.encode(), cut)
+        self.assertHeld("cut-object", cut, "zlib")
 
 
 if __name__ == "__main__":
