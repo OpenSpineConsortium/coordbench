@@ -2,8 +2,8 @@
 
 What CooperBench's paper, its blog posts and its later ablation report
 measure, and the section of bench/cooperbench/report.py (the report job's
-report.md) that gives the same figure for a run here. PARITY.md is the
-row-by-row account of how each is computed; this file is the short map
+report.md) that gives the same figure for a run here. The repository's
+PARITY.md is the row-by-row account of how each is computed; this file is the short map
 for a reader with a report in one hand and a paper in the other. "Judge"
 marks a measure that needs the model-judged pass (coordbench/judge.py),
 which no workflow run makes.
@@ -45,7 +45,7 @@ which no workflow run makes.
 | Pass rate of solo, coop, coop+git, team and the team minus each switch | Pass rates, one row per arm; the switches (minus scratchpad, task list, MCP, auto-refresh, protocol) are not run (PARITY row 51) |
 | Median task time | Cost and time (minutes per pair, median) |
 | Evaluation policy: identical patches, naive merge, lead alone | Pass route (N, identical, L) |
-| The team's metrics: tasks total and done, unowned at the end, time to first claim, claims and updates per agent | Recorded in each team pair's metrics.json; not yet a report section |
+| The team's metrics: tasks total and done, unowned at the end, time to first claim, claims and updates per agent | Coordination (the team harness's board, summed per arm) |
 
 ## Claim Plane (arXiv 2607.21909 and 2608.00947)
 
@@ -57,12 +57,15 @@ which no workflow run makes.
 
 ## Symphony's own protocol
 
-The sdlc arm records, in each pair's metrics.json: claims, prs_opened,
-merge_attempts, merges, merge_conflicts and time_to_first_merge_seconds,
-beside the message and tool-call counts every arm has. They are not yet a
-section of the report (PARITY row 97); a reader takes them from the
-artifacts, and the next change to report.py is a Coordination section
-with these and the team's metrics above.
+The sdlc arm records, in each pair's metrics.json and in result.json's
+metrics block: claims, prs_opened, merge_attempts, merges, merge_conflicts
+and time_to_first_merge_seconds, beside the message and tool-call counts
+every arm has. The report's Coordination section sums them per arm and
+model (claims, pull requests opened, merge attempts, merges, conflicts and
+their share of the attempts, the pairs where every agent merged, the median
+seconds to the first merge), with the team's metrics above in a second
+table, so the protocol's own counts stand beside the emergent rates
+(PARITY row 97). The paper has no figure for either.
 
 ## What a fake run shows
 
@@ -70,4 +73,4 @@ A run in fake mode fails every pair by design, since its agent implements
 nothing; its report is read for the Pass rates table (every pair
 attempted, 0 in its Errors column), the Communication table (the fake agent's one message to its
 peer) and, in the sdlc arm, the claim, pull request and merge counts in
-metrics.json, which say the protocol's path was walked.
+the Coordination table, which say the protocol's path was walked.

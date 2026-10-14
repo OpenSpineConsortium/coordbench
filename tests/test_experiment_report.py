@@ -646,6 +646,117 @@ class ConversationSourceTest(unittest.TestCase):
         self.assertEqual(report.references("see lines 3-4, L7 and a/b.py:9 in a/b.py, c.json, e.g. x"), (3, 3))
 
 
+class CoordinationTest(unittest.TestCase):
+    """The Coordination section sets the sdlc arm's counters and the team
+    arm's board beside the emergent rates (PARITY row 97), from the
+    metrics block result.json carries or metrics.json beside it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.logs = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_sdlc_pair(self, pair, metrics, in_result=True, merged_by=None, error=False, model="m1"):
+        pair_dir = self.logs / "sdlc-t" / "coop" / "pallets_click_task" / "2068" / pair
+        status = "Error" if error else "Submitted"
+        agents = {"agent1": {"status": status, **MEASURED}, "agent2": {"status": "Submitted", **MEASURED}}
+        record = {"agents": agents, "arm": "sdlc", "setting": "coop", "duration_seconds": 60, "model": model}
+        if in_result:
+            record["metrics"] = metrics
+        else:
+            write_json(pair_dir / "metrics.json", metrics)
+        if merged_by is not None:
+            write_lines(pair_dir / "events.jsonl", [{"seq": n, "t": 1.0 + n, "kind": "merge", "agent": agent}
+                                                   for n, agent in enumerate(merged_by)])
+        write_json(pair_dir / "result.json", record)
+        write_json(pair_dir / "eval.json", {"both_passed": False})
+
+    def write_team_pair(self, pair, metrics):
+        pair_dir = self.logs / "team-t" / "team" / "pallets_click_task" / "2068" / pair
+        agents = {"agent1": {"status": "Submitted", **MEASURED}, "agent2": {"status": "Submitted", **MEASURED}}
+        write_json(pair_dir / "result.json", {"agents": agents, "arm": "team", "setting": "team",
+                                              "duration_seconds": 60, "metrics": metrics, "model": "m1"})
+        write_json(pair_dir / "eval.json", {"both_passed": True})
+
+    def sections(self, runs):
+        text = render(self.logs, runs)
+        found = {}
+        for chunk in text.split("\n## ")[1:]:
+            title, _, body = chunk.partition("\n")
+            found[title] = body
+        return found
+
+    def test_the_sdlc_counters_are_summed_per_arm_over_finished_pairs(self):
+        self.write_sdlc_pair("f1_f6", {"claims": 2, "prs_opened": 2, "merge_attempts": 2, "merges": 2,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": 3.5})
+        self.write_sdlc_pair("f2_f10", {"claims": 2, "prs_opened": 2, "merge_attempts": 3, "merges": 1,
+                                        "merge_conflicts": 1, "time_to_first_merge_seconds": 10.5}, in_result=False)
+        self.write_sdlc_pair("f5_f7", {"claims": 2, "prs_opened": 2, "merge_attempts": 2, "merges": 2,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": 4.0})
+        # An agent in Error: the pair is set apart by the rates and left out here.
+        self.write_sdlc_pair("f1_f7", {"claims": 2, "prs_opened": 1, "merge_attempts": 1, "merges": 1,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": 1.0}, error=True)
+        coordination = self.sections([("sdlc", "sdlc-t")])["Coordination"]
+        self.assertIn("| sdlc | m1 | 3 | 6 | 6 | 7 | 5 | 1 | 14.3% | 2 | 1 | 4.0 | 3 |", coordination)
+        self.assertNotIn("team harness", coordination)
+
+    def test_every_agent_merged_counts_agents_not_merges(self):
+        # With an open queue one agent may take and merge both issues.
+        self.write_sdlc_pair("f1_f6", {"claims": 2, "prs_opened": 2, "merge_attempts": 2, "merges": 2,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": 3.5},
+                             merged_by=["agent1", "agent1"])
+        self.write_sdlc_pair("f2_f10", {"claims": 2, "prs_opened": 2, "merge_attempts": 2, "merges": 2,
+                                        "merge_conflicts": 0, "time_to_first_merge_seconds": 3.5},
+                             merged_by=["agent1", "agent2"])
+        coordination = self.sections([("sdlc", "sdlc-t")])["Coordination"]
+        self.assertIn("| sdlc | m1 | 2 | 4 | 4 | 4 | 4 | 0 | 0.0% | 1 | 1 | 3.5 | 2 |", coordination)
+
+    def test_models_are_rows_of_their_own_with_a_pooled_row(self):
+        self.write_sdlc_pair("f1_f6", {"claims": 2, "prs_opened": 2, "merge_attempts": 2, "merges": 2,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": 3.5})
+        self.write_sdlc_pair("f2_f10", {"claims": 2, "prs_opened": 2, "merge_attempts": 3, "merges": 1,
+                                        "merge_conflicts": 1, "time_to_first_merge_seconds": 10.5}, model="m2")
+        coordination = self.sections([("sdlc", "sdlc-t")])["Coordination"]
+        self.assertIn("| sdlc | m1 | 1 | 2 | 2 | 2 | 2 | 0 | 0.0% | 1 | 0 | 3.5 | 1 |", coordination)
+        self.assertIn("| sdlc | m2 | 1 | 2 | 2 | 3 | 1 | 1 | 33.3% | 0 | 1 | 10.5 | 1 |", coordination)
+        self.assertIn("| sdlc | pooled | 2 | 4 | 4 | 5 | 3 | 1 | 20.0% | 1 | 1 | 7.0 | 2 |", coordination)
+
+    def test_a_pair_without_a_merge_has_no_time_to_first_merge(self):
+        self.write_sdlc_pair("f1_f6", {"claims": 2, "prs_opened": 1, "merge_attempts": 0, "merges": 0,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": None})
+        coordination = self.sections([("sdlc", "sdlc-t")])["Coordination"]
+        self.assertIn("| sdlc | m1 | 1 | 2 | 1 | 0 | 0 | 0 | - | 0 | 1 | not recorded | 0 |", coordination)
+
+    def test_the_teams_board_is_summed_per_arm(self):
+        self.write_team_pair("f1_f6", {"tasks_total": 3, "tasks_done": 2, "unowned_at_end": 1,
+                                       "time_to_first_claim_seconds": 4.0,
+                                       "claims_per_agent": {"agent1": 2, "agent2": 1},
+                                       "updates_per_agent": {"agent1": 3}})
+        self.write_team_pair("f2_f10", {"tasks_total": 2, "tasks_done": 2, "unowned_at_end": 0,
+                                        "time_to_first_claim_seconds": None,
+                                        "claims_per_agent": {"agent1": 1}, "updates_per_agent": {}})
+        coordination = self.sections([("team", "team-t")])["Coordination"]
+        self.assertIn("| team | m1 | 2 | 5 | 4 | 1 | 80.0% | 4.0 | 1 | 2.00 | 1.50 |", coordination)
+        self.assertNotIn("claim protocol", coordination)
+
+    def test_both_tables_when_both_arms_ran(self):
+        self.write_sdlc_pair("f1_f6", {"claims": 2, "prs_opened": 2, "merge_attempts": 2, "merges": 2,
+                                       "merge_conflicts": 0, "time_to_first_merge_seconds": 3.5})
+        self.write_team_pair("f1_f6", {"tasks_total": 2, "tasks_done": 2, "unowned_at_end": 0,
+                                       "time_to_first_claim_seconds": 4.0,
+                                       "claims_per_agent": {"agent1": 2}, "updates_per_agent": {}})
+        coordination = self.sections([("sdlc", "sdlc-t"), ("team", "team-t")])["Coordination"]
+        self.assertIn("claim protocol", coordination)
+        self.assertIn("team harness", coordination)
+
+    def test_an_arm_without_either_says_not_recorded(self):
+        write_pair(self.logs, "flash-solo-t", "solo", "f1_f6", passed=True)
+        coordination = self.sections([("solo", "flash-solo-t")])["Coordination"]
+        self.assertIn("not recorded: no finished pair here has the sdlc arm's counters", coordination)
+
+
 class PublishedTest(unittest.TestCase):
     """The website's index is read over the rows with results, with typst
     mapped to typst_task, so coordbench's pairs meet the paper models'."""

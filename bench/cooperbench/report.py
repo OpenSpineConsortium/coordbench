@@ -313,6 +313,20 @@ class Pair:
     def seconds(self):
         return self.result.get("duration_seconds")
 
+    @property
+    def metrics(self):
+        """The arm's metrics: result.json's block, which run.py and
+        CooperBench's team runner both write, else, when the block is
+        missing or empty, metrics.json beside it, read once; {} when
+        neither holds anything."""
+        found = self.result.get("metrics")
+        if not isinstance(found, dict) or not found:
+            if "metrics" not in self.cache:
+                read = read_json(self.dir / "metrics.json")
+                self.cache["metrics"] = read if isinstance(read, dict) else {}
+            found = self.cache["metrics"]
+        return found
+
 
 def read_pair(pair_dir, label, run):
     result = read_json(pair_dir / "result.json")
@@ -1466,6 +1480,118 @@ def reference_section(groups):
         REFERENCES["references"]])
 
 
+# Coordination: the protocol counters the sdlc arm and the team arm record.
+
+PROTOCOL_COUNTERS = ("claims", "prs_opened", "merge_attempts", "merges", "merge_conflicts")
+BOARD_COUNTERS = ("tasks_total", "tasks_done", "unowned_at_end")
+
+
+def counted(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def pairs_with(pairs, keys):
+    """The pairs whose agents all finished (a pair an agent left in Error,
+    or that failed before its agents ran, is left out, as the rates set
+    them apart) and whose metrics hold every key with a number."""
+    return [pair for pair in pairs if not pair.agent_error and not pair.result.get("error")
+            and all(counted(pair.metrics.get(key)) for key in keys)]
+
+
+def agents_merged(pair):
+    """How many of the pair's agents landed a merge: the distinct agents
+    of the hub's merge events, since with an open queue one agent may
+    take and merge every issue; without events, the merges counted
+    against the agents."""
+    events = pair_events(pair)
+    if events:
+        return len({event.get("agent") for event in events if event.get("kind") == "merge"})
+    return min(pair.metrics["merges"], len(pair.agents))
+
+
+def median_seconds(values):
+    return f"{statistics.median(values):.1f}" if values else NOT_RECORDED
+
+
+def per_pair(total, pairs):
+    return f"{total / len(pairs):.2f}" if pairs else NOT_RECORDED
+
+
+def protocol_rows(groups):
+    """Per arm and model, the sdlc arm's counters summed over its pairs:
+    what the protocol did, beside the rates the other sections give."""
+    rows = []
+    for group in groups:
+        pairs = pairs_with(group.pairs, PROTOCOL_COUNTERS)
+        if not pairs:
+            continue
+        sums = {key: sum(pair.metrics[key] for pair in pairs) for key in PROTOCOL_COUNTERS}
+        landed = sum(1 for pair in pairs if agents_merged(pair) >= max(len(pair.agents), 1))
+        firsts = [pair.metrics["time_to_first_merge_seconds"] for pair in pairs
+                  if counted(pair.metrics.get("time_to_first_merge_seconds"))]
+        rows.append([group.label, model_name(group.model), len(pairs)] + [sums[key] for key in PROTOCOL_COUNTERS]
+                    + [percent(sums["merge_conflicts"], sums["merge_attempts"]), landed, len(pairs) - landed,
+                       median_seconds(firsts), len(firsts)])
+    return rows
+
+
+def board_rows(groups):
+    """Per arm and model, the team arm's six metrics (team_harness's
+    compute_metrics) over its pairs: the board's tasks, and the claims and
+    updates per pair summed over the agents."""
+    rows = []
+    for group in groups:
+        pairs = pairs_with(group.pairs, BOARD_COUNTERS)
+        if not pairs:
+            continue
+        sums = {key: sum(pair.metrics[key] for pair in pairs) for key in BOARD_COUNTERS}
+        firsts = [pair.metrics["time_to_first_claim_seconds"] for pair in pairs
+                  if counted(pair.metrics.get("time_to_first_claim_seconds"))]
+        claims = sum(sum(agent_counts(pair.metrics.get("claims_per_agent"))) for pair in pairs)
+        updates = sum(sum(agent_counts(pair.metrics.get("updates_per_agent"))) for pair in pairs)
+        rows.append([group.label, model_name(group.model), len(pairs)] + [sums[key] for key in BOARD_COUNTERS]
+                    + [percent(sums["tasks_done"], sums["tasks_total"]), median_seconds(firsts), len(firsts),
+                       per_pair(claims, pairs), per_pair(updates, pairs)])
+    return rows
+
+
+def agent_counts(per_agent):
+    return [v for v in (per_agent or {}).values() if counted(v)] if isinstance(per_agent, dict) else []
+
+
+def coordination_section(groups):
+    protocol, board = protocol_rows(groups), board_rows(groups)
+    if not protocol and not board:
+        return section("Coordination", [
+            f"{NOT_RECORDED}: no finished pair here has the sdlc arm's counters or the team's metrics "
+            "(result.json's metrics block, else metrics.json)."])
+    body = []
+    if protocol:
+        header = ["Arm", "Model", "Pairs", "Claims", "Pull requests opened", "Merge attempts", "Merges",
+                  "Merge conflicts", "Conflicts / attempts", "Pairs where every agent merged",
+                  "Pairs where one did not", "Seconds to first merge (median)", "Pairs with a merge"]
+        body += ["The claim protocol's counters, summed over the pairs that recorded them (the sdlc arm):",
+                 ""] + table(header, protocol)
+    if board:
+        header = ["Arm", "Model", "Pairs", "Tasks total", "Tasks done", "Unowned at the end", "Done / total",
+                  "Seconds to first claim (median)", "Pairs with a claim", "Claims per pair", "Updates per pair"]
+        body += ["", "The team harness's board, summed over the pairs that recorded it (the team arm):",
+                 ""] + table(header, board)
+    return section("Coordination", body + [
+        "", "Each count is a pair's arm metrics (result.json's metrics block, else metrics.json) summed over "
+        "the arm's pairs whose agents all finished and that hold every column's key, scored or not; a pair an "
+        "agent left in Error, or that failed before its agents ran, is left out, as the rates set them apart. "
+        "A merge attempt ends in a merge, a merge conflict (the default branch moved under the gate and the "
+        "branch conflicts with it) or a refusal: a main that moved without a conflict, a gate failure or an "
+        "attempt that crashed count with the refusals, which are the rest. A pair where every agent merged "
+        "is one where each agent landed a merge, by the hub's merge events (with an open queue one agent may "
+        "merge every issue). Seconds to the first merge count from the hub's start of the pair, before its "
+        "agents were provisioned; seconds to the first claim from the first task's creation. The team's "
+        "claims and updates per pair sum its claims_per_agent and updates_per_agent. These are the protocol's "
+        "own counts, which the paper has no figure for; the emergent rates stand in the sections above "
+        "(PARITY row 97)."])
+
+
 # Failure modes, from judge.json.
 
 def judge_part(pair, *names):
@@ -1926,7 +2052,8 @@ def render(arms, runs=None, dataset=None, published=None, options=None):
     lines += comparisons_section(groups) + gap_section(everything, roles["solo"]) + git_section(groups, roles)
     lines += route_section(everything) + conflict_section(everything) + cascade_section(everything, roles)
     lines += conversation_section(everything) + speech_act_section(groups, found) + reference_section(everything)
-    lines += failure_section(everything) + difficulty_section(found) + dataset_section(everything, dataset)
+    lines += coordination_section(everything) + failure_section(everything) + difficulty_section(found)
+    lines += dataset_section(everything, dataset)
     lines += published_section(groups, published) + section("Every pair", pair_rows(groups))
     return "\n".join(lines) + "\n"
 
