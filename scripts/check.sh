@@ -3,10 +3,10 @@
 # "check") and by hand before a pull request. It runs from the repository's
 # root whatever the caller's directory, since the tests find the package
 # and the kit by their place under it. Every file comes first, held to
-# CLAUDE.md's rule (ASCII, LF endings, a final newline) as sdlc-protocol's
-# check holds its own, since a rule no check enforces drifts; then the
-# vendored copy of sdlc-protocol, held to its record; then the whole test
-# suite.
+# CLAUDE.md's rule (ASCII, LF endings, a final newline) as
+# symphony-protocol's check holds its own, since a rule no check enforces
+# drifts; then the vendored copy of symphony-protocol, held to its record;
+# then the whole test suite.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -34,9 +34,9 @@ print("\n".join(problems) or "plain text ok")
 sys.exit(1 if problems else 0)
 PY
 
-# The sdlc arm's copy of sdlc-protocol must be byte for byte what
+# The sdlc arm's copy of symphony-protocol must be byte for byte what
 # coordbench/vendor/VENDORED records. A change to it is made in
-# OpenSpineConsortium/sdlc-protocol and arrives here by that repository's
+# OpenSpineConsortium/symphony-protocol and arrives here by that repository's
 # sync pull request, so a hand edit fails here, before any test runs.
 # One that rewrote VENDORED to match passes this line and fails
 # tests/test_coordbench_vendor.py, which compares the copy with the library

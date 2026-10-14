@@ -45,13 +45,13 @@ and are skipped otherwise, as on CI.
 ## Where this repository fits
 
 coordbench is one of the repositories around the claim protocol of
-OpenSpineConsortium/sdlc-protocol. That repository's ECOSYSTEM.md,
-https://github.com/OpenSpineConsortium/sdlc-protocol/blob/main/ECOSYSTEM.md,
+OpenSpineConsortium/symphony-protocol. That repository's ECOSYSTEM.md,
+https://github.com/OpenSpineConsortium/symphony-protocol/blob/main/ECOSYSTEM.md,
 draws all of them, says which modules each one takes and how a change to
 the protocol reaches each. Here the sdlc arm decides through a copy of
 the library at coordbench/vendor. The copy is never edited here:
-sdlc-protocol's sync workflow keeps it current by the pull request
-sdlc-protocol/sync, and coordbench/vendor/README.md says the rest.
+symphony-protocol's sync workflow keeps it current by the pull request
+symphony-protocol/sync, and coordbench/vendor/README.md says the rest.
 
 ## Where it came from
 
@@ -59,5 +59,5 @@ coordbench was split from OpenSpineConsortium/sdlc-template, where it was
 the experiment/ directory, with its history: the commits before the split
 are that directory's. Its sdlc arm benchmarks that template's claim
 protocol, deciding through the protocol's merge gate from
-OpenSpineConsortium/sdlc-protocol, vendored at coordbench/vendor, rather
+OpenSpineConsortium/symphony-protocol, vendored at coordbench/vendor, rather
 than through a copy of its own.
