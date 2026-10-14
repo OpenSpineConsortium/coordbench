@@ -40,19 +40,27 @@ be added as a sixth arm by the dispatch input.
 - Agents: Claude Code, the version setup.sh pins, through coordbench's
   claude-cli driver on CooperBench 63b9d44 with its one patch; model
   claude-sonnet-5-5 for every agent; the MCP tool surface; WebFetch and
-  WebSearch off; no turn cap; 120 minutes per agent; one seed. Each
-  (pair, arm) is one job on ubuntu-24.04, so no pair sees another's
-  containers.
+  WebSearch off; no turn cap; 120 minutes per agent, the most the
+  workflow allows, so a job ends inside its own limit with the scoring
+  and the upload still to run; one seed. Each (pair, arm) is one job on
+  ubuntu-24.04, so no pair sees another's containers.
 - Accounts: the owner's, one job at a time per account, every arm of a
   pair on the same account (plan.py), so an account's usage window is
   spent on a pair's arms together rather than on one arm; the order the
   jobs run in is GitHub's queue's, first in first out as far as it keeps
   it, so the arm rotation is a tendency, not a guarantee.
 - Resume: a pair whose artifact holds a scored pair with no agent in
-  Error is not run again; a pair that ended in Error (a usage limit among
-  the causes) runs again on the next dispatch of the same tag, on a fresh
-  runner, and its new artifact is the one the report reads, the earlier
-  attempt's staying on GitHub under the same name until it expires.
+  Error is finished, and the next dispatch of the same tag plans no job
+  for it (its marker artifact says so) and skips it if one runs; a pair
+  whose agents submitted but whose scoring failed or never ran is scored
+  again from the files its artifact holds, with no agent started; a pair
+  that ended in Error (a usage limit among the causes) runs again, on a
+  fresh runner. The report reads, for each pair, the newest artifact of
+  its name that holds a finished pair, else the newest, so a rerun that
+  itself failed never hides a scored sample; the earlier attempts stay on
+  GitHub under the same name until they expire. A fake dispatch's tag
+  reads fake-<tag>, and a real dispatch refuses such a tag, so a
+  rehearsal's artifacts never stand in for real pairs.
 - Judging: the free heuristics only, in the run; the model-judged
   measures (communication errors, symptoms, speech acts, emergent
   behaviours) are run afterwards by hand, on purpose, if at all.
@@ -62,8 +70,11 @@ be added as a sixth arm by the dispatch input.
 eval.json's both_passed, CooperBench's own verdict: the pair passes when
 the merged patch passes both features' hidden tests (a conflicting merge
 passes only on agent1's patch, as 63b9d44 scores it). The rate is k/n over
-every attempted pair, an error counting as a failure, the paper's
-definition; the rate on finished pairs is reported beside it.
+every pair of the list, each by its last attempt, an error counting as a
+failure, the paper's definition; an earlier attempt that ended in Error
+was run again (Resume) and is not counted, so an arm whose agents crash
+more gets more second chances, and the report's attempt counts say how
+many. The rate on finished pairs is reported beside it.
 
 ## Analysis, in report.py as it stands
 

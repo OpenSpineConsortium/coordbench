@@ -2904,6 +2904,48 @@ class Scrubbing(unittest.TestCase):
         self.assertIn("could not be rewritten", str(caught.exception))
         self.assertEqual((self.tmp / "b_stream.jsonl").read_text(), runner.SCRUBBED + "\n")
 
+    def test_the_scrub_command_rewrites_a_run_directory_and_refuses_to_publish_what_it_cannot_clean(self):
+        run_dir = self.tmp / "run"
+        (run_dir / "coop").mkdir(parents=True)
+        (run_dir / "coop" / "stream.jsonl").write_text(f"a {PLANTED} b\n")
+        (run_dir / "coop" / "clean.txt").write_text("nothing here\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+        self.assertEqual((run_dir / "coop" / "stream.jsonl").read_text(), f"a {runner.SCRUBBED} b\n")
+        self.assertIn("1 files", err.getvalue())
+        self.assertIn("no file holds", err.getvalue())
+        # The credential inside an archive an agent packed, or a file that cannot be read: not published.
+        with tarfile.open(run_dir / "coop" / "packed.tar.gz", "w:gz") as packed:
+            data = io.BytesIO(PLANTED.encode())
+            info = tarfile.TarInfo("env.txt")
+            info.size = len(PLANTED)
+            packed.addfile(info, data)
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn("packed.tar.gz: holds the agents' credential inside an archive", err.getvalue())
+        (run_dir / "coop" / "packed.tar.gz").unlink()
+        (run_dir / "coop" / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00 not gzip")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
+        self.assertIn("broken.gz: could not be read", err.getvalue())
+        # A clean archive passes, no credential in the environment is nothing to find, and no directory is 2.
+        (run_dir / "coop" / "broken.gz").unlink()
+        with tarfile.open(run_dir / "coop" / "packed.tar", "w") as packed:
+            info = tarfile.TarInfo("note.txt")
+            info.size = 5
+            packed.addfile(info, io.BytesIO(b"hello"))
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "", "COORDBENCH_CLAUDE_TOKEN": ""}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 0)
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(self.tmp / "missing")]), 2)
+        self.assertIn("nothing to scrub", err.getvalue())
+
     def test_a_pair_scrubs_its_own_hub_events_and_the_hub_s_files_wait_for_the_hub_to_stop(self):
         run_dir = self.tmp / "run" / "arm" / "pair"
         hub = self.tmp / "run" / "hub"

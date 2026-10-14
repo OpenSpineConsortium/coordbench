@@ -1,12 +1,15 @@
 name: Run one CooperBench pair
 description: >-
-  One (pair, arm) of .github/workflows/bench.yml on this runner: free the
-  disk, skip the pair when an artifact of its name already holds a
-  finished pair, else run pair.sh. The fake and real jobs of the
-  workflow share these steps; the upload stays in the job, since it must
-  run whatever these steps did. In a real run the job sets
-  CLAUDE_CODE_OAUTH_TOKEN in its environment and these steps read it by
-  name only; in a fake run none is set and none is read.
+  One (pair, arm) of .github/workflows/bench.yml on this runner: skip the
+  pair when an artifact of its name already holds a finished pair, else
+  free the disk and run pair.sh (or, for a pair whose agents submitted
+  but that was never scored, fetch its files and score them without
+  running the agents again), then scrub the pair's directory once more
+  and check it before anything is published. The fake and real jobs of
+  the workflow share these steps; the uploads stay in the job, since they
+  must run whatever these steps did, and read the outputs here. In a real
+  run the job sets CLAUDE_CODE_OAUTH_TOKEN in its environment and these
+  steps read it by name only; in a fake run none is set and none is read.
 inputs:
   mode:
     description: fake or real
@@ -39,6 +42,15 @@ outputs:
   run_dir:
     description: the directory the pair writes, to upload whatever happened
     value: ${{ steps.where.outputs.run_dir }}
+  publish:
+    description: "true when the run directory was scrubbed and checked and may be uploaded"
+    value: ${{ steps.scrub.outputs.publish }}
+  finished:
+    description: "true when the run directory holds a finished pair, so its marker may be uploaded"
+    value: ${{ steps.done.outputs.finished }}
+  marker:
+    description: the one-line marker file to upload as <artifact>__done when finished is true
+    value: ${{ steps.done.outputs.marker }}
 runs:
   using: composite
   steps:
@@ -49,22 +61,34 @@ runs:
         RUN_NAME: ${{ inputs.name }}
       run: echo "run_dir=${COOPERBENCH_DIR:-$HOME/cooperbench}/logs/$RUN_NAME" >> "$GITHUB_OUTPUT"
 
-    - name: Free the disk for the task image
-      shell: bash
-      run: bash bench/cooperbench/actions/free_disk.sh
-
     - name: Skip a pair an earlier dispatch finished
       id: finished
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
         ARTIFACT: ${{ inputs.artifact }}
+        MODE: ${{ inputs.mode }}
+      # artifacts.py finished: 0 finished, 1 run it, 3 fetch and score it,
+      # 2 could not read, which a real job treats as a failure rather than
+      # spend the pair's usage on a guess, and a fake job as "run it".
       run: |
-        if python3 bench/cooperbench/actions/artifacts.py finished "$ARTIFACT"; then
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-        fi
+        status=0
+        python3 bench/cooperbench/actions/artifacts.py finished "$ARTIFACT" --mode "$MODE" || status=$?
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+        echo "rescore=false" >> "$GITHUB_OUTPUT"
+        case $status in
+          0) echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+          3) echo "rescore=true" >> "$GITHUB_OUTPUT" ;;
+          2) if [ "$MODE" = real ]; then
+               echo "::error::the artifacts could not be read; the pair is not run on a guess (dispatch the tag again)"
+               exit 1
+             fi ;;
+        esac
+
+    - name: Free the disk for the task image
+      if: steps.finished.outputs.skip != 'true'
+      shell: bash
+      run: bash bench/cooperbench/actions/free_disk.sh
 
     - name: Refuse a real run with no token
       if: inputs.mode == 'real' && steps.finished.outputs.skip != 'true'
@@ -74,6 +98,14 @@ runs:
           echo "::error::no Claude token for this account: the organization secret the plan names is unset or not shared with this repository"
           exit 1
         fi
+
+    - name: Fetch the unscored pair's files, so run.py scores them without running the agents
+      if: steps.finished.outputs.rescore == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        ARTIFACT: ${{ inputs.artifact }}
+      run: python3 bench/cooperbench/actions/artifacts.py fetch "$ARTIFACT" "${COOPERBENCH_DIR:-$HOME/cooperbench}/logs"
 
     - name: Run the pair
       if: steps.finished.outputs.skip != 'true'
@@ -89,3 +121,37 @@ runs:
         MODEL: ${{ inputs.model }}
         TIMEOUT_MIN: ${{ inputs.timeout_min }}
       run: bash bench/cooperbench/actions/pair.sh
+
+    - name: Scrub the pair's files once more and check them before anything is published
+      # After the pair however it ended, but not after a cancel, when the
+      # runner is tearing the job down: nothing is published then.
+      if: ${{ !cancelled() && steps.finished.outputs.skip != 'true' }}
+      id: scrub
+      shell: bash
+      env:
+        RUN_DIR: ${{ steps.where.outputs.run_dir }}
+      run: |
+        if bash bench/cooperbench/actions/scrub.sh; then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+    - name: Say whether the pair is finished, for its marker
+      if: steps.scrub.outputs.publish == 'true'
+      id: done
+      shell: bash
+      env:
+        RUN_DIR: ${{ steps.where.outputs.run_dir }}
+        MODE: ${{ inputs.mode }}
+        ARTIFACT: ${{ inputs.artifact }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/done"
+        echo "$ARTIFACT finished in run $GITHUB_RUN_ID" > "$RUNNER_TEMP/done/done.txt"
+        echo "marker=$RUNNER_TEMP/done/done.txt" >> "$GITHUB_OUTPUT"
+        if python3 bench/cooperbench/actions/artifacts.py check-dir "$RUN_DIR" --mode "$MODE"; then
+          echo "finished=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "finished=false" >> "$GITHUB_OUTPUT"
+        fi

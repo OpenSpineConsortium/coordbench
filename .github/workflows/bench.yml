@@ -11,21 +11,32 @@ name: Bench
 # - fake: every pair with bench/cooperbench/fake_claude as the agent, so
 #   the whole path runs and no usage is spent; a pull request that
 #   changes the kit, the workflow or the runner runs one pair this way.
-# - real: the agents are Claude Code on the owner's accounts. Each job
-#   waits in the environment bench until a reviewer approves the run
-#   (the plan job refuses a real run while that environment has no
-#   required reviewer, actions/environment.py), takes its account's
-#   token from the organization secret SYMPHONY_CLAUDE_<slot>, the slot
-#   a number from 1 to 8, and runs in the concurrency group of that
-#   slot, so one account runs one job at a time and up to 100 wait,
-#   first in first out as far as GitHub keeps it; the slots in use are
-#   the variable SYMPHONY_CLAUDE_ACCOUNTS (numbers separated by commas
-#   or blanks) unless the dispatch names them.
+#   Its artifacts carry the tag fake-<tag>, so a real run never takes
+#   them for finished pairs.
+# - real: the agents are Claude Code on the owner's accounts. The approve
+#   job waits in the environment bench until a reviewer approves the
+#   dispatch, once; the plan job refuses a real run while that
+#   environment has no required reviewer who may approve it
+#   (actions/environment.py), and refuses a slot whose secret is unset.
+#   Each run-real job then takes its account's token from the
+#   organization secret SYMPHONY_CLAUDE_<slot>, the slot a number from 1
+#   to 8, and runs in the concurrency group of that slot, so one account
+#   runs one job at a time and up to 100 wait, first in first out as far
+#   as GitHub keeps it; the slots in use are the variable
+#   SYMPHONY_CLAUDE_ACCOUNTS (numbers separated by commas or blanks)
+#   unless the dispatch names them. The approval gates this workflow's
+#   use of the accounts, not the secrets, which any workflow of the
+#   repository may name.
 # A pair's files are one artifact, kept 90 days, named
-# <tag>__<arm>__<repo>__<task>__f1_f6; a dispatch of the same tag skips
-# every pair whose artifact holds a scored pair with no agent in Error,
-# so a run that stopped on a usage limit is finished by dispatching it
-# again. No step calls a judge model, and none sees ANTHROPIC_API_KEY.
+# <tag>__<arm>__<repo>__<task>__f1_f6, with a marker <name>__done beside
+# a finished one (scored, no agent in Error); a dispatch of the same tag
+# plans no item whose marker is there and skips every pair whose artifact
+# holds a finished pair, so a run that stopped on a usage limit is
+# finished by dispatching it again, and a pair whose agents submitted but
+# that was never scored is scored from its files without running the
+# agents again. Nothing is published until the pair's files were scrubbed
+# of the agents' credential and read back clean. No step calls a judge
+# model, and none sees ANTHROPIC_API_KEY.
 
 on:
   workflow_dispatch:
@@ -49,11 +60,14 @@ on:
       model:
         default: claude-sonnet-5-5
       timeout_min:
-        description: minutes an agent may take
-        default: "120"
+        description: minutes an agent may take (empty for the mode's default, 120 real and 20 fake; at most 120 and 30)
+        default: ""
       tag:
-        description: the run's name, letters, digits, dots and dashes; the same tag resumes
+        description: the run's name, letters, digits, dots and dashes; the same tag resumes; a fake run's reads fake-<tag>
         required: true
+      survey_tag:
+        description: the survey dispatch whose gradeability table the report carries (empty for this tag's own)
+        default: ""
   pull_request:
     paths:
       - .github/workflows/bench.yml
@@ -76,6 +90,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       survey: ${{ steps.plan.outputs.survey }}
       count: ${{ steps.plan.outputs.count }}
+      timeout_min: ${{ steps.plan.outputs.timeout_min }}
       notes: ${{ steps.plan.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
@@ -90,23 +105,37 @@ jobs:
         id: plan
         env:
           # A pull request runs one pair of pallets_click 2068 in fake
-          # mode under three arms, the lightest of the task images.
-          MODE: ${{ inputs.mode || 'fake' }}
-          PAIRS: ${{ inputs.pairs || 'pallets_click_task/2068/f1_f6' }}
-          ARMS: ${{ inputs.arms || 'solo,coop-git,sdlc' }}
+          # mode under three arms, the lightest of the task images; a
+          # dispatch takes its inputs, an empty one the planner's default.
+          MODE: ${{ github.event_name == 'pull_request' && 'fake' || inputs.mode }}
+          PAIRS: ${{ github.event_name == 'pull_request' && 'pallets_click_task/2068/f1_f6' || inputs.pairs }}
+          ARMS: ${{ github.event_name == 'pull_request' && 'solo,coop-git,sdlc' || inputs.arms }}
           ACCOUNTS: ${{ inputs.accounts || vars.SYMPHONY_CLAUDE_ACCOUNTS }}
+          TIMEOUT_MIN: ${{ inputs.timeout_min }}
           # A pull request's tag carries the run id, so every push runs
           # the pair again rather than finding the last push's artifact.
-          TAG: ${{ inputs.tag || format('smoke-pr{0}-{1}', github.event.pull_request.number, github.run_id) }}
+          TAG: ${{ github.event_name == 'pull_request' && format('smoke-pr{0}-{1}', github.event.pull_request.number, github.run_id) || inputs.tag }}
+          # Whether each slot's secret is set, so a real run names no slot
+          # with no token; the values stay in the job.
+          HAS_SECRET_1: ${{ secrets.SYMPHONY_CLAUDE_1 != '' }}
+          HAS_SECRET_2: ${{ secrets.SYMPHONY_CLAUDE_2 != '' }}
+          HAS_SECRET_3: ${{ secrets.SYMPHONY_CLAUDE_3 != '' }}
+          HAS_SECRET_4: ${{ secrets.SYMPHONY_CLAUDE_4 != '' }}
+          HAS_SECRET_5: ${{ secrets.SYMPHONY_CLAUDE_5 != '' }}
+          HAS_SECRET_6: ${{ secrets.SYMPHONY_CLAUDE_6 != '' }}
+          HAS_SECRET_7: ${{ secrets.SYMPHONY_CLAUDE_7 != '' }}
+          HAS_SECRET_8: ${{ secrets.SYMPHONY_CLAUDE_8 != '' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           python3 bench/cooperbench/actions/plan.py --dataset-dir "$RUNNER_TEMP/cooperbench/dataset" \
-            --mode "$MODE" --pairs "$PAIRS" --arms "$ARMS" --accounts "$ACCOUNTS" --tag "$TAG"
+            --mode "$MODE" --pairs "$PAIRS" --arms "$ARMS" --accounts "$ACCOUNTS" --tag "$TAG" \
+            --timeout-min "$TIMEOUT_MIN" --list-finished
 
       - name: Refuse a real run until the environment bench has a required reviewer
         # GitHub makes an environment a job names before anyone has made
-        # it, with no rule, and the run-real jobs would then run
-        # unapproved; the plan stops here, before the matrix, instead.
+        # it, with no rule, and the approve job would then pass with no
+        # click; the plan stops here, before the matrix, instead.
         if: steps.plan.outputs.mode == 'real'
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -116,6 +145,21 @@ jobs:
         env:
           PLANNED: "mode ${{ steps.plan.outputs.mode }}, tag ${{ steps.plan.outputs.tag }}, ${{ steps.plan.outputs.count }} jobs. ${{ steps.plan.outputs.notes }}"
         run: echo "$PLANNED" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  approve:
+    # One approval for the whole dispatch: the run-real jobs need this job
+    # and carry no environment of their own, since a job that waits in
+    # the environment behind its concurrency group asks for its own click
+    # when its turn comes, one click per job.
+    needs: plan
+    if: needs.plan.outputs.mode == 'real'
+    runs-on: ubuntu-24.04
+    environment: bench
+    steps:
+      - name: Say what the reviewer approved
+        env:
+          PLANNED: "mode ${{ needs.plan.outputs.mode }}, tag ${{ needs.plan.outputs.tag }}, ${{ needs.plan.outputs.count }} jobs. ${{ needs.plan.outputs.notes }}"
+        run: echo "approved $PLANNED" | tee -a "$GITHUB_STEP_SUMMARY"
 
   survey:
     needs: plan
@@ -142,6 +186,7 @@ jobs:
           path: ${{ runner.temp }}/survey
           retention-days: 90
           if-no-files-found: ignore
+          overwrite: true
 
   run:
     needs: plan
@@ -164,22 +209,32 @@ jobs:
           name: ${{ matrix.name }}
           artifact: ${{ matrix.artifact }}
           model: ${{ inputs.model || 'claude-sonnet-5-5' }}
-          timeout_min: ${{ inputs.timeout_min || '20' }}
+          timeout_min: ${{ needs.plan.outputs.timeout_min }}
       - uses: actions/upload-artifact@v4
-        if: always() && steps.pair.outputs.skip != 'true'
+        # Only a directory scrubbed and read back clean, and never after a
+        # cancel; a re-run of the job replaces the attempt's artifact.
+        if: ${{ !cancelled() && steps.pair.outputs.publish == 'true' }}
+        id: upload
         with:
           name: ${{ matrix.artifact }}
           path: ${{ steps.pair.outputs.run_dir }}
           retention-days: 90
           include-hidden-files: true
           if-no-files-found: warn
+          overwrite: true
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.pair.outputs.finished == 'true' && steps.upload.outcome == 'success' }}
+        with:
+          name: ${{ matrix.artifact }}__done
+          path: ${{ steps.pair.outputs.marker }}
+          retention-days: 90
+          overwrite: true
 
   run-real:
-    needs: plan
+    needs: [plan, approve]
     if: needs.plan.outputs.mode == 'real'
     runs-on: ubuntu-24.04
     timeout-minutes: 330
-    environment: bench
     concurrency:
       group: bench-${{ matrix.account }}
       queue: max
@@ -216,18 +271,29 @@ jobs:
           name: ${{ matrix.name }}
           artifact: ${{ matrix.artifact }}
           model: ${{ inputs.model || 'claude-sonnet-5-5' }}
-          timeout_min: ${{ inputs.timeout_min || '120' }}
+          timeout_min: ${{ needs.plan.outputs.timeout_min }}
       - uses: actions/upload-artifact@v4
-        if: always() && steps.pair.outputs.skip != 'true'
+        # Only a directory scrubbed and read back clean, and never after a
+        # cancel; a re-run of the job replaces the attempt's artifact.
+        if: ${{ !cancelled() && steps.pair.outputs.publish == 'true' }}
+        id: upload
         with:
           name: ${{ matrix.artifact }}
           path: ${{ steps.pair.outputs.run_dir }}
           retention-days: 90
           include-hidden-files: true
           if-no-files-found: warn
+          overwrite: true
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.pair.outputs.finished == 'true' && steps.upload.outcome == 'success' }}
+        with:
+          name: ${{ matrix.artifact }}__done
+          path: ${{ steps.pair.outputs.marker }}
+          retention-days: 90
+          overwrite: true
 
   report:
-    needs: [plan, survey, run, run-real]
+    needs: [plan, approve, survey, run, run-real]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -242,10 +308,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
           MODE: ${{ needs.plan.outputs.mode }}
+          SURVEY_TAG: ${{ inputs.survey_tag }}
+          SURVEY_PLAN: ${{ needs.plan.outputs.survey }}
           REPORT_DIR: ${{ runner.temp }}/report
         run: bash bench/cooperbench/actions/report.sh
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: report-${{ needs.plan.outputs.tag }}-${{ github.run_id }}
           path: ${{ runner.temp }}/report
           retention-days: 90
+          if-no-files-found: warn
+          overwrite: true

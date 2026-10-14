@@ -12,11 +12,20 @@ started waiting, which it does not guarantee). GitHub runs at most 256
 jobs from one matrix, and queues at most 100 pending jobs in one
 concurrency group and cancels the rest, so a dispatch holds at most 256
 items, an account at most 100 of them in a real run, and the plan says
-how many it left out; a dispatch of the same tag later takes them, since
-a finished item is skipped by its artifact.
+how many it left out. The items an earlier dispatch of the tag finished
+(--finished names them, from the marker artifacts the run jobs leave,
+artifacts.py list-finished) are left out before those caps, so a dispatch
+of the same tag takes up where the last one stopped and the caps never
+hold the same items back twice; each pair keeps its account across
+dispatches, since the account is chosen by the pair's place in the list.
+
+A fake run's tag is fake-<tag> (a pull request's smoke-<...> already
+says so), and a real run refuses such a tag: a fake pair's artifact looks
+finished, and a real dispatch under the same tag would skip the pair and
+report the fake one as the benchmark.
 
 The pairs come from CooperBench's flash subset (dataset/subsets/flash.json),
-narrowed by the dispatch's "pairs" input: "flash" for every pair, a list
+narrowed by the dispatch's "pairs" input: "flash" (or nothing) for every pair, a list
 such as "pallets_click_task/2068, pallets_jinja_task/1559/f5_f8" (a task
 for all its flash pairs, a task and a feature pair for that one), or
 "@path" for a file with one such entry per line, which is how the
@@ -42,6 +51,14 @@ MATRIX_LIMIT = 256
 # SYMPHONY_CLAUDE_<slot>; the workflow names the eight secrets one by one,
 # since a secret looked up by a computed name hands the runner them all.
 SLOTS = tuple(str(n) for n in range(1, 9))
+# A tag that says its artifacts hold no real pair.
+FAKE_PREFIXES = ("fake-", "smoke-")
+# Minutes an agent may take: the default and the most a mode allows, so a
+# job ends inside its timeout-minutes with the scoring (up to three
+# hours) and the upload still to run.
+TIMEOUT_DEFAULT = {"real": 120, "fake": 20, "survey": 20}
+TIMEOUT_MOST = {"real": 120, "fake": 30, "survey": 30}
+ARMS_DIR = Path(__file__).resolve().parents[3] / "coordbench" / "arms"
 ENTRY = re.compile(r"^(?P<repo>[A-Za-z0-9_]+)/(?P<task>\d{1,9})(?:/f?(?P<first>\d{1,4})_f?(?P<second>\d{1,4}))?$")
 SEPARATORS = re.compile(r"[,\s]+")
 
@@ -78,7 +95,7 @@ def chosen_pairs(dataset_dir, text):
     """The pairs the input names, in the subset's order, each once."""
     everything = flash_pairs(dataset_dir)
     entries = parse_entries(text)
-    if entries == ["flash"]:
+    if not entries or entries == ["flash"]:
         return everything
     wanted = []
     for entry in entries:
@@ -119,18 +136,22 @@ def artifact_name(tag, arm, pair):
     return "__".join([tag, arm, repo, str(task), feature_word(features)])
 
 
-def plan_items(pairs, arms, accounts, tag, queue_limit=QUEUE_LIMIT):
+def plan_items(pairs, arms, accounts, tag, queue_limit=QUEUE_LIMIT, finished=()):
     """One item per pair and arm, pair-major, each pair's arms on one
-    account, accounts in turn, the arm order rotated by pair index; then
-    the matrix limit, and the per-account queue cap where one applies.
-    Dropped items are counted, and a later dispatch of the same tag takes
-    them, since a finished item is skipped by its artifact."""
-    items, dropped = [], 0
+    account, accounts in turn, the arm order rotated by pair index; the
+    items whose artifact an earlier dispatch finished are left out first,
+    then the matrix limit and the per-account queue cap where one applies
+    hold the rest back. Returns the items, how many were finished and how
+    many the caps dropped; a later dispatch of the same tag takes those."""
+    items, done, dropped = [], 0, 0
     counts = {account: 0 for account in accounts}
     for index, pair in enumerate(pairs):
         account = accounts[index % len(accounts)]
         rotated = arms[index % len(arms):] + arms[:index % len(arms)]
         for arm in rotated:
+            if artifact_name(tag, arm, pair) in finished:
+                done += 1
+                continue
             if len(items) >= MATRIX_LIMIT or (queue_limit and counts[account] >= queue_limit):
                 dropped += 1
                 continue
@@ -139,7 +160,7 @@ def plan_items(pairs, arms, accounts, tag, queue_limit=QUEUE_LIMIT):
             items.append({"repo": repo, "task": task, "features": feature_word(features),
                           "arm": arm, "account": account, "name": run_name(tag, arm, pair),
                           "artifact": artifact_name(tag, arm, pair), "order": len(items)})
-    return items, dropped
+    return items, done, dropped
 
 
 def survey_tasks(pairs):
@@ -151,25 +172,83 @@ def survey_tasks(pairs):
     return tasks
 
 
-def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag):
-    pairs = chosen_pairs(dataset_dir, pairs_text)
-    arms = parse_list(arms_text, ARMS)
-    accounts = parse_list(accounts_text) if mode == "real" else [mode]
-    if mode == "real" and not accounts:
+def mode_tag(mode, tag):
+    """The tag the artifacts carry: a fake run's says so, a real run's may
+    not, a survey's is as given."""
+    if mode == "fake" and not tag.startswith(FAKE_PREFIXES):
+        return "fake-" + tag
+    if mode == "real" and tag.startswith(FAKE_PREFIXES):
+        raise ValueError(f"a real run takes no tag starting with {' or '.join(FAKE_PREFIXES)}: its artifacts would "
+                         f"be mistaken for finished pairs and reported as the benchmark ({tag!r})")
+    return tag
+
+
+def chosen_accounts(mode, accounts_text, present):
+    """The slots a real run uses, each one whose secret the workflow saw
+    set when it says which it saw; the mode's name otherwise."""
+    if mode != "real":
+        return [mode]
+    accounts = parse_list(accounts_text)
+    if not accounts:
         raise ValueError("a real run names at least one account (the accounts input, or the variable "
                          "SYMPHONY_CLAUDE_ACCOUNTS)")
     for account in accounts:
-        if mode == "real" and account not in SLOTS:
+        if account not in SLOTS:
             raise ValueError(f"an account is a slot from 1 to 8, the number in its secret's name SYMPHONY_CLAUDE_<slot>: "
                              f"{account!r}")
-    items, dropped = plan_items(pairs, arms, accounts, tag, QUEUE_LIMIT if mode == "real" else 0)
+        if present is not None and account not in present:
+            raise ValueError(f"the organization secret SYMPHONY_CLAUDE_{account} is unset or not shared with this "
+                             f"repository, so slot {account} has no token; set it, or leave the slot out")
+    return accounts
+
+
+def chosen_arms(arms_text, arms_dir=ARMS_DIR):
+    """The arms, each one the runner has (coordbench/arms/<name>/arm.json),
+    so a misspelt arm fails the plan and not every job of the arm."""
+    arms = parse_list(arms_text, ARMS)
+    known = sorted(p.parent.name for p in Path(arms_dir).glob("*/arm.json"))
+    for arm in arms:
+        if arm not in known:
+            raise ValueError(f"no arm named {arm!r} under {arms_dir}; the arms are {', '.join(known)}")
+    return arms
+
+
+def chosen_timeout(mode, text):
+    """Minutes an agent may take: the mode's default when the input is
+    empty, else the whole minutes given, at most what the mode allows."""
+    if not (text or "").strip():
+        return TIMEOUT_DEFAULT[mode]
+    if not re.fullmatch(r"\d{1,4}", text.strip()):
+        raise ValueError(f"timeout_min is whole minutes: {text!r}")
+    minutes = int(text.strip())
+    if not 1 <= minutes <= TIMEOUT_MOST[mode]:
+        raise ValueError(f"timeout_min is from 1 to {TIMEOUT_MOST[mode]} in {mode} mode, so the job ends inside "
+                         f"its own limit with the scoring and the upload still to run: {minutes}")
+    return minutes
+
+
+def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag, finished=(), present=None,
+         timeout_text="", arms_dir=ARMS_DIR):
+    pairs = chosen_pairs(dataset_dir, pairs_text)
+    tag = mode_tag(mode, tag)
+    arms = chosen_arms(arms_text, arms_dir)
+    accounts = chosen_accounts(mode, accounts_text, present)
+    timeout = chosen_timeout(mode, timeout_text)
+    items, done, dropped = [], 0, 0
+    if mode != "survey":
+        items, done, dropped = plan_items(pairs, arms, accounts, tag, QUEUE_LIMIT if mode == "real" else 0,
+                                          set(finished))
     notes = []
+    if done:
+        notes.append(f"{done} items finished by an earlier dispatch of the tag and left out")
     if dropped:
         notes.append(f"{dropped} items left out: GitHub runs at most {MATRIX_LIMIT} jobs from one matrix"
                      + (f" and queues at most {QUEUE_LIMIT} per account" if mode == "real" else "")
                      + "; dispatch the same tag again once these finish")
+    survey = survey_tasks(pairs)
     return {"mode": mode, "tag": tag, "pairs": len(pairs), "arms": arms, "accounts": accounts,
-            "items": items, "survey": survey_tasks(pairs), "dropped": dropped, "notes": notes}
+            "timeout_min": timeout, "items": items, "survey": survey, "finished": done, "dropped": dropped,
+            "count": len(survey) if mode == "survey" else len(items), "notes": notes}
 
 
 def write_outputs(result, path):
@@ -177,8 +256,43 @@ def write_outputs(result, path):
         out.write(f"matrix={json.dumps({'include': result['items']})}\n")
         out.write(f"survey={json.dumps({'include': result['survey']})}\n")
         out.write(f"tag={result['tag']}\n")
-        out.write(f"count={len(result['items'])}\n")
+        out.write(f"timeout_min={result['timeout_min']}\n")
+        out.write(f"count={result['count']}\n")
         out.write(f"notes={' '.join(result['notes'])}\n")
+
+
+def read_names(path):
+    """The artifact names in a file, one per line, blank lines left out."""
+    if not path:
+        return set()
+    return {line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
+def listed_finished(mode, tag):
+    """The pair artifacts of the tag whose marker is on GitHub, read with
+    the runner's token (artifacts.py list-finished); when the listing
+    fails every item is planned and the jobs skip the finished ones, which
+    costs runner starts, not usage, and the plan's notes say so."""
+    import artifacts
+    if mode == "survey":
+        return set(), None
+    try:
+        found, _ = artifacts.list_artifacts(artifacts.settings())
+    except (KeyError, artifacts.READ_PROBLEMS) as problem:
+        return set(), f"could not list the finished items ({problem}); every item is planned and the jobs skip " \
+                      f"the finished ones"
+    names = artifacts.by_name(found, f"{mode_tag(mode, tag)}__")
+    return {name[:-len(artifacts.DONE_SUFFIX)] for name in names if name.endswith(artifacts.DONE_SUFFIX)}, None
+
+
+def secrets_present(environ=None):
+    """The slots whose secret the workflow saw set, from HAS_SECRET_<slot>
+    ('true' or 'false', each set by the workflow from the secret's name),
+    or None when the workflow did not say, as a run outside it does not."""
+    environ = os.environ if environ is None else environ
+    if not any(f"HAS_SECRET_{slot}" in environ for slot in SLOTS):
+        return None
+    return {slot for slot in SLOTS if environ.get(f"HAS_SECRET_{slot}") == "true"}
 
 
 def main(argv=None):
@@ -189,13 +303,24 @@ def main(argv=None):
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument("--accounts", default="")
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--timeout-min", default="", help="minutes an agent may take; the mode's default when empty")
+    parser.add_argument("--finished", help="a file naming the artifacts an earlier dispatch finished, one per line")
+    parser.add_argument("--list-finished", action="store_true",
+                        help="read the finished items' markers from GitHub (GITHUB_TOKEN, GITHUB_REPOSITORY)")
+    parser.add_argument("--arms-dir", default=ARMS_DIR, help="where the arms are (coordbench/arms)")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,40}", args.tag):
         parser.error("the tag is letters, digits, dots and dashes, up to 41 characters")
+    finished, note = read_names(args.finished), None
+    if args.list_finished:
+        finished, note = listed_finished(args.mode, args.tag)
     try:
-        result = plan(args.dataset_dir, args.mode, args.pairs, args.arms, args.accounts, args.tag)
+        result = plan(args.dataset_dir, args.mode, args.pairs, args.arms, args.accounts, args.tag,
+                      finished, secrets_present(), args.timeout_min, args.arms_dir)
     except (ValueError, OSError) as problem:
         parser.error(str(problem))
+    if note:
+        result["notes"].append(note)
     print(json.dumps(result, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
         write_outputs(result, os.environ["GITHUB_OUTPUT"])

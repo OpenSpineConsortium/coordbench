@@ -218,6 +218,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -725,6 +726,74 @@ def scrub_credentials(directories, values=None):
         if directory.is_dir():
             paths.extend(sorted(directory.rglob("*")))
     return scrub_paths(paths, values)
+
+
+def archive_holds(path, values):
+    """Whether a member of the archive holds the credential, read without
+    unpacking it: the scrub leaves archives whole, so one that does keeps
+    the pair from being published. An archive inside the archive is read
+    as its bytes, not opened."""
+    needles = [value.encode("utf-8") for value in values]
+    if path.name.endswith(".zip"):
+        with zipfile.ZipFile(path) as packed:
+            return any(any(needle in packed.read(member) for needle in needles)
+                       for member in packed.namelist() if not member.endswith("/"))
+    with tarfile.open(path, "r:*") as packed:
+        for member in packed:
+            if member.isfile():
+                data = packed.extractfile(member).read()
+                if any(needle in data for needle in needles):
+                    return True
+    return False
+
+
+def unscrubbed(directory, values):
+    """Every file under the directory that still holds the credential,
+    that holds it inside an archive, or that could not be read, each with
+    why, for a run whose files are about to be published."""
+    kept = []
+    for path in sorted(Path(directory).rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            if is_archive(path):
+                held = archive_holds(path, values)
+            else:
+                data = read_for_scrub(path)
+                held = any(value.encode("utf-8") in data for value in values)
+        except (OSError, EOFError, zlib.error, tarfile.TarError, zipfile.BadZipFile) as problem:
+            kept.append(f"{path}: could not be read ({problem})")
+            continue
+        if held:
+            kept.append(f"{path}: holds the agents' credential" + (" inside an archive" if is_archive(path) else ""))
+    return kept
+
+
+def command_scrub(args):
+    """Scrub a run directory once more and say whether it may be
+    published: exit 0 when no file under it holds the agents' credential
+    (none is in the environment, or every file was read and found clean),
+    2 when one does, or holds it inside an archive, or could not be read,
+    which the job treats as a pair with no result rather than publish it.
+    The workflow runs this after run.py ended however it ended, since the
+    run's own scrub runs only when the pair finishes."""
+    directory = Path(args.run_dir)
+    if not directory.is_dir():
+        say(f"{directory} is not a directory")
+        return 2
+    values = credential_values()
+    if not values:
+        say(f"{directory}: no credential in the environment, nothing to scrub")
+        return 0
+    rewritten = scrub_credentials([directory], values)
+    if rewritten:
+        say(f"{directory}: the agents' credential was in {len(rewritten)} files and is scrubbed out of them")
+    kept = unscrubbed(directory, values)
+    if kept:
+        say("\n".join(kept))
+        return 2
+    say(f"{directory}: no file holds the agents' credential")
+    return 0
 
 
 def pair_hub_dir(plan):
@@ -2741,6 +2810,10 @@ def parser():
     rescoring.add_argument("--dataset-dir", help="the dataset to take the tests from, instead of the plan's")
     add_debug_argument(rescoring)
     rescoring.set_defaults(func=command_rescore)
+    scrubbing = commands.add_parser("scrub", help="scrub a run directory once more and say whether it may be published")
+    scrubbing.add_argument("--run-dir", required=True, help="the run directory a job uploads")
+    add_debug_argument(scrubbing)
+    scrubbing.set_defaults(func=command_scrub)
     return top
 
 

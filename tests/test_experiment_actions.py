@@ -62,6 +62,13 @@ class Planner(unittest.TestCase):
             with self.subTest(entry=bad), self.assertRaises(ValueError):
                 plan.chosen_pairs(self.dataset, bad)
 
+    def arms_dir(self, *names):
+        arms = Path(self.tmp) / "arms"
+        for name in names:
+            (arms / name).mkdir(parents=True, exist_ok=True)
+            (arms / name / "arm.json").write_text("{}")
+        return arms
+
     def test_a_pair_s_arms_share_one_account_and_the_arm_order_rotates(self):
         result = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "1 2", "t1")
         items = result["items"]
@@ -85,17 +92,32 @@ class Planner(unittest.TestCase):
 
     def test_an_account_gets_at_most_the_queue_s_hundred_and_the_plan_says_what_it_left_out(self):
         pairs = [("r", n, (1, 2)) for n in range(60)]
-        items, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one"], "t")
+        items, done, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one"], "t")
         self.assertEqual(len(items), plan.QUEUE_LIMIT)
-        self.assertEqual(dropped, 20)
-        items, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one", "two"], "t")
+        self.assertEqual((done, dropped), (0, 20))
+        items, done, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one", "two"], "t")
         self.assertEqual((len(items), dropped), (120, 0))
+
+    def test_finished_items_are_left_out_before_the_caps_and_a_pair_keeps_its_account(self):
+        pairs = [("r", n, (1, 2)) for n in range(60)]
+        first, _, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one"], "t")
+        self.assertEqual(dropped, 20)
+        finished = {item["artifact"] for item in first}
+        second, done, dropped = plan.plan_items(pairs, ["solo", "coop"], ["one"], "t", finished=finished)
+        self.assertEqual((len(second), done, dropped), (20, 100, 0))
+        self.assertEqual({item["artifact"] for item in first} & {item["artifact"] for item in second}, set())
+        # With two accounts, a pair's account is its place in the list, whatever was finished before.
+        first, _, _ = plan.plan_items(pairs, ["solo"], ["one", "two"], "t")
+        finished = {item["artifact"] for item in first[:30]}
+        second, _, _ = plan.plan_items(pairs, ["solo"], ["one", "two"], "t", finished=finished)
+        by_task = {item["task"]: item["account"] for item in first}
+        self.assertTrue(all(by_task[item["task"]] == item["account"] for item in second))
 
     def test_a_matrix_holds_at_most_256_jobs_in_any_mode_and_a_fake_run_has_no_queue_cap(self):
         pairs = [("r", n, (1, 2)) for n in range(43)]
-        items, dropped = plan.plan_items(pairs, list(plan.ARMS) + ["coop-nocomm"], ["one", "two", "three"], "t")
+        items, _, dropped = plan.plan_items(pairs, list(plan.ARMS) + ["coop-nocomm"], ["one", "two", "three"], "t")
         self.assertEqual((len(items), dropped), (plan.MATRIX_LIMIT, 2))
-        items, dropped = plan.plan_items(pairs, list(plan.ARMS), ["fake"], "t", queue_limit=0)
+        items, _, dropped = plan.plan_items(pairs, list(plan.ARMS), ["fake"], "t", queue_limit=0)
         self.assertEqual((len(items), dropped), (215, 0))
         many = {"name": "flash", "tasks": [{"repo": "r", "task_id": n, "pairs": [[1, 2]]} for n in range(120)]}
         (Path(self.dataset) / "subsets" / "flash.json").write_text(json.dumps(many), encoding="utf-8")
@@ -114,22 +136,70 @@ class Planner(unittest.TestCase):
         self.assertEqual([i["account"] for i in fake["items"]], ["fake"])
         survey = plan.plan(self.dataset, "survey", "flash", "", "", "t")
         self.assertEqual(len(survey["survey"]), 3)
+        self.assertEqual((survey["items"], survey["count"], survey["notes"]), ([], 3, []))
+
+    def test_a_fake_tag_says_so_and_a_real_run_refuses_one(self):
+        self.assertEqual(plan.plan(self.dataset, "fake", "flash", "solo", "", "bench-1")["tag"], "fake-bench-1")
+        self.assertEqual(plan.plan(self.dataset, "fake", "flash", "solo", "", "smoke-pr7-1")["tag"], "smoke-pr7-1")
+        self.assertEqual(plan.plan(self.dataset, "survey", "flash", "", "", "survey-1")["tag"], "survey-1")
+        self.assertEqual(plan.plan(self.dataset, "real", "flash", "solo", "1", "bench-1")["tag"], "bench-1")
+        for tag in ("fake-bench-1", "smoke-pr7-1"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                plan.plan(self.dataset, "real", "flash", "solo", "1", tag)
+
+    def test_a_real_run_names_only_slots_whose_secret_is_set(self):
+        self.assertEqual(plan.plan(self.dataset, "real", "flash", "solo", "1,3", "t", present={"1", "3"})["accounts"],
+                         ["1", "3"])
+        with self.assertRaises(ValueError) as refused:
+            plan.plan(self.dataset, "real", "flash", "solo", "1,3", "t", present={"1"})
+        self.assertIn("SYMPHONY_CLAUDE_3", str(refused.exception))
+        self.assertIsNone(plan.secrets_present({}))
+        self.assertEqual(plan.secrets_present({"HAS_SECRET_1": "true", "HAS_SECRET_2": "false"}), {"1"})
+
+    def test_the_timeout_has_a_default_and_a_bound_per_mode(self):
+        self.assertEqual(plan.chosen_timeout("real", ""), 120)
+        self.assertEqual(plan.chosen_timeout("fake", " "), 20)
+        self.assertEqual(plan.chosen_timeout("real", "90"), 90)
+        for mode, text in (("real", "121"), ("fake", "60"), ("real", "0"), ("real", "ten"), ("real", "1.5")):
+            with self.subTest(mode=mode, text=text), self.assertRaises(ValueError):
+                plan.chosen_timeout(mode, text)
+        self.assertEqual(plan.plan(self.dataset, "fake", "flash", "solo", "", "t", timeout_text="25")["timeout_min"],
+                         25)
+
+    def test_an_arm_the_runner_lacks_fails_the_plan(self):
+        arms = self.arms_dir("solo", "sdlc")
+        self.assertEqual(plan.chosen_arms("sdlc, solo", arms), ["sdlc", "solo"])
+        with self.assertRaises(ValueError) as refused:
+            plan.chosen_arms("solo,sldc", arms)
+        self.assertIn("sldc", str(refused.exception))
+        self.assertIn("sdlc, solo", str(refused.exception))
+        for arm in plan.ARMS + ("coop-nocomm",):
+            self.assertTrue((plan.ARMS_DIR / arm / "arm.json").is_file(), arm)
 
     def test_the_command_writes_the_workflow_s_outputs(self):
         out = Path(self.tmp) / "outputs"
+        finished = Path(self.tmp) / "finished.txt"
+        finished.write_text("smoke-pr7__solo__go_chi_task__26__f1_f2\n")
         with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(out)}), \
                 mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
             code = plan.main(["--dataset-dir", str(self.dataset), "--mode", "fake", "--pairs", "go_chi_task/26",
-                              "--arms", "solo,sdlc", "--tag", "smoke-pr7"])
+                              "--arms", "solo,sdlc", "--tag", "smoke-pr7", "--finished", str(finished)])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(printed.getvalue())["pairs"], 1)
         lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-        self.assertEqual(lines["count"], "2")
+        self.assertEqual(lines["count"], "1")
         self.assertEqual(lines["tag"], "smoke-pr7")
-        self.assertEqual([i["arm"] for i in json.loads(lines["matrix"])["include"]], ["solo", "sdlc"])
+        self.assertEqual(lines["timeout_min"], "20")
+        self.assertEqual([i["arm"] for i in json.loads(lines["matrix"])["include"]], ["sdlc"])
         self.assertEqual(json.loads(lines["survey"]), {"include": [{"repo": "go_chi_task", "task": 26}]})
+        self.assertIn("1 items finished by an earlier dispatch", lines["notes"])
         with self.assertRaises(SystemExit):
             plan.main(["--dataset-dir", str(self.dataset), "--mode", "fake", "--tag", "bad tag"])
+        with self.assertRaises(SystemExit):
+            plan.main(["--dataset-dir", str(self.dataset), "--mode", "real", "--accounts", "1", "--tag", "fake-t"])
+
+    def test_an_empty_pairs_input_is_the_whole_subset(self):
+        self.assertEqual(len(plan.chosen_pairs(self.dataset, "")), 6)
 
 
 class FakeGitHub:
@@ -178,12 +248,18 @@ class Artifacts(unittest.TestCase):
              {"id": 2, "name": "t__solo__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False},
              {"id": 3, "name": "t__sdlc__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False},
              {"id": 4, "name": "t__coop__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": True},
-             {"id": 5, "name": "other__solo__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": False}],
+             {"id": 5, "name": "other__solo__r__1__f1_f2", "created_at": "2026-10-03T00:00:00Z", "expired": False},
+             {"id": 6, "name": "t__team__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False},
+             {"id": 7, "name": "t__solo__r__1__f1_f2__done", "created_at": "2026-10-02T00:00:00Z", "expired": False},
+             {"id": 8, "name": "t__survey__r__1", "created_at": "2026-10-02T00:00:00Z", "expired": False}],
             {1: zipped({"solo/r/task1/f1_f2/result.json": "{}"}),
              2: zipped({"solo/r/task1/f1_f2/result.json": json.dumps({"agent": {"status": "Submitted"}}),
                         "solo/r/task1/f1_f2/eval.json": json.dumps({"both_passed": False, "error": None})}),
              3: zipped({"sdlc/r/task1/f1_f2/result.json": "{}"}),
-             5: zipped({"x": "y"})})
+             5: zipped({"x": "y"}),
+             6: zipped({"team/r/task1/f1_f2/result.json": json.dumps({"agents": {"agent1": {"status": "Submitted"}}})}),
+             7: zipped({"done.txt": "done"}),
+             8: zipped({"r-1.json": "[]"})})
 
     def test_a_finished_pair_is_scored_with_no_agent_in_error(self):
         scored = {"both_passed": True, "error": None}
@@ -191,52 +267,146 @@ class Artifacts(unittest.TestCase):
             "coop/r/task1/f1_f2/result.json": json.dumps({"agents": {"agent1": {"status": "Submitted"},
                                                                      "agent2": {"status": "Submitted"}}}),
             "coop/r/task1/f1_f2/eval.json": json.dumps(scored)})))
-        for name, result, evaluation in (
-                ("an agent in Error", {"agents": {"agent1": {"status": "Submitted"}, "agent2": {"status": "Error"}}}, scored),
-                ("an eval error", {"agents": {"agent1": {"status": "Submitted"}}}, {"error": "docker died"}),
-                ("a pair error", {"error": "HubError: gone", "agents": {"agent1": {"status": "Submitted"}}}, scored),
-                ("no agents", {}, scored)):
+        for name, result, evaluation, state in (
+                ("an agent in Error", {"agents": {"agent1": {"status": "Submitted"}, "agent2": {"status": "Error"}}},
+                 scored, "unfinished"),
+                ("an eval error", {"agents": {"agent1": {"status": "Submitted"}}}, {"error": "docker died"}, "unscored"),
+                ("a pair error", {"error": "HubError: gone", "agents": {"agent1": {"status": "Submitted"}}}, scored,
+                 "unfinished"),
+                ("no agents", {}, scored, "unfinished")):
             with self.subTest(case=name):
-                self.assertFalse(artifacts.holds_finished_pair(zipped({
-                    "coop/r/task1/f1_f2/result.json": json.dumps(result),
-                    "coop/r/task1/f1_f2/eval.json": json.dumps(evaluation)})))
-        self.assertFalse(artifacts.holds_finished_pair(zipped({"coop/r/task1/f1_f2/eval.json": json.dumps(scored)})))
+                data = zipped({"coop/r/task1/f1_f2/result.json": json.dumps(result),
+                               "coop/r/task1/f1_f2/eval.json": json.dumps(evaluation)})
+                self.assertFalse(artifacts.holds_finished_pair(data))
+                self.assertEqual(artifacts.zip_state(data), state)
+        self.assertEqual(artifacts.zip_state(zipped({"coop/r/task1/f1_f2/eval.json": json.dumps(scored)})), "unfinished")
+        self.assertEqual(artifacts.zip_state(zipped({"coop/r/task1/f1_f2/result.json": json.dumps(
+            {"agents": {"agent1": {"status": "Submitted"}}})})), "unscored")
 
-    def test_finished_reads_the_newest_artifact_of_the_name_and_wants_an_eval(self):
-        with mock.patch("sys.stdout", new_callable=io.StringIO):
-            self.assertEqual(artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", self.github), 0)
-            self.assertEqual(artifacts.command_finished(self.CONF, "t__sdlc__r__1__f1_f2", self.github), 1)
-            self.assertEqual(artifacts.command_finished(self.CONF, "t__coop__r__1__f1_f2", self.github), 1)
-            self.assertEqual(artifacts.command_finished(self.CONF, "t__none__r__1__f1_f2", self.github), 1)
+    def test_in_real_mode_a_fake_agent_s_pair_is_not_finished(self):
+        fake = zipped({"coop/r/task1/f1_f2/result.json": json.dumps({"agents": {
+            "agent1": {"status": "Submitted", "claude_code_version": "0.0.0-fake.1330271801"},
+            "agent2": {"status": "Submitted", "claude_code_version": "0.0.0-fake.1330271801"}}}),
+            "coop/r/task1/f1_f2/eval.json": json.dumps({"both_passed": False})})
+        self.assertTrue(artifacts.holds_finished_pair(fake, "fake"))
+        self.assertFalse(artifacts.holds_finished_pair(fake, "real"))
+        self.assertEqual(artifacts.zip_state(fake, "real"), "unfinished")
+
+    def test_finished_reads_the_artifacts_of_the_name_newest_first_and_says_what_to_do(self):
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", opener=self.github), 0)
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__sdlc__r__1__f1_f2", opener=self.github), 1)
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__team__r__1__f1_f2", opener=self.github), 3)
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__coop__r__1__f1_f2", opener=self.github), 1)
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__none__r__1__f1_f2", opener=self.github), 1)
+        self.assertIn("scored again", printed.getvalue())
         fetched = [url for url, _ in self.github.requests if url.endswith("/zip")]
         self.assertEqual(fetched, ["https://api.example/repos/o/r/actions/artifacts/2/zip",
-                                   "https://api.example/repos/o/r/actions/artifacts/3/zip"])
+                                   "https://api.example/repos/o/r/actions/artifacts/3/zip",
+                                   "https://api.example/repos/o/r/actions/artifacts/6/zip"])
+
+    def test_an_older_finished_artifact_counts_when_a_rerun_of_the_name_failed(self):
+        github = FakeGitHub(
+            [{"id": 1, "name": "t__solo__r__1__f1_f2", "created_at": "2026-10-01T00:00:00Z", "expired": False},
+             {"id": 2, "name": "t__solo__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False}],
+            {1: zipped({"solo/r/task1/f1_f2/result.json": json.dumps({"agent": {"status": "Submitted"}}),
+                        "solo/r/task1/f1_f2/eval.json": json.dumps({"both_passed": True})}),
+             2: zipped({"solo/r/task1/f1_f2/result.json": json.dumps({"agent": {"status": "Error"}})})})
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", opener=github), 0)
+            artifacts.command_download(self.CONF, "t", self.tmp, opener=github)
+        self.assertTrue([url for url, _ in github.requests if url.endswith("/zip")][-1].endswith("artifacts/1/zip"))
+        line = json.loads(printed.getvalue().splitlines()[-1])
+        self.assertEqual((line["created_at"], line["attempts"]), ("2026-10-01T00:00:00Z", 2))
+        self.assertTrue((self.tmp / "t-solo-r-1-f1_f2" / "solo" / "r" / "task1" / "f1_f2" / "eval.json").is_file())
 
     def test_the_blob_store_is_asked_with_no_token(self):
         with mock.patch("sys.stdout", new_callable=io.StringIO):
-            artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", self.github)
+            artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", opener=self.github)
         for url, headers in self.github.requests:
             if url.startswith("https://blob.example/"):
                 self.assertNotIn("Authorization", headers)
             else:
                 self.assertEqual(headers.get("Authorization"), f"Bearer {self.CONF['token']}")
 
-    def test_an_api_failure_means_the_pair_runs(self):
+    def test_a_failed_read_is_its_own_answer_not_a_reason_to_run_the_pair(self):
         class Refusing:
             def open(self, request, timeout=None):
                 raise urllib.error.URLError("no route")
+
+        class Garbled(FakeGitHub):
+            def open(self, request, timeout=None):
+                if request.full_url.startswith("https://blob.example/"):
+                    return io.BytesIO(b"PK\x03\x04 not a zip")
+                return super().open(request, timeout)
         with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
-            self.assertEqual(artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", Refusing()), 1)
-        self.assertIn("the pair runs", printed.getvalue())
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2", opener=Refusing()), 2)
+            self.assertEqual(artifacts.command_finished(self.CONF, "t__solo__r__1__f1_f2",
+                                                        opener=Garbled(self.github.listed, {})), 2)
+        self.assertEqual(printed.getvalue().count("could not read the artifacts"), 2)
+
+    def test_fetch_unpacks_the_newest_of_the_name(self):
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(artifacts.command_fetch(self.CONF, "t__team__r__1__f1_f2", self.tmp, self.github), 0)
+            self.assertEqual(artifacts.command_fetch(self.CONF, "t__none__r__1__f1_f2", self.tmp, self.github), 1)
+        self.assertTrue((self.tmp / "t-team-r-1-f1_f2" / "team" / "r" / "task1" / "f1_f2" / "result.json").is_file())
+
+    def test_a_run_directory_is_checked_by_the_same_rule(self):
+        pair = self.tmp / "run" / "coop" / "r" / "task1" / "f1_f2"
+        pair.mkdir(parents=True)
+        (pair / "result.json").write_text(json.dumps({"agents": {"agent1": {"status": "Submitted"}}}))
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(artifacts.command_check_dir(self.tmp / "run"), 1)
+            (pair / "eval.json").write_text(json.dumps({"both_passed": True}))
+            self.assertEqual(artifacts.command_check_dir(self.tmp / "run"), 0)
+            self.assertEqual(artifacts.command_check_dir(self.tmp / "nowhere"), 1)
+
+    def test_the_markers_name_the_finished_items(self):
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            artifacts.command_list_finished(self.CONF, "t", self.github)
+        self.assertEqual(printed.getvalue().split(), ["t__solo__r__1__f1_f2"])
 
     def test_download_unpacks_the_newest_of_each_name_under_the_tag_into_run_directories(self):
         with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
-            artifacts.command_download(self.CONF, "t", self.tmp, self.github)
+            artifacts.command_download(self.CONF, "t", self.tmp, opener=self.github)
         lines = [json.loads(line) for line in printed.getvalue().splitlines()]
-        self.assertEqual([line["run_name"] for line in lines], ["t-sdlc-r-1-f1_f2", "t-solo-r-1-f1_f2"])
+        self.assertEqual([line["run_name"] for line in lines],
+                         ["t-sdlc-r-1-f1_f2", "t-solo-r-1-f1_f2", "t-survey-r-1", "t-team-r-1-f1_f2"])
         self.assertTrue((self.tmp / "t-solo-r-1-f1_f2" / "solo" / "r" / "task1" / "f1_f2" / "eval.json").is_file())
         self.assertTrue((self.tmp / "t-sdlc-r-1-f1_f2" / "sdlc" / "r" / "task1" / "f1_f2" / "result.json").is_file())
         self.assertFalse((self.tmp / "other-solo-r-1-f1_f2").exists())
+        self.assertFalse((self.tmp / "t-solo-r-1-f1_f2-done").exists())
+
+    def test_download_takes_another_tag_s_survey_and_goes_on_past_a_bad_artifact(self):
+        listed = self.github.listed + [
+            {"id": 9, "name": "s__survey__r__1", "created_at": "2026-10-02T00:00:00Z", "expired": False},
+            {"id": 10, "name": "s__solo__r__1__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False}]
+        zips = {**self.github.zips, 9: zipped({"r-1.json": "[]"}), 10: zipped({"x": "y"})}
+
+        class Gone(FakeGitHub):
+            def open(self, request, timeout=None):
+                if request.full_url.endswith("/artifacts/3/zip"):
+                    raise urllib.error.HTTPError(request.full_url, 410, "Gone", {}, None)
+                return super().open(request, timeout)
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            artifacts.command_download(self.CONF, "t", self.tmp, survey_tag="s", opener=Gone(listed, zips))
+        lines = [json.loads(line) for line in printed.getvalue().splitlines()]
+        self.assertEqual([line.get("run_name") for line in lines],
+                         ["s-survey-r-1", None, "t-solo-r-1-f1_f2", "t-survey-r-1", "t-team-r-1-f1_f2"])
+        self.assertIn("410", lines[1]["error"])
+        self.assertEqual(lines[1]["name"], "t__sdlc__r__1__f1_f2")
+        self.assertTrue((self.tmp / "s-survey-r-1" / "r-1.json").is_file())
+        self.assertFalse((self.tmp / "s-solo-r-1-f1_f2").exists())
+
+    def test_a_listing_cut_short_is_said(self):
+        many = [{"id": n, "name": f"u__solo__r__{n}__f1_f2", "created_at": "2026-10-02T00:00:00Z", "expired": False}
+                for n in range(artifacts.PAGE * artifacts.MOST_PAGES + 1)]
+        github = FakeGitHub(many, {})
+        found, cut = artifacts.list_artifacts(self.CONF, opener=github)
+        self.assertEqual((len(found), cut), (artifacts.PAGE * artifacts.MOST_PAGES, True))
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as printed:
+            artifacts.command_download(self.CONF, "none", self.tmp, opener=github)
+        self.assertIn("cut at 5000", json.loads(printed.getvalue().splitlines()[0])["warning"])
 
     def test_a_zip_that_escapes_its_directory_is_refused(self):
         with self.assertRaises(ValueError):
@@ -280,6 +450,12 @@ class SurveyReport(unittest.TestCase):
         self.assertIn("| pallets_click_task 2068 | all | 2/2 | 1.05 | 310 | 9.00 |", text)
         self.assertIn("1 of 3 tasks graded whole on the runner.", text)
         self.assertIsNone(survey_report.gradeable_features({"results": []}))
+        planned = tmp / "plan.json"
+        planned.write_text(json.dumps({"include": [{"repo": "pallets_click_task", "task": 2068},
+                                                   {"repo": "typst_task", "task": 6554}]}))
+        text = survey_report.render(survey_report.rows(tmp, "t", survey_report.planned_tasks(planned)))
+        self.assertIn("| typst_task 6554 | no artifact (the job ended before the check wrote its summary) | - |", text)
+        self.assertIn("1 of 4 tasks graded whole on the runner.", text)
 
 
 class FakeAgent(unittest.TestCase):
@@ -421,6 +597,25 @@ class EnvironmentGate(unittest.TestCase):
         self.assertIn("has a required reviewer", said)
         self.assertEqual(opener.requests[0].full_url, "https://api.example/repos/o/r/environments/bench")
 
+    def test_a_rule_against_self_review_with_the_actor_as_its_only_reviewer_stops_the_run(self):
+        def rule(prevent, *reviewers):
+            return {"name": "bench", "protection_rules": [
+                {"type": "required_reviewers", "prevent_self_review": prevent, "reviewers": list(reviewers)}]}
+        owner = {"type": "User", "reviewer": {"login": "owner"}}
+        other = {"type": "User", "reviewer": {"login": "other"}}
+        team = {"type": "Team", "reviewer": {"slug": "maintainers"}}
+        opener = self.Answers(rule(True, owner))
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(environment.command_check(self.CONF, "bench", opener, actor="owner"), 1)
+        self.assertIn("forbids self-review", out.getvalue())
+        for name, answer, actor in (("another reviewer", rule(True, owner, other), "owner"),
+                                    ("a team", rule(True, owner, team), "owner"),
+                                    ("self-review allowed", rule(False, owner), "owner"),
+                                    ("another actor", rule(True, owner), "other"),
+                                    ("no actor known", rule(True, owner), None)):
+            with self.subTest(case=name), mock.patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(environment.command_check(self.CONF, "bench", self.Answers(answer), actor=actor), 0)
+
     def test_a_missing_environment_or_one_with_no_reviewer_or_an_unreadable_one_stops_the_run(self):
         cases = {
             "no rules": {"name": "bench", "protection_rules": []},
@@ -460,9 +655,26 @@ class Workflow(unittest.TestCase):
         self.assertIn("uses: ./bench/cooperbench/actions/run-pair", self.workflow)
         self.assertTrue((ACTIONS / "run-pair" / "action.yml").is_file())
 
-    def test_the_real_jobs_wait_for_a_reviewer_and_queue_per_account_with_the_secret_by_name(self):
-        real = self.workflow[self.workflow.index("  run-real:"):self.workflow.index("  report:")]
-        self.assertIn("environment: bench", real)
+    def job(self, name):
+        """The text of one job of bench.yml, from its line to the next job's."""
+        start = self.workflow.index(f"\n  {name}:\n") + 1
+        rest = self.workflow[start + len(name) + 4:]
+        match = re.search(r"\n  [a-z-]+:\n", rest)
+        return self.workflow[start:start + len(name) + 4 + (match.start() if match else len(rest))]
+
+    def test_the_jobs_are_cut_at_their_own_lines(self):
+        self.assertTrue(self.job("run").startswith("  run:\n"))
+        self.assertIn("mode: fake", self.job("run"))
+        self.assertNotIn("run-real", self.job("run"))
+        self.assertNotIn("Plan the matrix", self.job("run"))
+        self.assertTrue(self.job("report").endswith("overwrite: true\n"))
+
+    def test_one_approval_gates_the_real_jobs_which_queue_per_account_with_the_secret_by_name(self):
+        approve, real = self.job("approve"), self.job("run-real")
+        self.assertIn("environment: bench", approve)
+        self.assertIn("if: needs.plan.outputs.mode == 'real'", approve)
+        self.assertNotIn("environment:", real)
+        self.assertIn("needs: [plan, approve]", real)
         self.assertIn("group: bench-${{ matrix.account }}", real)
         self.assertIn("queue: max", real)
         self.assertNotIn("cancel-in-progress", real)
@@ -471,23 +683,46 @@ class Workflow(unittest.TestCase):
         self.assertNotIn("secrets[", self.workflow)
         for slot in plan.SLOTS:
             self.assertIn(f"(matrix.account == '{slot}' && secrets.SYMPHONY_CLAUDE_{slot})", real)
-        self.assertNotIn("SYMPHONY_CLAUDE_9", real)
+            self.assertIn(f"HAS_SECRET_{slot}: ${{{{ secrets.SYMPHONY_CLAUDE_{slot} != '' }}}}", self.job("plan"))
+        self.assertNotIn("SYMPHONY_CLAUDE_9", self.workflow)
         self.assertIn("timeout-minutes: 330", real)
-        gate = self.workflow[self.workflow.index("\n  plan:"):self.workflow.index("\n  survey:")]
+        gate = self.job("plan")
         self.assertIn("if: steps.plan.outputs.mode == 'real'", gate)
         self.assertIn("run: python3 bench/cooperbench/actions/environment.py bench", gate)
-        fake = self.workflow[self.workflow.index("  run:"):self.workflow.index("  run-real:")]
+        self.assertIn("--list-finished", gate)
+        fake = self.job("run")
         self.assertNotIn("secrets", fake)
         self.assertNotIn("environment:", fake)
+        self.assertNotIn("concurrency:", fake)
         for text in (self.workflow, self.action):
             code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
             self.assertNotIn("ANTHROPIC_API_KEY", code)
+
+    def test_nothing_is_published_until_scrubbed_and_never_after_a_cancel(self):
+        for name in ("run", "run-real"):
+            with self.subTest(job=name):
+                job = self.job(name)
+                self.assertEqual(job.count("if: ${{ !cancelled() && steps.pair.outputs.publish == 'true' }}"), 1)
+                self.assertEqual(job.count("if: ${{ !cancelled() && steps.pair.outputs.finished == 'true' && "
+                                           "steps.upload.outcome == 'success' }}"), 1)
+                self.assertEqual(job.count("overwrite: true"), 2)
+                self.assertNotIn("if: always()", job)
+                self.assertIn("timeout_min: ${{ needs.plan.outputs.timeout_min }}", job)
+        self.assertIn("if: always()\n", self.job("report"))
+        action = "\n".join(line for line in self.action.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIn("if: ${{ !cancelled() && steps.finished.outputs.skip != 'true' }}", action)
+        self.assertIn("run: bash bench/cooperbench/actions/pair.sh", action)
+        self.assertIn("bash bench/cooperbench/actions/scrub.sh", action)
+        self.assertLess(action.index("artifacts.py finished"), action.index("free_disk.sh"))
+        self.assertLess(action.index("artifacts.py fetch"), action.index("run: bash bench/cooperbench/actions/pair.sh"))
 
     def test_the_workflow_reads_only_and_runs_a_pull_request_in_fake_mode(self):
         self.assertIn("permissions:\n  contents: read\n  actions: read\n", self.workflow)
         self.assertIn("pull_request:\n    paths:\n      - .github/workflows/bench.yml\n      - bench/cooperbench/**\n"
                       "      - coordbench/**", self.workflow)
-        self.assertIn("MODE: ${{ inputs.mode || 'fake' }}", self.workflow)
+        for name in ("MODE", "PAIRS", "ARMS", "TAG"):
+            self.assertIn(f"{name}: ${{{{ github.event_name == 'pull_request' && ", self.workflow)
+        self.assertNotIn("inputs.pairs ||", self.workflow)
         self.assertIn("vars.SYMPHONY_CLAUDE_ACCOUNTS", self.workflow)
         self.assertIn(f"COOPERBENCH_COMMIT: 63b9d44", self.workflow)
         pinned = re.findall(r"uses: ([a-z-]+/[a-z-]+)@(v\d+)", self.workflow + self.action)
@@ -496,9 +731,13 @@ class Workflow(unittest.TestCase):
 
     def test_the_artifact_names_are_the_planner_s(self):
         self.assertIn("name: ${{ matrix.artifact }}", self.workflow)
+        self.assertIn("name: ${{ matrix.artifact }}__done", self.workflow)
         self.assertIn("name: ${{ needs.plan.outputs.tag }}__survey__${{ matrix.repo }}__${{ matrix.task }}", self.workflow)
         self.assertIn("name: report-${{ needs.plan.outputs.tag }}-${{ github.run_id }}", self.workflow)
         self.assertEqual(plan.artifact_name("t", "solo", ("r", 1, (1, 2))), "t__solo__r__1__f1_f2")
+        self.assertEqual(artifacts.DONE_SUFFIX, "__done")
+        self.assertIn("SURVEY_TAG: ${{ inputs.survey_tag }}", self.job("report"))
+        self.assertIn("SURVEY_PLAN: ${{ needs.plan.outputs.survey }}", self.job("report"))
 
     def test_the_readme_and_the_plan_name_the_workflow_and_the_owner_s_settings(self):
         readme = (KIT / "README.md").read_text(encoding="utf-8")

@@ -123,7 +123,11 @@ error, not a result. The scrub reads the token's exact bytes in plain and
 gzip files only: an archive an agent packed (.tar.gz, .zip), a git
 object under a workspace kept with --keep, or the token encoded some
 other way, is outside it, as is the log of a hub started elsewhere
-(--hub), which is that hub's to keep.
+(--hub), which is that hub's to keep. `run.py scrub --run-dir DIR` runs
+the scrub once more over a run directory and reads every file back,
+archives' members included, and exits 2 when any still holds the token
+or could not be read; the workflow's jobs run it before an upload and
+publish nothing it refused.
 
 ## In GitHub Actions
 
@@ -139,43 +143,69 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
   images, the containers, the hub, the git server, the scorer and the
   artifacts) runs and no usage is spent. A pull request that changes the
   kit, the workflow or the runner runs one pair this way.
-- real: Claude Code on the owner's accounts. Every real job waits in the
-  environment bench until a reviewer approves the run; it reads its
+- real: Claude Code on the owner's accounts. One job, approve, waits in
+  the environment bench until a reviewer approves the dispatch, once;
+  every real job needs it and carries no environment of its own, since a
+  job that waits in the environment behind its concurrency group asks
+  for its own click when its turn comes. Each real job reads its
   account's token from the organization secret SYMPHONY_CLAUDE_<slot>,
   the slot a number from 1 to 8, and runs in the concurrency group of its
-  slot, one job at a
-  time, up to 100 waiting, first in first out as far as GitHub keeps it;
-  a dispatch holds at most 256 jobs, GitHub's limit on one matrix. The
-  100 is the group's across every dispatch, so a second dispatch while
-  the first still queues gets its jobs past that number cancelled by
-  GitHub: plan.py keeps each dispatch under it, and the next dispatch of
-  the same tag waits until the first has drained. The workflow names the
-  eight slots' secrets one by one rather than looking one up by a computed
-  name, which would hand the runner every secret the repository can see.
+  slot, one job at a time, up to 100 waiting, first in first out as far
+  as GitHub keeps it; a dispatch holds at most 256 jobs, GitHub's limit
+  on one matrix. The 100 is the group's across every dispatch, so a
+  second dispatch while the first still queues gets its jobs past that
+  number cancelled by GitHub: plan.py keeps each dispatch under it, and
+  the next dispatch of the same tag waits until the first has drained.
+  The workflow names the eight slots' secrets one by one rather than
+  looking one up by a computed name, which would hand the runner every
+  secret the repository can see. The approval gates this workflow's use
+  of the accounts and not the secrets themselves, which any workflow of
+  this repository, on any branch, may name: the secrets are shared with
+  this repository alone, and only people with write access run workflows
+  here.
 
 The owner sets up, once and in this order: the environment bench in this
 repository with the owner as a required reviewer, first, since a real
-dispatch before it exists would make the environment with no reviewer;
-the plan job reads the environment and refuses a real run until it has
-one (actions/environment.py), so nothing runs unapproved, and the run is
-dispatched again once the reviewer is set; then an organization secret
-SYMPHONY_CLAUDE_<slot> per account, the slot a number from 1 up (so
-SYMPHONY_CLAUDE_1 for the first account, SYMPHONY_CLAUDE_2 for the
-second, up to 8), its value from `claude setup-token` on that account,
-shared with this repository; and the repository variable
-SYMPHONY_CLAUDE_ACCOUNTS with the slots in use, separated by commas
-(`1,2,3` for three accounts). The token's value is never in a log: run.py passes
-it to the agents by name, and after each pair scrubs it out of every file
-the pair left (above).
+dispatch before it exists would make the environment with no reviewer
+(GitHub makes an environment a workflow names, so bench may already be
+there, with no rule, and then only needs its reviewer); the plan job
+reads the environment and refuses a real run until it has one who may
+approve this dispatch (actions/environment.py; a rule against
+self-review with the owner as its only reviewer refuses too), so nothing
+runs unapproved, and the run is dispatched again once the reviewer is
+set; then an organization secret SYMPHONY_CLAUDE_<slot> per account, the
+slot a number from 1 up (so SYMPHONY_CLAUDE_1 for the first account,
+SYMPHONY_CLAUDE_2 for the second, up to 8), its value from `claude
+setup-token` on that account, shared with this repository, which the
+plan job checks slot by slot before any job runs; and the repository
+variable SYMPHONY_CLAUDE_ACCOUNTS with the slots in use, separated by
+commas (`1,2,3` for three accounts). The token's value is never in a log:
+run.py passes it to the agents by name, after each pair scrubs it out of
+every file the pair left (above), and before anything is uploaded the
+job scrubs the pair's directory once more and reads every file back,
+archives included, publishing nothing that still holds it or could not
+be read.
 
 A dispatch names a tag; its artifacts are `<tag>__<arm>__<repo>__<task>__f1_f6`,
-kept 90 days, and a dispatch of the same tag skips every pair whose
-artifact holds a scored pair with no agent in Error, so a run that
-stopped on a usage limit is finished by dispatching it again. The pairs come from PLAN.md's list
+kept 90 days, with a marker `<name>__done` beside each finished one
+(scored, no agent in Error). A dispatch of the same tag plans no job for
+a pair whose marker is there and skips one whose artifact holds a
+finished pair, scores from its files a pair whose agents submitted but
+that was never scored, and runs again a pair that ended in Error, so a
+run that stopped on a usage limit is finished by dispatching it again;
+GitHub's "Re-run failed jobs" on the run does the same for its failed
+jobs, each re-run attempt replacing the attempt's artifact. A fake
+dispatch's artifacts carry the tag `fake-<tag>`, and a real dispatch
+refuses a tag that starts with `fake-` or `smoke-`, so a rehearsal never
+stands in for the benchmark. The pairs come from PLAN.md's list
 (`@bench/cooperbench/pairs.txt`), from `flash`, or from entries such as
-`pallets_click_task/2068`. The report is the artifact
-`report-<tag>-<run id>` and the job summary; METRICS.md says where each
-of the paper's statistics is in it.
+`pallets_click_task/2068`; an agent's minutes are the `timeout_min`
+input, 120 at most in real mode and 30 in fake. The report is the
+artifact `report-<tag>-<run id>`, the job summary and the report job's
+log; METRICS.md says where each of the paper's statistics is in it, and
+its Dataset section carries the runner survey's gradeability when the
+dispatch names the survey's tag (`survey_tag`), since the survey runs
+under a tag of its own.
 
 ## Steps, in the new session
 
