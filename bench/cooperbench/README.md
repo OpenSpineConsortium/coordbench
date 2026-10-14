@@ -141,25 +141,30 @@ the pairs' artifacts. It has three modes, chosen when it is dispatched:
   kit, the workflow or the runner runs one pair this way.
 - real: Claude Code on the owner's accounts. Every real job waits in the
   environment bench until a reviewer approves the run; it reads its
-  account's token from the organization secret SYMPHONY_CLAUDE_<account>
-  by name, and runs in the concurrency group of its account, one job at a
+  account's token from the organization secret SYMPHONY_CLAUDE_<slot>,
+  the slot a number from 1 to 8, and runs in the concurrency group of its
+  slot, one job at a
   time, up to 100 waiting, first in first out as far as GitHub keeps it;
   a dispatch holds at most 256 jobs, GitHub's limit on one matrix. The
   100 is the group's across every dispatch, so a second dispatch while
   the first still queues gets its jobs past that number cancelled by
   GitHub: plan.py keeps each dispatch under it, and the next dispatch of
-  the same tag waits until the first has drained.
+  the same tag waits until the first has drained. The workflow names the
+  eight slots' secrets one by one rather than looking one up by a computed
+  name, which would hand the runner every secret the repository can see.
 
 The owner sets up, once and in this order: the environment bench in this
 repository with the owner as a required reviewer, first, since a real
 dispatch before it exists would make the environment with no reviewer;
 the plan job reads the environment and refuses a real run until it has
 one (actions/environment.py), so nothing runs unapproved, and the run is
-dispatched again once the reviewer is set; then an organization secret SYMPHONY_CLAUDE_<NAME> per
-account (the name letters, digits and underscores), its value from
-`claude setup-token` on that account, shared with this repository; and
-the repository variable SYMPHONY_CLAUDE_ACCOUNTS with the names,
-separated by commas. The token's value is never in a log: run.py passes
+dispatched again once the reviewer is set; then an organization secret
+SYMPHONY_CLAUDE_<slot> per account, the slot a number from 1 up (so
+SYMPHONY_CLAUDE_1 for the first account, SYMPHONY_CLAUDE_2 for the
+second, up to 8), its value from `claude setup-token` on that account,
+shared with this repository; and the repository variable
+SYMPHONY_CLAUDE_ACCOUNTS with the slots in use, separated by commas
+(`1,2,3` for three accounts). The token's value is never in a log: run.py passes
 it to the agents by name, and after each pair scrubs it out of every file
 the pair left (above).
 

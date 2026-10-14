@@ -15,12 +15,12 @@ name: Bench
 #   waits in the environment bench until a reviewer approves the run
 #   (the plan job refuses a real run while that environment has no
 #   required reviewer, actions/environment.py), takes its account's
-#   token from the organization secret SYMPHONY_CLAUDE_<account> and
-#   runs in the concurrency group of that account, so one account runs
-#   one job at a time and up to 100 wait, first in first out as far as
-#   GitHub keeps it; the accounts are the variable
-#   SYMPHONY_CLAUDE_ACCOUNTS (names separated by commas or blanks)
-#   unless the dispatch names them.
+#   token from the organization secret SYMPHONY_CLAUDE_<slot>, the slot
+#   a number from 1 to 8, and runs in the concurrency group of that
+#   slot, so one account runs one job at a time and up to 100 wait,
+#   first in first out as far as GitHub keeps it; the slots in use are
+#   the variable SYMPHONY_CLAUDE_ACCOUNTS (numbers separated by commas
+#   or blanks) unless the dispatch names them.
 # A pair's files are one artifact, kept 90 days, named
 # <tag>__<arm>__<repo>__<task>__f1_f6; a dispatch of the same tag skips
 # every pair whose artifact holds a scored pair with no agent in Error,
@@ -44,7 +44,7 @@ on:
         description: the arms, from solo coop coop-nocomm coop-git team sdlc
         default: solo,coop,coop-git,team,sdlc
       accounts:
-        description: real mode, the accounts' names (default the variable SYMPHONY_CLAUDE_ACCOUNTS)
+        description: real mode, the account slots to use, from 1 to 8 (default the variable SYMPHONY_CLAUDE_ACCOUNTS)
         default: ""
       model:
         default: claude-sonnet-5-5
@@ -187,7 +187,22 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets[format('SYMPHONY_CLAUDE_{0}', matrix.account)] }}
+      # The slot's secret by a fixed name: a secret looked up by a computed
+      # name, as a format() of the account would, hands the runner every secret the
+      # repository can see, which CodeQL flags; a chain of fixed names
+      # hands it only these eight, and only the slot's own is non-empty.
+      CLAUDE_CODE_OAUTH_TOKEN: >-
+        ${{
+        (matrix.account == '1' && secrets.SYMPHONY_CLAUDE_1) ||
+        (matrix.account == '2' && secrets.SYMPHONY_CLAUDE_2) ||
+        (matrix.account == '3' && secrets.SYMPHONY_CLAUDE_3) ||
+        (matrix.account == '4' && secrets.SYMPHONY_CLAUDE_4) ||
+        (matrix.account == '5' && secrets.SYMPHONY_CLAUDE_5) ||
+        (matrix.account == '6' && secrets.SYMPHONY_CLAUDE_6) ||
+        (matrix.account == '7' && secrets.SYMPHONY_CLAUDE_7) ||
+        (matrix.account == '8' && secrets.SYMPHONY_CLAUDE_8) ||
+        ''
+        }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./bench/cooperbench/actions/run-pair

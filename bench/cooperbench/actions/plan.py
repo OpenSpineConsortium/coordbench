@@ -38,8 +38,10 @@ ARMS = ("solo", "coop", "coop-git", "team", "sdlc")
 QUEUE_LIMIT = 100
 # GitHub runs at most this many jobs from one matrix, in any mode.
 MATRIX_LIMIT = 256
-# An account's name is part of its secret's name, SYMPHONY_CLAUDE_<name>.
-ACCOUNT = re.compile(r"[A-Za-z0-9_]{1,80}")
+# An account is a slot, 1 to 8, whose token is the secret
+# SYMPHONY_CLAUDE_<slot>; the workflow names the eight secrets one by one,
+# since a secret looked up by a computed name hands the runner them all.
+SLOTS = tuple(str(n) for n in range(1, 9))
 ENTRY = re.compile(r"^(?P<repo>[A-Za-z0-9_]+)/(?P<task>\d{1,9})(?:/f?(?P<first>\d{1,4})_f?(?P<second>\d{1,4}))?$")
 SEPARATORS = re.compile(r"[,\s]+")
 
@@ -157,8 +159,9 @@ def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag):
         raise ValueError("a real run names at least one account (the accounts input, or the variable "
                          "SYMPHONY_CLAUDE_ACCOUNTS)")
     for account in accounts:
-        if not ACCOUNT.fullmatch(account):
-            raise ValueError(f"an account's name is letters, digits and underscores, as its secret's name is: {account!r}")
+        if mode == "real" and account not in SLOTS:
+            raise ValueError(f"an account is a slot from 1 to 8, the number in its secret's name SYMPHONY_CLAUDE_<slot>: "
+                             f"{account!r}")
     items, dropped = plan_items(pairs, arms, accounts, tag, QUEUE_LIMIT if mode == "real" else 0)
     notes = []
     if dropped:

@@ -63,7 +63,7 @@ class Planner(unittest.TestCase):
                 plan.chosen_pairs(self.dataset, bad)
 
     def test_a_pair_s_arms_share_one_account_and_the_arm_order_rotates(self):
-        result = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "alpha beta", "t1")
+        result = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "1 2", "t1")
         items = result["items"]
         self.assertEqual(len(items), 18)
         by_pair = {}
@@ -75,8 +75,8 @@ class Planner(unittest.TestCase):
         second = [a["arm"] for a in by_pair[("pallets_click_task", 2068, "f2_f10")]]
         self.assertEqual(first, ["solo", "coop", "sdlc"])
         self.assertEqual(second, ["coop", "sdlc", "solo"])
-        self.assertEqual(by_pair[("pallets_click_task", 2068, "f1_f6")][0]["account"], "alpha")
-        self.assertEqual(by_pair[("pallets_click_task", 2068, "f2_f10")][0]["account"], "beta")
+        self.assertEqual(by_pair[("pallets_click_task", 2068, "f1_f6")][0]["account"], "1")
+        self.assertEqual(by_pair[("pallets_click_task", 2068, "f2_f10")][0]["account"], "2")
         self.assertEqual(items[0]["name"], "t1-solo-pallets_click_task-2068-f1_f6")
         self.assertEqual(items[0]["artifact"], "t1__solo__pallets_click_task__2068__f1_f6")
         self.assertEqual(artifacts.run_name_of(items[0]["artifact"]), items[0]["name"])
@@ -101,11 +101,11 @@ class Planner(unittest.TestCase):
         (Path(self.dataset) / "subsets" / "flash.json").write_text(json.dumps(many), encoding="utf-8")
         fake = plan.plan(self.dataset, "fake", "flash", "solo,coop", "", "t")
         self.assertEqual((len(fake["items"]), fake["dropped"]), (240, 0))
-        real = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "one", "t")
+        real = plan.plan(self.dataset, "real", "flash", "solo,coop,sdlc", "1", "t")
         self.assertEqual((len(real["items"]), real["dropped"]), (100, 260))
         self.assertIn("256 jobs from one matrix and queues at most 100 per account", real["notes"][0])
         with self.assertRaises(ValueError):
-            plan.plan(self.dataset, "real", "flash", "solo", "one, two-three", "t")
+            plan.plan(self.dataset, "real", "flash", "solo", "1, nine", "t")
 
     def test_a_real_run_needs_accounts_and_the_other_modes_do_not(self):
         with self.assertRaises(ValueError):
@@ -466,7 +466,12 @@ class Workflow(unittest.TestCase):
         self.assertIn("group: bench-${{ matrix.account }}", real)
         self.assertIn("queue: max", real)
         self.assertNotIn("cancel-in-progress", real)
-        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets[format('SYMPHONY_CLAUDE_{0}', matrix.account)] }}", real)
+        # Each slot's secret by its fixed name, never one looked up by a
+        # computed name, which hands the runner every secret.
+        self.assertNotIn("secrets[", self.workflow)
+        for slot in plan.SLOTS:
+            self.assertIn(f"(matrix.account == '{slot}' && secrets.SYMPHONY_CLAUDE_{slot})", real)
+        self.assertNotIn("SYMPHONY_CLAUDE_9", real)
         self.assertIn("timeout-minutes: 330", real)
         gate = self.workflow[self.workflow.index("\n  plan:"):self.workflow.index("\n  survey:")]
         self.assertIn("if: steps.plan.outputs.mode == 'real'", gate)
