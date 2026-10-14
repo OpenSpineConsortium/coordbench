@@ -409,7 +409,8 @@ class RecordingDriver:
 class StreamingDriver(RecordingDriver):
     """A driver whose agents stream to the host until their containers
     are removed, as the claude-cli driver's docker exec does: each
-    stream's thread writes its last line, the credential in it, once
+    stream's thread writes its last line, the stand-in for the credential
+    in it (the test puts PLANTED in the environment as the token), once
     docker rm -f names its container, and then ends. Each join says
     whether the removal came first, the order a teardown needs: a join
     before it waits out its timeout while the agent still streams."""
@@ -434,7 +435,7 @@ class StreamingDriver(RecordingDriver):
             while not driver.removed(job.container) and time.time() < deadline:
                 time.sleep(0.01)
             with open(job.log_path, "a", encoding="utf-8") as stream:
-                stream.write(f"my environment: CLAUDE_CODE_OAUTH_TOKEN={SECRET}\n")
+                stream.write(f"my environment: CLAUDE_CODE_OAUTH_TOKEN={PLANTED}\n")
 
         class Stream(threading.Thread):
             def join(self, timeout=None):
@@ -1021,11 +1022,16 @@ class Provisioning(RunnerCase):
         self.assertEqual(self.scorer.calls, [])
         self.assertFalse(runner.pair_finished(self.pair()))
 
+    def planting(self):
+        """The stand-in as the agents' token, so the scrub replaces it
+        wherever a test or a stream writes it."""
+        return mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED})
+
     def assert_streams_scrubbed(self, count):
         streams = sorted(self.pair().glob("*_stream.jsonl"))
         self.assertEqual(len(streams), count)
         for stream in streams:
-            self.assertNotIn(SECRET, stream.read_text())
+            self.assertNotIn(PLANTED, stream.read_text())
             self.assertIn(runner.SCRUBBED, stream.read_text())
 
     def test_a_failure_whose_own_record_fails_still_stops_the_agents_before_the_scrub(self):
@@ -1039,7 +1045,7 @@ class Provisioning(RunnerCase):
         full = OSError(28, "No space left on device")
         with mock.patch.object(runner, "save_plan", side_effect=full), \
                 mock.patch.object(runner, "write_outputs", side_effect=full), \
-                contextlib.redirect_stderr(io.StringIO()) as err:
+                self.planting(), contextlib.redirect_stderr(io.StringIO()) as err:
             with self.assertRaises(runner.PairFailed):
                 self.prepare("coop", driver=driver)
         self.assertIn("recording the failure failed too: OSError", err.getvalue())
@@ -1052,7 +1058,7 @@ class Provisioning(RunnerCase):
         never before the teardown and the scrub."""
         driver = StreamingDriver(self.docker)
         with mock.patch.object(runner, "save_plan", side_effect=OSError(28, "No space left on device")), \
-                mock.patch.object(runner, "say", side_effect=BrokenPipeError(32, "Broken pipe")):
+                mock.patch.object(runner, "say", side_effect=BrokenPipeError(32, "Broken pipe")), self.planting():
             with self.assertRaises(OSError):
                 self.prepare("coop", driver=driver)
         self.assertEqual(driver.joined_after_removal, [True, True])
@@ -1064,7 +1070,7 @@ class Provisioning(RunnerCase):
         for its stream and scrubs it, as finish_pair does however it ends;
         and the run on the hub is closed."""
         driver = StreamingDriver(self.docker, refuse_after=1)
-        with self.assertRaises(KeyboardInterrupt), quietly():
+        with self.assertRaises(KeyboardInterrupt), self.planting(), quietly():
             self.prepare("coop", driver=driver)
         self.assertEqual(driver.joined_after_removal, [True])
         self.assert_streams_scrubbed(1)
@@ -1075,12 +1081,12 @@ class Provisioning(RunnerCase):
 
         def provision_then_interrupt(plan, agent, hub, options):
             if agent is plan["agents"][1]:
-                (Path(plan["run_dir"]) / "provisioned.log").write_text(f"token {SECRET}\n")
+                (Path(plan["run_dir"]) / "provisioned.log").write_text(f"token {PLANTED}\n")
                 raise KeyboardInterrupt
             return real(plan, agent, hub, options)
 
         with mock.patch.object(runner, "provision_agent", side_effect=provision_then_interrupt), \
-                self.assertRaises(KeyboardInterrupt), quietly():
+                self.assertRaises(KeyboardInterrupt), self.planting(), quietly():
             self.prepare("coop")
         started = [args[3] for args in self.docker.matching("run", "-d", "--name")]
         self.assertEqual(len(started), 1)
