@@ -49,6 +49,11 @@ REAL_START_HUB = runner.start_hub
 # real credential, so the repository's own secret check lets them be.
 SECRET = "coordbench-fake-oauth-token-7f3a9c2e51d0"
 ADMIN_SECRET = "coordbench-fake-admin-token-4b8d1e6a90c3"
+# What the scrub tests plant in a pair's files in the token's place, so
+# they can see it found and replaced: a stand-in, not a credential, and
+# named for what it is, since a scanner reads a name like SECRET written to
+# a file as a leak.
+PLANTED = "coordbench-planted-stand-in-7f3a9c2e51d0"
 AGENT_SECRET = "coordbench-fake-agent-token-2c7e5a1f93b6"
 BASE = "0123456789abcdef0123456789abcdef01234567"
 GIT_EMAIL = "agent@cooperbench.local"
@@ -2794,16 +2799,16 @@ class Scrubbing(unittest.TestCase):
     def test_every_file_under_the_directories_is_rewritten_and_the_rest_left_alone(self):
         deep = self.tmp / "pair" / "deep"
         deep.mkdir(parents=True)
-        (deep / "stream.jsonl").write_text(f"a {SECRET} b\n")
+        (deep / "stream.jsonl").write_text(f"a {PLANTED} b\n")
         (self.tmp / "pair" / "clean.txt").write_text("nothing here\n")
         with gzip.open(self.tmp / "pair" / "trajectory.json.gz", "wb") as packed:
-            packed.write(f'{{"text": "{SECRET}"}}'.encode())
+            packed.write(f'{{"text": "{PLANTED}"}}'.encode())
         (self.tmp / "hub").mkdir()
-        (self.tmp / "hub" / "events.log").write_bytes(b"\x00" + SECRET.encode() + b"\xff")
-        (self.tmp / "elsewhere.txt").write_text(SECRET + "\n")
+        (self.tmp / "hub" / "events.log").write_bytes(b"\x00" + PLANTED.encode() + b"\xff")
+        (self.tmp / "elsewhere.txt").write_text(PLANTED + "\n")
         before = (self.tmp / "pair" / "clean.txt").stat().st_mtime_ns
         rewritten = runner.scrub_credentials([self.tmp / "pair", self.tmp / "hub", self.tmp / "missing"],
-                                             values=[SECRET])
+                                             values=[PLANTED])
         self.assertEqual(sorted(str(path.relative_to(self.tmp)) for path in rewritten),
                          ["hub/events.log", "pair/deep/stream.jsonl", "pair/trajectory.json.gz"])
         self.assertEqual((deep / "stream.jsonl").read_text(), f"a {runner.SCRUBBED} b\n")
@@ -2812,72 +2817,79 @@ class Scrubbing(unittest.TestCase):
         self.assertEqual((self.tmp / "hub" / "events.log").read_bytes(),
                          b"\x00" + runner.SCRUBBED.encode() + b"\xff")
         self.assertEqual((self.tmp / "pair" / "clean.txt").stat().st_mtime_ns, before)
-        self.assertEqual((self.tmp / "elsewhere.txt").read_text(), SECRET + "\n")
+        self.assertEqual((self.tmp / "elsewhere.txt").read_text(), PLANTED + "\n")
 
     def test_the_values_come_from_the_token_s_names_longest_first_and_short_ones_are_ignored(self):
-        environ = {"CLAUDE_CODE_OAUTH_TOKEN": SECRET, "COORDBENCH_CLAUDE_TOKEN": SECRET + "-longer",
+        environ = {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED, "COORDBENCH_CLAUDE_TOKEN": PLANTED + "-longer",
                    "COORD_ADMIN_TOKEN": ADMIN_SECRET}
-        self.assertEqual(runner.credential_values(environ), [SECRET + "-longer", SECRET])
+        self.assertEqual(runner.credential_values(environ), [PLANTED + "-longer", PLANTED])
         self.assertEqual(runner.credential_values({"CLAUDE_CODE_OAUTH_TOKEN": "short"}), [])
         self.assertEqual(runner.credential_values({}), [])
         (self.tmp / "file.txt").write_text("short text\n")
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "short"}, clear=False):
             self.assertEqual(runner.scrub_credentials([self.tmp]), [])
         self.assertEqual((self.tmp / "file.txt").read_text(), "short text\n")
-        self.assertEqual(runner.scrub_bytes(b"x" + SECRET.encode() + b"-longer", [SECRET + "-longer", SECRET]),
+        self.assertEqual(runner.scrub_bytes(b"x" + PLANTED.encode() + b"-longer", [PLANTED + "-longer", PLANTED]),
                          b"x" + runner.SCRUBBED.encode())
 
     def test_a_symlink_is_not_followed(self):
         outside = self.tmp / "outside.txt"
-        outside.write_text(SECRET + "\n")
+        outside.write_text(PLANTED + "\n")
         inside = self.tmp / "pair"
         inside.mkdir()
         (inside / "link.txt").symlink_to(outside)
-        self.assertEqual(runner.scrub_credentials([inside], values=[SECRET]), [])
-        self.assertEqual(outside.read_text(), SECRET + "\n")
+        self.assertEqual(runner.scrub_credentials([inside], values=[PLANTED]), [])
+        self.assertEqual(outside.read_text(), PLANTED + "\n")
 
     def test_an_archive_is_left_whole_and_an_earlier_attempt_is_scrubbed_before_it_is_packed(self):
         run_dir = self.tmp / "pair"
         run_dir.mkdir()
-        (run_dir / "a.txt").write_text(f"token {SECRET}\n")
+        (run_dir / "a.txt").write_text(f"token {PLANTED}\n")
         (run_dir / "b.txt").write_text("clean\n")
         stray = self.tmp / "pair" / "agent-made.tar.gz"
         with tarfile.open(stray, "w:gz") as bundle:
             bundle.add(run_dir / "a.txt", arcname="a.txt")
         stray_bytes = stray.read_bytes()
-        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": SECRET}, clear=False):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False):
             archive = runner.set_aside_earlier_attempt(run_dir)
         with tarfile.open(archive) as bundle:
             self.assertEqual(sorted(bundle.getnames()), ["a.txt", "agent-made.tar.gz", "b.txt"])
             self.assertEqual(bundle.extractfile("a.txt").read(), f"token {runner.SCRUBBED}\n".encode())
             self.assertEqual(bundle.extractfile("agent-made.tar.gz").read(), stray_bytes)
         archive_bytes = archive.read_bytes()
-        self.assertEqual(runner.scrub_credentials([run_dir], values=[SECRET]), [])
+        self.assertEqual(runner.scrub_credentials([run_dir], values=[PLANTED]), [])
         self.assertEqual(archive.read_bytes(), archive_bytes)
         self.assertFalse((run_dir / "a.txt").exists())
 
     def test_a_scrubbed_gzip_has_no_name_and_no_time_in_its_header(self):
         path = self.tmp / "trajectory.json.gz"
-        path.write_bytes(gzip.compress(f'{{"text": "{SECRET}"}}'.encode(), mtime=0))
-        self.assertEqual(runner.scrub_credentials([self.tmp], values=[SECRET]), [path])
+        path.write_bytes(gzip.compress(f'{{"text": "{PLANTED}"}}'.encode(), mtime=0))
+        self.assertEqual(runner.scrub_credentials([self.tmp], values=[PLANTED]), [path])
         header = path.read_bytes()[:10]
-        self.assertEqual(header[4:8], b"\x00\x00\x00\x00")
-        self.assertEqual(header[3] & 0x08, 0)
-        self.assertEqual(path.read_bytes(), gzip.compress(f'{{"text": "{runner.SCRUBBED}"}}'.encode(), mtime=0))
+        self.assertEqual(header[4:8], b"\x00\x00\x00\x00")  # no time
+        self.assertEqual(header[3] & 0x08, 0)  # no name
+        self.assertEqual(gzip.decompress(path.read_bytes()), f'{{"text": "{runner.SCRUBBED}"}}'.encode())
+        # The same content scrubbed twice gives the same bytes, whatever
+        # the Python's gzip writes in the operating-system byte.
+        path.write_bytes(gzip.compress(f'{{"text": "{PLANTED}"}}'.encode(), mtime=0))
+        first = path.read_bytes() if not runner.scrub_credentials([self.tmp], values=[PLANTED]) else path.read_bytes()
+        path.write_bytes(gzip.compress(f'{{"text": "{PLANTED}"}}'.encode(), mtime=0))
+        runner.scrub_credentials([self.tmp], values=[PLANTED])
+        self.assertEqual(path.read_bytes(), first)
 
     def test_a_broken_gzip_is_said_and_the_other_files_are_still_scrubbed(self):
-        (self.tmp / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00" + SECRET.encode())
-        (self.tmp / "stream.jsonl").write_text(SECRET + "\n")
+        (self.tmp / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00" + PLANTED.encode())
+        (self.tmp / "stream.jsonl").write_text(PLANTED + "\n")
         with contextlib.redirect_stderr(io.StringIO()) as err:
-            rewritten = runner.scrub_credentials([self.tmp], values=[SECRET])
+            rewritten = runner.scrub_credentials([self.tmp], values=[PLANTED])
         self.assertEqual(rewritten, [self.tmp / "stream.jsonl"])
         self.assertIn("scrubbing", err.getvalue())
         self.assertIn("broken.gz", err.getvalue())
         self.assertEqual((self.tmp / "stream.jsonl").read_text(), runner.SCRUBBED + "\n")
 
     def test_a_file_that_cannot_be_rewritten_fails_the_scrub_once_the_rest_is_done(self):
-        (self.tmp / "a_stream.jsonl").write_text(SECRET + "\n")
-        (self.tmp / "b_stream.jsonl").write_text(SECRET + "\n")
+        (self.tmp / "a_stream.jsonl").write_text(PLANTED + "\n")
+        (self.tmp / "b_stream.jsonl").write_text(PLANTED + "\n")
         real = runner.write_scrubbed
 
         def refusing(path, cleaned):
@@ -2887,7 +2899,7 @@ class Scrubbing(unittest.TestCase):
 
         with mock.patch.object(runner, "write_scrubbed", refusing):
             with self.assertRaises(runner.CredentialKept) as caught:
-                runner.scrub_credentials([self.tmp], values=[SECRET])
+                runner.scrub_credentials([self.tmp], values=[PLANTED])
         self.assertIn("a_stream.jsonl", str(caught.exception))
         self.assertIn("could not be rewritten", str(caught.exception))
         self.assertEqual((self.tmp / "b_stream.jsonl").read_text(), runner.SCRUBBED + "\n")
@@ -2900,20 +2912,20 @@ class Scrubbing(unittest.TestCase):
         run_dir.mkdir(parents=True)
         for path in (run_dir / "stream.jsonl", hub / "mine" / "events.jsonl", hub / "other" / "events.jsonl",
                      hub / "hub.log"):
-            path.write_text(SECRET + "\n")
+            path.write_text(PLANTED + "\n")
         plan = {"log_dir": str(self.tmp), "run_name": "run", "run_dir": str(run_dir), "run_id": "mine"}
-        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": SECRET}, clear=False):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False):
             with contextlib.redirect_stderr(io.StringIO()) as err:
                 runner.scrub_pair(plan)
             self.assertIn("was in 2 files", err.getvalue())
             self.assertEqual((run_dir / "stream.jsonl").read_text(), runner.SCRUBBED + "\n")
             self.assertEqual((hub / "mine" / "events.jsonl").read_text(), runner.SCRUBBED + "\n")
-            self.assertEqual((hub / "other" / "events.jsonl").read_text(), SECRET + "\n")
-            self.assertEqual((hub / "hub.log").read_text(), SECRET + "\n")
+            self.assertEqual((hub / "other" / "events.jsonl").read_text(), PLANTED + "\n")
+            self.assertEqual((hub / "hub.log").read_text(), PLANTED + "\n")
             with contextlib.redirect_stderr(io.StringIO()):
                 runner.scrub_hub(hub)
             self.assertEqual((hub / "hub.log").read_text(), runner.SCRUBBED + "\n")
-            self.assertEqual((hub / "other" / "events.jsonl").read_text(), SECRET + "\n")
+            self.assertEqual((hub / "other" / "events.jsonl").read_text(), PLANTED + "\n")
 
 
 if __name__ == "__main__":
