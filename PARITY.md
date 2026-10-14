@@ -1098,9 +1098,11 @@ scaffolding, leadership, ownership).** Status: not measured.
 - coordbench: the sdlc arm makes commitments checkable by construction
   (coordbench/arms/sdlc/arm.py: claims, pull requests, the merge gate), and
   its metrics count claims, prs_opened, merge_attempts, merges,
-  merge_conflicts and time_to_first_merge_seconds in result.json.
-- Left undone: report.py does not yet set those counters beside the
-  emergent rates. Free; not built.
+  merge_conflicts and time_to_first_merge_seconds in metrics.json and in
+  result.json's metrics block, and report.py's Coordination section sums
+  them per arm beside the emergent rates, with the team arm's board
+  (tasks, time to first claim, claims and updates) in a second table.
+- Left undone: nothing; the paper has no figure for either count.
 
 ## Trajectory files
 
@@ -1967,8 +1969,7 @@ ones a live run would lose first.
   the coop-planned arm (row 130) and a paper-era prompt variant (row 131).
 - check_combined.py and per-image gradeability in config.json (M3); the
   scorer-side gold-conflict recompute (row 18).
-- In the report: the sdlc counters beside the emergent rates (row 97) and
-  the LimitsExceeded share (row 129).
+- In the report: the LimitsExceeded share (row 129).
 - The coord-<tool> wrappers on the bash surface (row 131), and restricting
   a session subagent's tools to its workspace (row 132).
 - Exported trajectories are keyed by model, arm and driver. Within one
@@ -2066,7 +2067,7 @@ judge's model-judged sections, a cause draft and the resolver call a model.
 | CooperBench's own runner on the same pairs | `bash bench/cooperbench/run_arms.sh REPO TASK [solo coop coop-git team coop-nocomm]` | the agents' own |
 | Rescoring old pairs (adds the cascade) | `python3 coordbench/run.py rescore --run-dir RUN_DIR [--force] [--cooperbench-dir DIR] [--dataset-dir DIR]`, coordbench's `cooperbench eval`: every pair below RUN_DIR without eval.json, or whose merged eval.json has no cascade (every pair with --force), is scored from its patches and plan.json; it starts no hub, container or agent whatever state a pair is in (`run.py run` would run an unfinished pair's agents again), and leaves config.json, result.json and summary.json as the run wrote them | none, but the resolver's when its endpoint is set |
 | The learned resolver's step | set COORDBENCH_RESOLVER_URL (and COORDBENCH_RESOLVER_MODEL, COORDBENCH_RESOLVER_KEY) before the run or the rescoring | up to four per conflict region (three retries, as 59bbf65's litellm num_retries=3), on that endpoint |
-| Rates, gaps, git ablation, pass routes, conflicts, cascade table, agent alone, communication, references, speech-act ratios, failure-mode rates, difficulty, dataset splits, against the published runs | `python3 bench/cooperbench/report.py --run LABEL=RUN ... [--published WEBSITE/public/static/data/coop/index.json] [--difficulty-out difficulty.json]` | none |
+| Rates, gaps, git ablation, pass routes, conflicts, cascade table, agent alone, communication, references, speech-act ratios, the protocol's own counters (sdlc and team), failure-mode rates, difficulty, dataset splits, against the published runs | `python3 bench/cooperbench/report.py --run LABEL=RUN ... [--published WEBSITE/public/static/data/coop/index.json] [--difficulty-out difficulty.json]` | none |
 | Difficulty alone | `python3 bench/cooperbench/difficulty.py --solo RUN [--solo RUN2] --arm coop=RUN ... --out difficulty.json` | none |
 | Dataset composition, complexity, gold conflicts, version, audit, gradeability | `python3 bench/cooperbench/dataset_stats.py [--cooperbench-dir DIR] [--json out.json]`; gradeability reports from `bash bench/cooperbench/survey.sh` or `prepare_task.sh` | none (Docker compute for gradeability) |
 | Free cross-checks (heuristics, git-setting detectors, App D checks) | `python3 coordbench/judge.py heuristics RUN_DIR` | none |
