@@ -683,6 +683,12 @@ def scrub_text(text, values):
     return text
 
 
+def why(problem):
+    """An error's message, or its type's name for one that has none (a
+    bare EOFError from zipfile), so a line never says why with nothing."""
+    return str(problem) or type(problem).__name__
+
+
 def is_archive(path):
     return path.name.endswith(ARCHIVE_SUFFIXES)
 
@@ -690,14 +696,18 @@ def is_archive(path):
 def read_for_scrub(path):
     """A file's bytes, a .gz file's inflated: at most LARGEST_EXPANSION of
     them, past which the file is left whole for the read-back, which
-    refuses it, rather than let it take the runner's memory."""
-    if path.suffix == ".gz":
-        with gzip.open(path, "rb") as source:
-            data = source.read(LARGEST_EXPANSION + 1)
-        if len(data) > LARGEST_EXPANSION:
-            raise ValueError("it inflates to more than the scrub reads")
-        return data
-    return path.read_bytes()
+    refuses it, rather than let it take the runner's memory. A .gz is read
+    a step at a time, since gzip's read(n) sets n bytes aside before it
+    reads any."""
+    if path.suffix != ".gz":
+        return path.read_bytes()
+    data = bytearray()
+    with gzip.open(path, "rb") as source:
+        while part := source.read(EXPANSION_STEP):
+            data += part
+            if len(data) > LARGEST_EXPANSION:
+                raise ValueError("it inflates to more than the scrub reads")
+    return data
 
 
 def write_scrubbed(path, cleaned):
@@ -713,13 +723,14 @@ def write_scrubbed(path, cleaned):
 
 def scrub_file(path, values):
     """True when the file held a credential and was rewritten; an archive
-    is left whole (ARCHIVE_SUFFIXES, CONTAINERS). A file that holds the
-    credential and cannot be rewritten raises CredentialKept, since a
-    pair's files may be published and must not carry it."""
+    is left whole (ARCHIVE_SUFFIXES, CONTAINERS, holds_members). A file
+    that holds the credential and cannot be rewritten raises
+    CredentialKept, since a pair's files may be published and must not
+    carry it."""
     if is_archive(path):
         return False
     data = read_for_scrub(path)
-    if CONTAINERS.intersection(packed_kinds(data)):
+    if any(holds_members(kind, data) for kind in CONTAINERS.intersection(packed_kinds(data))):
         return False
     cleaned = scrub_bytes(data, values)
     if cleaned == data:
@@ -739,15 +750,15 @@ def scrub_paths(paths, values):
     scrubbed and then CredentialKept names them all."""
     rewritten, kept = [], []
     for path in paths:
-        if not path.is_file() or path.is_symlink():
-            continue
         try:
+            if path.is_symlink() or not path.is_file():
+                continue
             if scrub_file(path, values):
                 rewritten.append(path)
         except CredentialKept as problem:
             kept.append(str(problem))
         except (OSError, EOFError, ValueError, zlib.error) as problem:
-            say(scrub_text(f"scrubbing {path} failed: {problem}", values))
+            say(scrub_text(f"scrubbing {path} failed: {why(problem)}", values))
     if kept:
         raise CredentialKept("\n".join(kept))
     return rewritten
@@ -786,15 +797,18 @@ INFLATE_CHUNK = 64 * 1024
 LARGEST_OBJECT = 1 << 30
 # The most the read-back takes out of a run directory, every file and
 # every layer together: what it inflates, what it reads out of members,
-# and ITEM_COST for each stream, member or object it opens, so a file of
-# many tiny streams costs as much as one that inflates far; and how many
-# layers deep it opens. A pair's own files come to megabytes, so a
+# ITEM_COST for each stream, member or object it opens, so a file of many
+# tiny streams costs as much as one that inflates far, and INSTRUCTION_COST
+# for each instruction of a delta, which may make a byte a turn; and how
+# many layers deep it opens. A pair's own files come to megabytes, so a
 # directory past either is refused as unreadable rather than let a small
-# file that unpacks without end take the runner's memory or time. What
-# a layer gives is grown in place, so the memory it takes is about what
-# the budget let it unpack.
+# file that unpacks without end take the runner's memory or time. What a
+# layer gives is grown in place and a container is read where it lies
+# (Reading), so the memory it takes is about what the budget let it
+# unpack.
 LARGEST_EXPANSION = 1 << 30
 ITEM_COST = 1 << 10
+INSTRUCTION_COST, DELTA_STEP = 32, 4096
 DEEPEST_NESTING = 8
 # How much a decompressor or a member is asked for at a time, so the
 # budget is charged a step at a time; and the first input a stream's
@@ -810,6 +824,55 @@ LONGEST_NUMBER_BITS = 64
 class LimitReached(ValueError):
     """The read-back reached LARGEST_EXPANSION or DEEPEST_NESTING, which
     refuses the file wherever it is met, a repository's content included."""
+
+
+class StoppedShort(ValueError):
+    """A stream that did not decompress to its end, with what it gave
+    before it stopped (partial), which is searched all the same, as zcat
+    prints what it inflated before it reports the error."""
+
+    def __init__(self, message, partial):
+        super().__init__(message)
+        self.partial = partial
+
+
+class MembersUnread(ValueError):
+    """A container that opened, with a member that did not read: raised
+    once every other member has been read, so one bad member hides none
+    after it."""
+
+
+class Reading(io.RawIOBase):
+    """A read-only file over bytes already held, for tarfile and zipfile:
+    io.BytesIO copies a bytearray, which every layer's content is."""
+
+    def __init__(self, data):
+        super().__init__()
+        self.view, self.position = memoryview(data), 0
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def readinto(self, buffer):
+        piece = self.view[self.position:self.position + len(buffer)]
+        buffer[:len(piece)] = piece
+        self.position += len(piece)
+        return len(piece)
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        base = {io.SEEK_SET: 0, io.SEEK_CUR: self.position, io.SEEK_END: len(self.view)}[whence]
+        self.position = max(0, base + offset)
+        return self.position
+
+    def tell(self):
+        return self.position
+
+    def close(self):
+        self.view = memoryview(b"")
+        super().close()
 
 
 class Budget:
@@ -983,7 +1046,9 @@ def apply_delta(base, delta, budget):
     """The object a delta makes of its base, read as git's patch-delta
     reads it: the base's size and the result's, then instructions, each a
     copy from the base (a byte with its top bit set) or an insert of the
-    next 1 to 127 bytes; an instruction that does not fit raises."""
+    next 1 to 127 bytes; an instruction that does not fit raises. The
+    budget is charged what the delta makes and, DELTA_STEP instructions
+    at a time, INSTRUCTION_COST for each instruction it takes to make it."""
     source_size, position = delta_size(delta, 0)
     target_size, position = delta_size(delta, position)
     if source_size != len(base):
@@ -991,8 +1056,11 @@ def apply_delta(base, delta, budget):
     if target_size > LARGEST_OBJECT:
         raise ValueError(f"a delta that makes {target_size} bytes, more than the scrub reads")
     budget.take(target_size)
-    out = bytearray()
+    out, turns = bytearray(), 0
     while position < len(delta):
+        turns += 1
+        if turns % DELTA_STEP == 0:
+            budget.take(DELTA_STEP * INSTRUCTION_COST)
         command = delta[position]
         position += 1
         if command & 0x80:
@@ -1009,6 +1077,7 @@ def apply_delta(base, delta, budget):
             raise ValueError("a delta with the reserved instruction 0")
         if len(out) > target_size:
             raise ValueError("a delta that makes more than the size it names")
+    budget.take(turns % DELTA_STEP * INSTRUCTION_COST)
     if len(out) != target_size:
         raise ValueError("a delta that makes less than the size it names")
     return bytes(out)
@@ -1054,9 +1123,11 @@ def copy_instruction(delta, command, position):
 # stream begin with a few bytes only, and a zip with something before it
 # is found by the directory at its end, so these are weak signs: bytes
 # that carry one are searched as far as they open and never refused for
-# it. The containers hold members whose sizes a replacement would break,
-# so the scrub leaves them whole as it does ARCHIVE_SUFFIXES, and the
-# read-back refuses them when they hold the credential.
+# it, though a zip that did open is refused for a member that does not
+# read. The containers hold members whose sizes a replacement would
+# break, so the scrub leaves them whole as it does ARCHIVE_SUFFIXES
+# (holds_members), and the read-back refuses them when they hold the
+# credential.
 GZIP_MAGIC, XZ_MAGIC, AR_MAGIC = b"\x1f\x8b", b"\xfd7zXZ\x00", b"!<arch>\n"
 BZIP2_START = re.compile(rb"BZh[1-9](\x31\x41\x59\x26\x53\x59|\x17\x72\x45\x38\x50\x90)")
 BUNDLE_HEADERS = (b"# v2 git bundle\n", b"# v3 git bundle\n")
@@ -1069,6 +1140,9 @@ UNOPENED_FORMATS = ((b"\x28\xb5\x2f\xfd", "zstd"), (b"7z\xbc\xaf\x27\x1c", "7z")
                     (b"Rar!\x1a\x07", "rar"), (b"\x04\x22\x4d\x18", "lz4"),
                     (b"\x1f\x9d", "compress (.Z)"), (b"LZIP", "lzip"))
 CONTAINERS = frozenset({"tar", "zip", "prefixed zip", "ar", "git packfile", "git bundle"})
+# zlib_content inflates with partial and so raises only at a limit; zlib
+# is listed all the same, since a weak sign never refuses, however it is
+# read.
 WEAK_KINDS = frozenset({"zlib", "lzma", "prefixed zip"})
 # The kinds whose content is a repository's: its history holds whatever
 # the project committed (a test's zstd or cut gzip fixture among them),
@@ -1110,18 +1184,29 @@ def packed_kinds(data):
     return kinds
 
 
+def tar_header(data, start=0):
+    """The first block from start that is not all zeros, where a tar's
+    first header is (an empty tar may come before another, as GNU tar's
+    -i reads them); b"" when there is none."""
+    start += (ZEROS.match(data, start).end() - start) // 512 * 512
+    return bytes(data[start:start + 512]) if len(data) - start >= 512 else b""
+
+
 def is_tar(data):
     """A tar's first header: ustar's magic at 257 or, for a v7 tar, which
     has none, a checksum at 148 that sums the header as tar sums it."""
-    if len(data) < 512 or not data[0]:
-        return False
-    if data[257:262] == b"ustar":
-        return True
-    field = TAR_CHECKSUM.fullmatch(data[148:156])
+    header = tar_header(data)
+    return bool(header) and (header[257:262] == b"ustar" or checksum_holds(header))
+
+
+def checksum_holds(header):
+    """A tar header's checksum, at 148, sums its bytes, as tar sums them,
+    unsigned or, as some old tars did, signed."""
+    field = TAR_CHECKSUM.fullmatch(header[148:156])
     if not field:
         return False
-    header = bytes(data[:148]) + b" " * 8 + bytes(data[156:512])
-    return int(field.group(1), 8) in (sum(header), sum(struct.unpack("512b", header)))
+    summed = header[:148] + b" " * 8 + header[156:512]
+    return int(field.group(1), 8) in (sum(summed), sum(struct.unpack("512b", summed)))
 
 
 def is_lzma_alone(data):
@@ -1147,6 +1232,8 @@ def credential_layers(data, needles, budget, depth=0, strict=True):
         return []
     for kind in packed_kinds(data):
         if depth >= DEEPEST_NESTING:
+            if kind in WEAK_KINDS and not gives_anything(kind, data, budget):
+                continue
             raise LimitReached(f"layers nested deeper than the scrub reads, the last {kind}")
         found = layers_through(kind, data, needles, budget, depth, strict)
         if found is not None:
@@ -1154,13 +1241,26 @@ def credential_layers(data, needles, budget, depth=0, strict=True):
     return None
 
 
+def gives_anything(kind, data, budget):
+    """Whether a weak sign met at DEEPEST_NESTING opens to anything: text
+    that only starts like a zlib stream inflates to nothing and is left
+    as it is, where a stream that holds something refuses the file."""
+    try:
+        return any(content for _, content in UNPACKERS[kind](data, budget))
+    except (LimitReached, MembersUnread):
+        return True
+    except Exception as problem:
+        return bool(getattr(problem, "partial", b""))
+
+
 def layers_through(kind, data, needles, budget, depth, strict):
-    """credential_layers through one format. A layer that does not open
-    refuses the file, unless its sign is weak (WEAK_KINDS) or the bytes
-    are a repository's content, which are searched as far as they open;
-    a limit refuses it wherever it is met."""
-    tolerant = kind in WEAK_KINDS or not strict
-    layers = UNPACKERS[kind](data, budget)
+    """credential_layers through one format. What a layer gives is
+    searched, and so is what a stream gave before it stopped short
+    (StoppedShort). A layer that does not open then refuses the file,
+    unless its sign is weak (WEAK_KINDS) and it never opened, or the bytes
+    are a repository's content, which are searched as far as they open; a
+    limit refuses it wherever it is met."""
+    layers, opened = UNPACKERS[kind](data, budget), False
     while True:
         try:
             label, inner = next(layers)
@@ -1168,10 +1268,15 @@ def layers_through(kind, data, needles, budget, depth, strict):
             return None
         except LimitReached:
             raise
-        except Exception:
-            if tolerant:
+        except Exception as problem:
+            partial = getattr(problem, "partial", b"")
+            found = credential_layers(partial, needles, budget, depth + 1, False) if partial else None
+            if found is not None:
+                return [kind, *found]
+            if not strict or (kind in WEAK_KINDS and not opened):
                 return None
             raise
+        opened = True
         found = credential_layers(inner, needles, budget, depth + 1, strict and kind not in OBJECT_KINDS)
         if found is not None:
             return [label, *found]
@@ -1180,8 +1285,8 @@ def layers_through(kind, data, needles, budget, depth, strict):
 def inflated(data, start, wbits, budget, partial=False):
     """A zlib or gzip stream's content from start in data, and the offset
     after it; fed a chunk at a time (FIRST_CHUNK) and asked for a step at a
-    time (EXPANSION_STEP). A stream cut short or broken raises, unless
-    partial, which keeps what came out."""
+    time (EXPANSION_STEP). A stream cut short or broken raises
+    StoppedShort with what came out, unless partial, which returns it."""
     inflater = zlib.decompressobj(wbits)
     view = memoryview(data)
     out, position, pending, chunk = bytearray(), start, b"", FIRST_CHUNK
@@ -1199,9 +1304,9 @@ def inflated(data, start, wbits, budget, partial=False):
                 break
     except zlib.error as problem:
         if not partial:
-            raise ValueError(f"a stream that does not inflate ({problem})") from None
+            raise StoppedShort(f"a stream that does not inflate ({problem})", out) from None
     if not inflater.eof and not partial:
-        raise ValueError("a truncated stream")
+        raise StoppedShort("a truncated stream", out)
     return out, position - len(pending) - len(inflater.unused_data)
 
 
@@ -1216,14 +1321,14 @@ def decompressed(decompressor, data, start, budget):
             if decompressor.needs_input:
                 piece = view[position:position + chunk]
                 if not piece:
-                    raise ValueError("a truncated stream")
+                    raise StoppedShort("a truncated stream", out)
                 position += len(piece)
                 chunk = min(chunk * 2, INFLATE_CHUNK)
             made = decompressor.decompress(piece, EXPANSION_STEP)
             budget.take(len(made))
             out += made
     except (OSError, EOFError, lzma.LZMAError) as problem:
-        raise ValueError(f"a stream that does not decompress ({problem})") from None
+        raise StoppedShort(f"a stream that does not decompress ({problem})", out) from None
     return out, position - len(decompressor.unused_data)
 
 
@@ -1232,12 +1337,19 @@ def streams(kind, magic, one_stream):
     gzip, xz and bzip2 tools write and read them: their contents joined,
     as the tools give them, then whatever follows the last, which may be
     packed in another format. Each stream is read from where the last one
-    ended, so many short streams cost no more than one long one."""
+    ended, so many short streams cost no more than one long one; one that
+    stops short stops the file with all that came out before it."""
     def unpack(data, budget):
         joined, offset = None, 0
         while data.startswith(magic, offset):
             budget.take(ITEM_COST)
-            content, offset = one_stream(data, offset, budget)
+            try:
+                content, offset = one_stream(data, offset, budget)
+            except StoppedShort as problem:
+                if joined is not None:
+                    joined += problem.partial
+                    problem.partial = joined
+                raise
             if joined is None:
                 joined = content
             else:
@@ -1270,23 +1382,98 @@ def lzma_content(data, budget):
 
 def tar_members(data, budget):
     """Each regular member's content; a header that does not read is
-    stepped over, as GNU tar steps over it, so no member after it is lost."""
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:", ignore_zeros=True) as packed:
+    stepped over, as GNU tar steps over it, so no member after it is lost,
+    and what tarfile stepped over is opened too (stepped_over), since it
+    tries those blocks as headers and never reads them as a member."""
+    with Reading(data) as source, tarfile.open(fileobj=source, mode="r:", ignore_zeros=True) as packed:
+        expected = 0
         for member in packed:
             budget.take(ITEM_COST)
+            if member.offset > expected:
+                yield from stepped_over(data, expected, member.offset, budget)
+            expected = packed.offset
             if member.isreg():
                 yield "tar", read_in_steps(packed.extractfile(member), budget)
+    yield from stepped_over(data, expected, len(data), budget)
+
+
+def stepped_over(data, start, end, budget):
+    """The blocks a tar's reader stepped over between start and end, past
+    their zero blocks and past a header that did not read, so the member
+    behind it is opened from its first byte; bytes that are no header at
+    all (what follows a tar's end) are opened from where they start, and
+    zeros alone, as a tar's end is, give nothing."""
+    start += (ZEROS.match(data, start, end).end() - start) // 512 * 512
+    block = data[start:min(start + 512, end)]
+    if len(block) == 512 and (block[257:262] == b"ustar" or checksum_holds(block)):
+        start += 512
+    if start < end and ZEROS.match(data, start, end).end() < end:
+        budget.take(end - start)
+        yield "what a tar stepped over", data[start:end]
 
 
 def zip_members(data, budget):
-    """Each member's content, which zipfile checks against its CRC; one
-    that is encrypted or packed by a method zipfile lacks raises. A zip
-    with something before it (a zipapp's #! line) reads the same way."""
-    with zipfile.ZipFile(io.BytesIO(data)) as packed:
+    """Each member's content, which zipfile checks against its CRC. Every
+    entry of the central directory is charged before zipfile reads them,
+    since it reads them all at once. A member that does not read (a wrong
+    CRC, encryption, a method zipfile lacks) is given as its bytes
+    inflate, as unzip inflates them, and once the other members are read
+    the zip is refused (MembersUnread). A zip with something before it (a
+    zipapp's #! line) reads the same way."""
+    budget.take(ITEM_COST * data.count(b"PK\x01\x02"))
+    unread = None
+    with Reading(data) as source, zipfile.ZipFile(source) as packed:
         for info in packed.infolist():
-            budget.take(ITEM_COST)
-            with packed.open(info) as member:
-                yield "zip", read_in_steps(member, budget)
+            try:
+                with packed.open(info) as member:
+                    content = read_in_steps(member, budget)
+            except LimitReached:
+                raise
+            except Exception as problem:
+                unread = unread or problem
+                content = raw_member(data, info, budget)
+            yield "zip", content
+    if unread:
+        raise MembersUnread(f"a zip member that does not read ({why(unread)})")
+
+
+def raw_member(data, info, budget):
+    """A member's bytes read from its local header, as unzip reads them
+    whatever its CRC says: stored bytes as they are, a deflate stream as
+    far as it inflates, nothing for another method."""
+    start = info.header_offset
+    header = data[start:start + 30]
+    if len(header) < 30 or header[:4] != b"PK\x03\x04":
+        return b""
+    start += 30 + int.from_bytes(header[26:28], "little") + int.from_bytes(header[28:30], "little")
+    if info.compress_type == zipfile.ZIP_DEFLATED:
+        return inflated(data, start, -zlib.MAX_WBITS, budget, partial=True)[0]
+    if info.compress_type != zipfile.ZIP_STORED:
+        return b""
+    budget.take(min(info.compress_size, len(data)))
+    return data[start:start + info.compress_size]
+
+
+def holds_members(kind, data):
+    """Whether the scrub must leave a container whole: a sure sign always;
+    a zip found by its end record, or a tar by its checksum alone, only
+    when it opens with a member, so a log whose bytes only look like one
+    is scrubbed as text. A zip whose directory is past what the read-back
+    would read is left whole for the read-back to refuse."""
+    if kind == "prefixed zip":
+        if data.count(b"PK\x01\x02") > LARGEST_EXPANSION // ITEM_COST:
+            return True
+        try:
+            with Reading(data) as source, zipfile.ZipFile(source) as packed:
+                return bool(packed.infolist())
+        except Exception:
+            return False
+    if kind == "tar" and tar_header(data)[257:262] != b"ustar":
+        try:
+            tarfile.TarInfo.frombuf(tar_header(data), tarfile.ENCODING, "surrogateescape")
+        except Exception:
+            return False
+    return True
 
 
 def ar_members(data, budget):
@@ -1323,7 +1510,9 @@ def pack_objects(data, budget):
 def bundle_pack(data, budget):
     """A git bundle's packfile: after its header, its prerequisites and its
     references, a blank line, then the pack. An incremental bundle's pack
-    is thin, its deltas made on objects it does not carry, and is refused."""
+    may be thin: one that holds a delta on an object it does not carry is
+    refused (resolve_deltas), and one whose objects are whole or made on
+    objects it carries is read like any other."""
     end = data.find(b"\n\n")
     if end < 0 or data[end + 2:end + 6] != b"PACK":
         raise ValueError("a git bundle with no packfile after its header")
@@ -1369,20 +1558,21 @@ def unscrubbed(directory, values):
     for path in sorted(Path(directory).rglob("*")):
         if any(value in path.name for value in values):
             kept.append(f"{path}: its name holds the agents' credential")
-        if path.is_symlink():
-            kept.append(f"{path}: is a symlink, which the upload would follow to what the scrub never read")
-            continue
-        if path.is_dir():
-            continue
-        if not path.is_file():
-            kept.append(f"{path}: is not a regular file, which the scrub cannot read")
-            continue
         try:
+            if path.is_symlink():
+                kept.append(f"{path}: is a symlink, which the upload would follow to what the scrub never read")
+                continue
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                kept.append(f"{path}: is not a regular file, which the scrub cannot read")
+                continue
             layers = credential_layers(path.read_bytes(), needles, budget)
-        # Whatever a file's bytes make the read-back raise refuses the
-        # file, so no error ends the read-back without saying why.
+        # Whatever a path or a file's bytes make the read-back raise (a
+        # path past PATH_MAX among them) refuses the file, so no error ends
+        # the read-back without saying why.
         except Exception as problem:
-            kept.append(f"{path}: could not be read ({problem or type(problem).__name__})")
+            kept.append(f"{path}: could not be read ({why(problem)})")
             continue
         if layers is not None:
             kept.append(f"{path}: holds the agents' credential" + (f", read through {', '.join(layers)}" if layers else ""))
@@ -1421,17 +1611,25 @@ def command_scrub(args):
         say(f"{directory} is not a directory")
         return 2
     values = credential_values()
-    removed = remove_links(directory)
-    if removed:
-        say(scrub_text(f"{directory}: removed {len(removed)} symlinks and special files, which the upload would "
-                       "follow: " + ", ".join(str(path.relative_to(directory)) for path in removed), values))
-    if not values:
-        say(f"{directory}: no credential in the environment, nothing to scrub")
-        return 0
-    rewritten = scrub_credentials([directory], values)
-    if rewritten:
-        say(f"{directory}: the agents' credential was in {len(rewritten)} files and is scrubbed out of them")
-    kept = unscrubbed(directory, values)
+    # A directory that cannot be walked (a path past PATH_MAX) is refused
+    # with its error, the credential replaced, rather than end the step
+    # with a traceback that quotes the path.
+    try:
+        removed = remove_links(directory)
+        if removed:
+            say(scrub_text(f"{directory}: removed {len(removed)} symlinks and special files, which the upload "
+                           "would follow: " + ", ".join(str(path.relative_to(directory)) for path in removed),
+                           values))
+        if not values:
+            say(f"{directory}: no credential in the environment, nothing to scrub")
+            return 0
+        rewritten = scrub_credentials([directory], values)
+        if rewritten:
+            say(f"{directory}: the agents' credential was in {len(rewritten)} files and is scrubbed out of them")
+        kept = unscrubbed(directory, values)
+    except OSError as problem:
+        say(scrub_text(f"{directory}: could not be walked ({why(problem)})", values))
+        return 2
     if kept:
         say("\n".join(kept))
         return 2

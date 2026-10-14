@@ -134,20 +134,29 @@ upload would follow a symlink to a file the scrub never read), and
 reads every file back through every layer it is packed in, each opened
 by what its bytes say it is, whatever the file's name or place: gzip,
 xz, lzma and bzip2 streams, tar members (a ustar or v7 header, stepping
-over one that does not read, as GNU tar does), zip members (a zipapp's
-too), ar members (a .deb), git's loose objects, packfiles (with each
-delta applied to its base) and bundles, an archive inside an archive,
-up to eight layers deep, with one budget for the whole directory (1 GiB
-unpacked, each stream, member or object counting 1 KiB). It exits 2
-when a file or a layer still holds the token, a path's name does, the
-budget or the depth runs out, or a file does not open: a stream cut
-short, a format it cannot open (zstd, 7z, rar, lz4, .Z, lzip), an
-incremental bundle (its pack's deltas need objects it does not carry)
-or a SHA-256 repository's pack. A repository's history is the
-exception: what its objects hold (a project's own zstd or cut gzip test
-fixture) is searched as far as it opens and never refused for it,
-though the same file in a work tree is. Every line it writes names a
-path with the token replaced. The workflow's jobs run it before an
+over one that does not read, as GNU tar does, and opening what it
+stood before and what follows the tar's end), zip members (a zipapp's
+too, and one that does not read as unzip inflates it), ar members (a
+.deb), git's loose objects, packfiles (with each delta applied to its
+base) and bundles, an archive inside an archive, up to eight layers
+deep, with one budget for the whole directory (1 GiB unpacked, each
+stream, member or object counting 1 KiB and each instruction of a
+delta 32 bytes). A layer is found where a file, a stream or a member
+starts, or by a zip's end record: a stream that starts partway through
+other bytes (after a line of text, or after a zip's end) is outside
+it, as base64 is. It exits 2 when a file or a layer still holds the
+token, a path's name does, the budget or the depth runs out, or a file
+does not open: a stream cut short (what it gave before it stopped is
+searched first), a zip member that does not read, a format it cannot
+open (zstd, 7z, rar, lz4, .Z, lzip), an incremental bundle whose pack
+holds a delta on an object it does not carry, a SHA-256 repository's
+pack, or a path it cannot reach (one past PATH_MAX). A repository's
+history is the exception: what its objects hold (a project's own zstd
+or cut gzip test fixture) is searched as far as it opens and never
+refused for it, though the same file in a work tree is. Every line it
+writes names a path with the token replaced. A file whose bytes only
+look like a container (a log with a stray zip end record) is scrubbed
+as text. The workflow's jobs run it before an
 upload, after stopping any agent container still up, and publish
 nothing it refused; a fake run, which has no token, reads its files
 back for a stand-in, so the rehearsal refuses what a real run's
