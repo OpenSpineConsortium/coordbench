@@ -1,15 +1,15 @@
 name: Checks
 
 # bash scripts/check.sh on every pull request and on every push to a branch
-# that is not a claude/ branch or sdlc-protocol's sync branch: each of those
-# has its pull request, which runs the check already, so the push trigger
-# leaves them out rather than run it twice. sdlc-protocol's sync workflow
-# pushes the branch sdlc-protocol/sync with the GitHub App's token, which,
-# unlike a workflow's own GITHUB_TOKEN, starts this workflow on its pull
-# request.
+# that is not a claude/ branch or symphony-protocol's sync branch: each of
+# those has its pull request, which runs the check already, so the push
+# trigger leaves them out rather than run it twice. symphony-protocol's sync
+# workflow pushes the branch symphony-protocol/sync with the GitHub App's
+# token, which, unlike a workflow's own GITHUB_TOKEN, starts this workflow
+# on its pull request.
 # The runner's own python3 is used (3.12 on ubuntu-latest).
-# Before the checks the job clones OpenSpineConsortium/sdlc-protocol, which
-# is public, so the clone needs no token, and names the clone to them in
+# Before the checks the job clones OpenSpineConsortium/symphony-protocol,
+# which is public, so the clone needs no token, and names the clone to them in
 # SDLC_PROTOCOL. check.sh's vendoring.py verify holds coordbench/vendor's
 # copy to its VENDORED, but both sit in this tree, and a pull request that
 # edits the copy can rewrite its line in VENDORED as easily; with the clone
@@ -21,7 +21,7 @@ name: Checks
 on:
   pull_request:
   push:
-    branches-ignore: ["claude/**", "sdlc-protocol/**"]
+    branches-ignore: ["claude/**", "symphony-protocol/**"]
 
 permissions:
   contents: read
@@ -32,10 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone sdlc-protocol, the library the copy is held to
-        run: git clone --quiet https://github.com/OpenSpineConsortium/sdlc-protocol "$RUNNER_TEMP/sdlc-protocol"
+      - name: Clone symphony-protocol, the library the copy is held to
+        run: git clone --quiet https://github.com/OpenSpineConsortium/symphony-protocol "$RUNNER_TEMP/symphony-protocol"
 
       - name: Run the checks
         env:
-          SDLC_PROTOCOL: ${{ runner.temp }}/sdlc-protocol
+          SDLC_PROTOCOL: ${{ runner.temp }}/symphony-protocol
         run: bash scripts/check.sh

@@ -39,14 +39,14 @@ COORDBENCH = ROOT / "coordbench"
 VENDOR = COORDBENCH / "vendor"
 VENDORED = VENDOR / "VENDORED"
 PACKAGE = VENDOR / "sdlc_protocol"
-LIBRARY = Path(os.environ.get("SDLC_PROTOCOL") or ROOT.parent / "sdlc-protocol")
+LIBRARY = Path(os.environ.get("SDLC_PROTOCOL") or ROOT.parent / "symphony-protocol")
 # A clone named on purpose, as CI names its own, is one the comparison must
 # have; a clone that only happens to sit beside this one may be absent or
 # behind, and then the comparison is skipped.
 LIBRARY_NAMED = bool(os.environ.get("SDLC_PROTOCOL"))
 CI = ROOT / ".github" / "workflows" / "ci.yml"
-CLONE = 'git clone --quiet https://github.com/OpenSpineConsortium/sdlc-protocol "$RUNNER_TEMP/sdlc-protocol"'
-NAMED_IN_CI = "SDLC_PROTOCOL: ${{ runner.temp }}/sdlc-protocol"
+CLONE = 'git clone --quiet https://github.com/OpenSpineConsortium/symphony-protocol "$RUNNER_TEMP/symphony-protocol"'
+NAMED_IN_CI = "SDLC_PROTOCOL: ${{ runner.temp }}/symphony-protocol"
 COMPARISON = "TheCopyIsTheLibrarysTest.test_every_file_is_the_librarys_at_the_recorded_commit"
 sys.path.insert(0, str(COORDBENCH))
 
