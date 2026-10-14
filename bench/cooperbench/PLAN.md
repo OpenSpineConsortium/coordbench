@@ -16,14 +16,15 @@ doing both features?
 
 ## Pairs
 
-bench/cooperbench/pairs.txt: the flash subset's tasks whose gold patches
-graded in the cloud session, 17 tasks and 43 pairs, less whatever the
-survey on GitHub's runners (bench.yml in survey mode) shows does not grade
-there or does not fit a runner's disk, plus whatever of the three
-network-bound tasks grades there; the list is fixed from the survey's
-table before the first real dispatch and the dispatch reads it as
-`@bench/cooperbench/pairs.txt`. Every arm runs every pair of the list, so
-the arms are compared on the same pairs.
+bench/cooperbench/pairs.txt: the flash subset whole, 20 tasks and 50
+pairs, fixed on 2026-10-14 from the survey on GitHub's runners (bench.yml
+in survey mode, tag survey-1, run 38549172370), which graded every
+feature's gold patch of every task on a runner's disk, the three tasks
+that download at test time included (openai_tiktoken 0, dottxt_ai_outlines
+1706, llama_index 18813), which the cloud session's network policy had
+kept out of the first list of 17 tasks and 43 pairs. The dispatch reads it
+as `@bench/cooperbench/pairs.txt`. Every arm runs every pair of the list,
+so the arms are compared on the same pairs.
 
 ## Arms
 
@@ -33,7 +34,9 @@ agents with messages; coop-git, the two with a shared git remote as well
 (the authors' "Curious case of miscoordination" setting); team, the
 authors' later harness with a lead, a task list and a scratchpad. The
 no-communication baseline coop-nocomm is left out to save usage, and can
-be added as a sixth arm by the dispatch input.
+be added as a sixth arm by the dispatch input; six arms over 50 pairs are
+300 jobs, more than one matrix's 256, so a sixth arm takes two dispatches
+of the tag.
 
 ## Settings
 
@@ -47,7 +50,10 @@ be added as a sixth arm by the dispatch input.
   pair on the same account (plan.py), so an account's usage window is
   spent on a pair's arms together rather than on one arm; the order the
   jobs run in is GitHub's queue's, first in first out as far as it keeps
-  it, so the arm rotation is a tendency, not a guarantee.
+  it, so the arm rotation is a tendency, not a guarantee. Three or more
+  accounts hold the whole list in one dispatch (250 jobs, under the 100
+  an account's queue takes); on one or two, the same tag is dispatched
+  again once the first dispatch has drained, and the resume carries on.
 - Resume: a pair whose artifact holds a scored pair with no agent in
   Error is not run again; a pair that ended in Error (a usage limit among
   the causes) runs again on the next dispatch of the same tag, on a fresh
@@ -79,7 +85,7 @@ definition; the rate on finished pairs is reported beside it.
 4. Cost and time per pair, turns, the overhead of messaging, concrete
    references, difficulty curves, and one row per pair.
 
-What 43 pairs can show: with the paper's rates (solo near 47%, coop near
+What 50 pairs can show: with the paper's rates (solo near 47%, coop near
 26%) the discordant pairs of a solo-versus-coop comparison are about a
 third of the list, and an exact McNemar test at that size detects a gap
 of roughly 25 points or more; a gap of 10 points between sdlc and coop

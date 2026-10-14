@@ -1,13 +1,13 @@
 # The pre-registered pair list of bench/cooperbench/PLAN.md: one entry per
 # task, which names every flash pair of that task, read by the dispatch
-# input "pairs: @bench/cooperbench/pairs.txt". These are the 43 pairs of
-# CooperBench's flash subset whose gold patches graded in the cloud
-# session (bench/cooperbench/README.md, the table of 2026-10-09; go_chi 56
-# graded in one check of three there), 17 tasks; the three tasks left out
-# (openai_tiktoken 0, dottxt_ai_outlines 1706, llama_index 18813) download
-# at test time from hosts the session could not reach. The list changes
-# only as PLAN.md says: from the survey run on GitHub's runners, before
-# the first real dispatch.
+# input "pairs: @bench/cooperbench/pairs.txt". These are all 20 tasks and
+# 50 pairs of CooperBench's flash subset: the survey on GitHub's runners
+# (bench.yml in survey mode, tag survey-1, run 38549172370 of 2026-10-14)
+# graded every feature's gold patch of every task, the three tasks that
+# download at test time included (openai_tiktoken 0, dottxt_ai_outlines
+# 1706, llama_index 18813), which the cloud session's network policy had
+# kept out of the earlier list of 17 tasks and 43 pairs. The list is fixed
+# as PLAN.md says, from that survey, before the first real dispatch.
 pallets_click_task/2068
 pallets_click_task/2800
 pallets_click_task/2956
@@ -19,9 +19,12 @@ pillow_task/68
 pillow_task/290
 typst_task/6554
 dottxt_ai_outlines_task/1655
+dottxt_ai_outlines_task/1706
 dspy_task/8394
 huggingface_datasets_task/3997
 huggingface_datasets_task/6252
 samuelcolvin_dirty_equals_task/43
 go_chi_task/26
 go_chi_task/56
+openai_tiktoken_task/0
+llama_index_task/18813

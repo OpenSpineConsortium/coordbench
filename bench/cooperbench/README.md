@@ -59,8 +59,11 @@ itself only drives shell scripts, so it spends almost none of the usage.
   them is the owner's call (the environment's settings, Network access);
   the task containers also resolve only the hosts the environment reaches
   directly, so a test that downloads at run time would then still need its
-  files baked into the overlay image rather than fetched. Until then the
-  run covers the 42 pairs, and the report says which pairs each arm ran.
+  files baked into the overlay image rather than fetched. GitHub's runners
+  reach the three hosts: the survey of 2026-10-14 (bench.yml in survey
+  mode, tag survey-1) graded every feature of all 20 tasks there, so the
+  pre-registered list, pairs.txt, holds the 50 pairs, and the report says
+  which pairs each arm ran.
 - A team run with a shared remote on pallets_click/2068, given a
   placeholder token, brought every piece up (the agents' containers on the
   team network, the git server, the task list seeded in Redis, the team's
