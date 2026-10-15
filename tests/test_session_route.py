@@ -197,10 +197,15 @@ class SubsetCopiesTheSample(unittest.TestCase):
             {"id": "c", "sample": {"sample": 8}, "status": "pending"},
             {"id": "d", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(3, files=False))},
             {"id": "e", "sample": {"sample": 8}, "status": "running", "run_dir": str(self.run_dir(4))},
-            {"id": "f", "sample": {"sample": 8}, "status": "failed", "run_dir": str(outside)}])
+            {"id": "f", "sample": {"sample": 8}, "status": "failed", "run_dir": str(outside)},
+            {"id": "g", "sample": {"sample": 8}, "status": "failed", "run_dir": str(self.run_dir(5)),
+             "harness_error": "the harness lost agent1"},
+            {"id": "h", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(6))}])
+        (self.run_dir(6, files=False) / "audit.json").write_text(json.dumps({"harness_error": "the run met a full disk"}))
         out = self.base / "out"
         left = subset.copy_runs(subset.sampled(self.queue), self.logs, out)
-        self.assertEqual(left, {"unfinished": ["c", "e"], "no_run_dir": ["d"], "outside_logs": ["f"]})
+        self.assertEqual(left, {"unfinished": ["c", "e"], "harness_error": ["g", "h"], "no_run_dir": ["d"],
+                                "outside_logs": ["f"]})
         self.assertEqual(self.copied(out), ["t-solo/solo/repo/1/f1_f2/agent1_session.jsonl",
                                             "t-solo/solo/repo/1/f1_f2/result.json"])
 

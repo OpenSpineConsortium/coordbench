@@ -1060,24 +1060,35 @@ def carries_token(path, token, prompt_file=None):
     curse-1 step; one echoed it only through a shell command): its prompt
     names the file, and an orchestrator's prompt never does. The file's
     path is the pair's, shared by every attempt of the pair, so a
-    transcript that carries any other run token anywhere in what is read,
-    prompt, reply or tool result, is an earlier attempt's agent or some
-    other run's, and is "named" for none."""
-    found, replied, prompt, foreign = None, False, [], False
+    transcript whose prompt or tool results carry any other run token is
+    an earlier attempt's agent or some other run's, and is "named" for
+    none. So is one whose reply carries another token, unless a tool
+    result holds this one: what an agent read decides over what it typed,
+    since one solo agent of the X-Blossom screen opened its reply with its
+    token short of the run id's suffix, though the prompt file it had just
+    read back held the token whole."""
+    found, replied, prompt = None, False, []
+    read_own = read_foreign = typed_foreign = False
     for kind, message in opening_messages(path):
         text = content_blocks_to_text(message.get("content"))
         if names_another_agent(text, token):
             return None
-        foreign = foreign or carries_other_token(text, token)
         if kind == "assistant":
             replied = True
             found = "reply" if holds_token(reply_text(message), token) else found
-        elif kind == "user" and not replied:
+            typed_foreign = typed_foreign or carries_other_token(text, token)
+            continue
+        if not replied:
             prompt.append(text)
             found = found or ("prompt" if holds_token(text, token) else None)
-    if found or foreign or not prompt_file:
+        else:
+            read_own = read_own or holds_token(text, token)
+        read_foreign = read_foreign or carries_other_token(text, token)
+    if prompt_file and not names_file(" ".join(prompt), prompt_file):
+        return None
+    if found or not prompt_file or read_foreign or (typed_foreign and not read_own):
         return found
-    return "named" if names_file(" ".join(prompt), prompt_file) else None
+    return "named"
 
 
 def carries_other_token(text, token):

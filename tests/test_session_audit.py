@@ -113,6 +113,37 @@ class TheAuditReadsATranscript(unittest.TestCase):
         self.assertNotIn(str(self.tmp / "projects"), (run_dir / "audit.json").read_text())
 
 
+    def test_a_full_disk_in_the_scoring_is_read_where_the_scoring_wrote(self):
+        """Every arm's evaluation of outlines 1655 f6_f7 in curse-1 failed for
+        want of disk with no test run: uv's error, and the phrase wrapped
+        over two lines, in eval.json's test output; run.py finish's output
+        is kept as scoring.log. A diff, which holds the agents' code, is not
+        read."""
+        run_dir = self.tmp / "scored"
+        run_dir.mkdir()
+        lane.write_plan(run_dir, {"agents": []})
+        clean = {"merge": {"diff": "+raise OSError('No space left on device')"},
+                 "feature1": {"test_output": "1 passed"}}
+        (run_dir / "eval.json").write_text(json.dumps(clean))
+        self.assertIsNone(audit.audit_run(run_dir, roots=[])["harness_error"])
+        flushed = "failed to flush file `/root/.cache/uv/libtriton.so`:\n      No space left on device (os error 28)"
+        (run_dir / "eval.json").write_text(json.dumps({
+            **clean, "feature1": {"test_output": flushed},
+            "cascade": {"naive": {"tests": {"f2": {"test_output": "error: No space left\n      on device"}}}}}))
+        record = audit.audit_run(run_dir, roots=[])
+        self.assertEqual((record["disk_full_log_lines"], record["harness_error"]), (2, "the run met a full disk"))
+        (run_dir / "eval.json").write_text(json.dumps(clean))
+        (run_dir / "scoring.log").write_text("pip could not write the wheel\nNo space left on device\n")
+        self.assertEqual(audit.audit_run(run_dir, roots=[])["disk_full_log_lines"], 1)
+
+    def test_an_agent_reading_source_that_names_the_error_is_no_full_disk(self):
+        path = write_lines(self.tmp / "agent1_session.jsonl", [
+            assistant("m1", TOKEN),
+            tool_result('    ENOSPC = 28  # No space left on device\n    "No space left on device",'),
+            tool_result("cargo build\nCaused by:\n  No space left on device (os error 28)", True)])
+        self.assertEqual(audit.transcript_facts(path)["disk_full"], 1)
+
+
 class TheLaneHandsARunOutOnce(unittest.TestCase):
 
     def setUp(self):
@@ -144,6 +175,58 @@ class TheLaneHandsARunOutOnce(unittest.TestCase):
         self.assertEqual((detached[0].returned, detached[0].dead), (["agent1"], ["agent2"]))
         self.assertTrue(any(field.startswith("finishing_at=") for field in sets[0]),
                         "set before the finish starts, so the next prepare takes another item")
+
+    def test_a_lost_agent_that_made_its_marker_finished_and_is_not_lost(self):
+        """Its spawning call came back empty after it made its marker (an API
+        error on its last turn); its work is whole."""
+        (self.workspaces["agent2"] / lane.MARKER).touch()
+        notes = lane.place_missing_markers(self.run_dir, {"agent1"}, {"agent2"})
+        self.assertEqual((notes["expired"], notes["marked_but_not_returned"]), ([], ["agent2"]))
+        handles = {a["id"]: a["handle"] for a in lane.read_plan(self.run_dir)["agents"]}
+        self.assertNotIn("lost", handles["agent2"])
+        (self.workspaces["agent2"] / lane.MARKER).unlink()
+        notes = lane.place_missing_markers(self.run_dir, {"agent1"}, {"agent2"})
+        self.assertEqual(notes["expired"], ["agent2"])
+        self.assertTrue(lane.read_plan(self.run_dir)["agents"][1]["handle"]["lost"])
+
+    def test_one_prepare_spends_one_wait_budget_over_every_item(self):
+        """A call that fails one item at its last disk wait and takes the
+        next gives the next only what is left, so it stays inside the
+        relay's command timeout; an item failed for want of its image is a
+        harness error, to be requeued with the others."""
+        first = {**self.item, "id": "a", "disk_waits": lane.MAX_DISK_WAITS - 1, "prepared_at": None}
+        second = {**self.item, "id": "b", "prepared_at": None}
+        answers = iter([json.dumps(first), json.dumps(second)])
+        clock, waited, sets, image_waited = [1000.0], [], [], []
+
+        def wait_for_image(item, minutes):
+            image_waited.append(minutes)
+            return True
+
+        def wait_for_disk(log_dir, minimum, minutes):
+            waited.append(minutes)
+            clock[0] += minutes * 60
+            return ["docker: 1.0 GB free at /d"]
+
+        with mock.patch.object(lane, "queue", side_effect=lambda *a: next(answers) if a[0] == "next" else sets.append(a)), \
+                mock.patch.object(lane, "wait_for_image", side_effect=wait_for_image), \
+                mock.patch.object(lane, "wait_for_disk", side_effect=wait_for_disk), \
+                mock.patch.object(lane.time, "time", side_effect=lambda: clock[0]), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            lane.command_prepare(SimpleNamespace(queue="q.jsonl", worker="w", log_dir=None,
+                                                 wait_image_min=8, min_free_gb=8))
+        self.assertEqual((image_waited, waited), ([8, 0], [8, 0]))
+        self.assertEqual(json.loads(printed.getvalue())["item"], "b")
+        self.assertIn("status=failed", sets[0])
+        image_sets = []
+        third = {**self.item, "id": "c", "image_waits": lane.MAX_IMAGE_WAITS - 1, "prepared_at": None}
+        answers = iter([json.dumps(third), json.dumps({"done": True})])
+        with mock.patch.object(lane, "queue", side_effect=lambda *a: next(answers) if a[0] == "next" else image_sets.append(a)), \
+                mock.patch.object(lane, "wait_for_image", return_value=False), \
+                contextlib.redirect_stdout(io.StringIO()):
+            lane.command_prepare(SimpleNamespace(queue="q.jsonl", worker="w", log_dir=None,
+                                                 wait_image_min=0, min_free_gb=8))
+        self.assertIn('harness_error="no task image before prepare"', image_sets[0])
 
     def test_the_prepare_finishes_a_run_that_ran_and_takes_the_next_item(self):
         (self.workspaces["agent1"] / lane.MARKER).touch()
@@ -254,6 +337,24 @@ class TheQueueOrdersArmsBySeed(unittest.TestCase):
         after = self.items(path)
         self.assertEqual((after[0]["status"], after[1]["status"]), ("pending", "failed"))
         self.assertNotIn("harness_error", after[0])
+
+    def test_requeue_takes_back_a_run_audited_by_hand_whatever_its_status(self):
+        """audit.py run by hand marks the run's audit.json and not the queue,
+        as on runs finished before the audit; the item may be done (a pass
+        or a fail scored) or failed."""
+        path = self.tmp / "a.jsonl"
+        items = self.add(path, "solo")
+        for index, (status, error) in enumerate((("done", "the run met a full disk"),
+                                                  ("failed", "the harness lost agent1"), ("done", None))):
+            run_dir = self.tmp / f"run{index}"
+            run_dir.mkdir()
+            (run_dir / "audit.json").write_text(json.dumps({"harness_error": error}))
+            items[index].update(status=status, verdict="pass", run_dir=str(run_dir))
+        path.write_text("".join(json.dumps(i) + "\n" for i in items))
+        self.queue("requeue", str(path), "--harness-only")
+        after = self.items(path)
+        self.assertEqual([i["status"] for i in after[:3]], ["pending", "pending", "done"])
+        self.assertNotIn("run_dir", after[0])
 
 
 class TheSummaryLeavesHarnessErrorsOut(unittest.TestCase):

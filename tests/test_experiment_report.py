@@ -142,6 +142,31 @@ class ReportTest(unittest.TestCase):
         self.assertIn("| coop | - | 50.0% | 33.3% | 25.0% |", text)
 
 
+class HarnessErrorsAreLeftOut(unittest.TestCase):
+    """A run whose audit.json names a harness error measured the session
+    route, not the arm: the report leaves it out of every figure, as
+    summary.py does, and names it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.logs = Path(self.tmp.name)
+
+    def test_a_harness_error_is_in_no_figure_and_is_named(self):
+        write_pair(self.logs, "r", "team", "f1_f2", passed=False)
+        spoiled = write_pair(self.logs, "r", "team", "f3_f4", passed=True)
+        write_json(spoiled / "audit.json", {"harness_error": "agent1 ran more than once"})
+        kept = report.read_run(self.logs, "r", "team")
+        self.assertEqual([pair.key for pair in kept], ["pallets_click_task/2068/f1_f2"])
+        left = report.harness_errors(self.logs, "r", "team")
+        self.assertEqual([(pair.key, pair.harness_error) for pair in left],
+                         [("pallets_click_task/2068/f3_f4", "agent1 ran more than once")])
+        text = report.render({"team": kept}, left_out=left)
+        self.assertIn("## Runs left out as harness errors", text)
+        self.assertIn("| team | pallets_click_task/2068/f3_f4 | agent1 ran more than once |", text)
+        self.assertNotIn("Runs left out", report.render({"team": kept}))
+
+
 class CooperBenchSoloShapeTest(unittest.TestCase):
     """CooperBench's solo runner writes "agent", not "agents"; the report
     must read that block, or the authors' solo baseline shows 0 tokens and

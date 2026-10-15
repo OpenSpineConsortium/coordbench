@@ -242,13 +242,20 @@ def pair_report(run_dir, task, status, eval_skipped=False):
     "results" lists ({task, status, cost, eval}, plus error for a pair the
     runner could not run) and whether its evaluation was already there.
     status is CooperBench's: done, skip, or error for a pair that failed
-    before its agents ran (its result.json carries a top-level error)."""
+    before its agents ran (its result.json carries a top-level error) or
+    whose audit.json names a harness error."""
     result = read_json(Path(run_dir) / "result.json") or {}
-    if status == "done" and result.get("error"):
+    harness_error = (read_json(Path(run_dir) / "audit.json") or {}).get("harness_error")
+    if status == "done" and (result.get("error") or harness_error):
         status = "error"
     entry = {"task": task, "status": status, "cost": result.get("total_cost")}
     if status == "error":
-        entry["error"] = result.get("error")
+        entry["error"] = result.get("error") or f"harness error: {harness_error}"
+    if harness_error:
+        # The session route's audit (bench/cooperbench/session/audit.py)
+        # found the run measured the harness, not the arm: an error, as
+        # its summary and report count it, not a pass or a fail.
+        entry["harness_error"] = harness_error
     if result.get("error_kind"):
         entry["error_kind"] = result["error_kind"]
     entry["eval"] = None if status == "error" else eval_status(read_json(Path(run_dir) / "eval.json"))

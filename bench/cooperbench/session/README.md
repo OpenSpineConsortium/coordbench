@@ -36,9 +36,10 @@ much of the benchmark a run takes, and the readers of what came out.
   nest (`--force` adds it anyway). `pause` and `resume` hold and
   release the pending items, all or the pairs named; `requeue` puts
   failed ones back, with what the run left on them cleared, so they
-  are prepared afresh, and `requeue --harness-only` only those whose
-  run measured the harness (below), since an agent that ran out of time
-  is its arm's result. `add --order-seed N`, or `shuffle` on a queue
+  are prepared afresh, and `requeue --harness-only` only the finished
+  ones, done or failed, whose run measured the harness (below), by the
+  queue's mark or the run's audit.json, since an agent that ran out of
+  time is its arm's result. `add --order-seed N`, or `shuffle` on a queue
   already filled, puts each pair's arms in an order drawn from the seed
   and the pair, so no arm always meets a lane's first minutes or the
   end of a usage window. `add --option KEY=VALUE` gives every item a
@@ -55,9 +56,10 @@ much of the benchmark a run takes, and the readers of what came out.
   marker is given one (harness.json records it, and the agents that
   returned saying they had not finished), one the harness lost has its
   deadline brought forward and is marked lost so the driver records an
-  Error at once and says why, then `run.py finish` scores and tears
-  down, judge.py's free heuristics run, audit.py reads the run, and the
-  item takes the verdict. `finish --detach` runs
+  Error at once and says why, unless it made its marker, which says it
+  finished, then `run.py finish` scores and tears down (its output kept
+  as scoring.log), judge.py's free heuristics run, audit.py reads the
+  run, and the item takes the verdict. `finish --detach` runs
   that in a session of its own and `wait` polls for its verdict, since a
   scoring with the merge cascade can outlast one tool call. A lane that
   lost the plan it was handed (a workflow that stopped before its
@@ -67,7 +69,9 @@ much of the benchmark a run takes, and the readers of what came out.
   instead, its agents with no marker counted as lost, since agents
   spawned again on that workspace would be scored with the first ones
   as one run. An image still missing, or a disk still short, after six
-  waits fails the item rather than holding the lane.
+  waits fails the item as a harness error rather than holding the lane;
+  one prepare spends one wait budget (`--wait-image-min`) over every
+  item it takes, so it ends inside the relay's command timeout.
 - audit.py: what the session route did to a finished run, in its
   audit.json: per agent the API calls and the context the first one
   sent, which every call sends again before any work (the session's own
@@ -76,11 +80,16 @@ much of the benchmark a run takes, and the readers of what came out.
   the session refused (a permission decision other than accept, or
   Claude Code's own guard, such as "Blocked: sleep"), the tool results
   that say the disk was full, and how many subagents were spawned as
-  it. A run with an agent the harness lost, a full disk or an agent
+  it; per run, what the scoring's own output says of the disk (the
+  tests' output in eval.json and scoring.log), since a scoring that ran
+  out of room fails tests it never ran, as every arm's evaluation of
+  outlines 1655 f6_f7 did in curse-1. A run with an agent the harness lost, a full disk or an agent
   spawned twice measured the harness, not the arm: finish gives it the
-  verdict error whatever it scored (scored_verdict keeps the score) and
+  verdict error whatever it scored (scored_verdict keeps the score),
   marks the item's harness_error, so `requeue --harness-only` runs it
-  again. `python3 audit.py RUN_DIR ...` audits runs finished before it,
+  again, and rebuilds the arm's summary.json, where it counts as an
+  error; report.py, summary.py and subset.py leave it out of every
+  figure and name it. `python3 audit.py RUN_DIR ...` audits runs finished before it,
   while the session's transcripts are still on disk.
 - lane.js: the lane as a Claude Code Workflow script: prepare, spawn the
   bench agents in parallel, finish, until the queue is empty. `args.root`
@@ -156,7 +165,7 @@ and grown by adding again with a larger N once the window has reset.
         --skip openai_tiktoken_task/0 dottxt_ai_outlines_task/1706 llama_index_task/18813 \
         --timeout-min 45 --model claude-sonnet-5-5          # 8 pairs, 40 runs
     # from the session: Workflow on lane.js, args {queue: Q, worker: lane-N, root: <this checkout>}, one per lane
-    python3 bench/cooperbench/session/queue.py requeue $Q --status failed --harness-only   # run harness errors again
+    python3 bench/cooperbench/session/queue.py requeue $Q --harness-only   # run harness errors again
     python3 bench/cooperbench/session/queue.py add $Q --tag TAG --sample 16 ...   # grow: 8 more pairs
     python3 bench/cooperbench/report.py --logs $LOGS --run solo=TAG-solo --run coop=TAG-coop \
         --run sdlc=TAG-sdlc --run coop-git=TAG-coop-git --run team=TAG-team --cooperbench-dir ~/cooperbench

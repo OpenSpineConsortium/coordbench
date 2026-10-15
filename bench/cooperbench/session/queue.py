@@ -13,7 +13,7 @@ the work balances itself and an item can be added while the run is on.
     python3 queue.py next QUEUE --worker NAME      pop the first pending item (JSON on stdout)
     python3 queue.py set QUEUE ITEM_ID KEY=VALUE ...
     python3 queue.py show QUEUE [--counts]
-    python3 queue.py requeue QUEUE --status failed [--harness-only] [--ids ...]
+    python3 queue.py requeue QUEUE [--status failed | --harness-only] [--ids ...]
                                                    put items back as pending
     python3 queue.py pause QUEUE                   pending items wait (status paused) until resume
     python3 queue.py resume QUEUE [--pairs ...]    paused items are pending again
@@ -42,10 +42,11 @@ usage window's end, and its times and failures would carry them. The
 draw depends on nothing else, so it is the same on every machine and in
 every repetition of an add.
 
-requeue --harness-only takes back only the failed items whose finish found
-that the run measured the harness rather than the arm (harness_error: an
-agent the harness lost, a full disk, an agent spawned twice); an agent
-that ran out of time is the arm's result and stays failed.
+requeue --harness-only takes back only the finished items, done or
+failed, whose run measured the harness rather than the arm (an agent the
+harness lost, a full disk, an agent spawned twice), as lane.py finish
+marked the item or audit.py, run by hand, marked the run's audit.json;
+an agent that ran out of time is the arm's result and stays failed.
 """
 
 import argparse
@@ -310,9 +311,12 @@ def command_requeue(args):
         items = read_items(args.queue)
         n = 0
         for item in items:
-            if args.harness_only and not item.get("harness_error"):
+            if args.harness_only:
+                if item["status"] not in FINISHED or not harness_error_of(item):
+                    continue
+            elif item["status"] != args.status:
                 continue
-            if item["status"] == args.status and (not args.ids or item["id"] in args.ids):
+            if not args.ids or item["id"] in args.ids:
                 for key in RUN_KEYS:
                     item.pop(key, None)
                 item["status"] = "pending"
@@ -320,6 +324,25 @@ def command_requeue(args):
                 n += 1
         write_items(args.queue, items)
     print(f"requeued {n}")
+
+
+# The statuses of a run that ended: a harness error is done when audit.py
+# marked it by hand after a finish that scored it, failed when lane.py's
+# finish did.
+FINISHED = ("done", "failed")
+
+
+def harness_error_of(item):
+    """Why the item's run measured the harness rather than the arm, or
+    None: lane.py finish's harness_error on the item, else audit.py's in
+    the run's audit.json, which a run audited by hand carries alone."""
+    if item.get("harness_error"):
+        return item["harness_error"]
+    try:
+        audit = json.loads((Path(item.get("run_dir") or "") / "audit.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return audit.get("harness_error") if isinstance(audit, dict) else None
 
 
 def parse_option(text):
@@ -374,7 +397,8 @@ def main(argv=None):
     req.add_argument("--status", default="failed")
     req.add_argument("--ids", nargs="*")
     req.add_argument("--harness-only", action="store_true",
-                     help="only items whose run measured the harness rather than the arm")
+                     help="the finished items, done or failed, whose run measured the harness rather than "
+                          "the arm, whatever --status says")
     req.set_defaults(func=command_requeue)
     shuffle = sub.add_parser("shuffle")
     shuffle.add_argument("queue")

@@ -26,10 +26,12 @@ For each agent:
   a reply or in the prompt. More than one is a respawn: the copied
   transcript is the newest, so the agent's token count misses the others.
 
-For the pair, disk_full also counts the lines of finish.out and the
-agents' logs that say the disk was full, and harness_error says why the
-run measured the harness rather than the arm, or is None: an agent the
-harness lost, a full disk, or a respawn. No transcript path is kept, since
+For the pair, disk_full_log_lines counts what says the disk was full in
+the agents' logs and in the scoring's output (run.py finish's, kept as
+scoring.log and finish.out, and the tests' output in eval.json), since a
+scoring that ran out of room fails every test it never ran; harness_error
+says why the run measured the harness rather than the arm, or is None:
+an agent the harness lost, a full disk, or a respawn. No transcript path is kept, since
 the file is copied into the repository's results.
 """
 
@@ -43,12 +45,23 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent.parent / "coordbench"))
 import drivers  # noqa: E402 - coordbench's own module, found by its directory
 
-# A full disk as the error reaches a command's output: "<path>: no space
-# left on device", "[Errno 28] No space left on device", Claude Code's own
-# "... is full (0MB free)" for its output directory, a quota. A bare
-# ENOSPC is left out, since source code an agent reads names it.
-DISK_FULL = re.compile(r"(?:: |\] )no space left on device|is full \(0MB free\)|disk quota exceeded",
-                       re.IGNORECASE)
+# A full disk as the error reaches a command's output in an agent's
+# transcript: "<path>: no space left on device", "[Errno 28] No space left
+# on device", Rust's "Caused by:" and "(os error 28)", Claude Code's own
+# "... is full (0MB free)" for its output directory, a quota, with a line
+# break wherever a tool wrapped the phrase. The phrase alone, or a bare
+# ENOSPC, is left out, since source code an agent reads names it.
+DISK_FULL = re.compile(r"[:\]]\s+no\s+space\s+left\s+on\s+device(?:\s+\(os error 28\))?|\(os error 28\)"
+                       r"|is full \(0MB free\)|disk\s+quota\s+exceeded", re.IGNORECASE)
+# The same in the scoring's own output (the tests' output in eval.json,
+# run.py finish's log), which no agent's reading fills: the phrase
+# anywhere. uv's "failed to flush file ...:" and the phrase on the next
+# line failed every arm's evaluation of outlines 1655 f6_f7 in curse-1.
+SCORING_DISK_FULL = re.compile(r"(?:\[errno 28\]\s+)?no\s+space\s+left\s+on\s+device(?:\s+\(os error 28\))?"
+                               r"|\(os error 28\)|\[errno 28\]|disk\s+quota\s+exceeded", re.IGNORECASE)
+# What lane.py finish keeps of run.py finish's output, and the files the
+# scoring writes its output to.
+SCORING_LOGS = ("finish.out", "scoring.log")
 GUARD = re.compile(r"^\s*(<tool_use_error>)?\s*Blocked:")
 EXAMPLES = 3
 
@@ -140,12 +153,34 @@ def prompt_of(path):
     return " ".join(prompt)
 
 
-def disk_full_lines(path):
+def disk_full_count(path, pattern=DISK_FULL):
+    """How often the file says the disk was full, read whole, since a
+    tool may wrap the phrase over two lines."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as stream:
-            return sum(1 for line in stream if DISK_FULL.search(line))
+        return len(pattern.findall(Path(path).read_text(encoding="utf-8", errors="replace")))
     except OSError:
         return 0
+
+
+def scoring_disk_full(run_dir):
+    """How often the scoring met a full disk: in run.py finish's output,
+    and in eval.json's outputs and errors (not its diffs, which hold the
+    agents' code)."""
+    found = sum(disk_full_count(Path(run_dir) / name, SCORING_DISK_FULL) for name in SCORING_LOGS)
+    evaluation = read_json(Path(run_dir) / "eval.json")
+    return found + sum(len(SCORING_DISK_FULL.findall(text)) for text in outputs_in(evaluation))
+
+
+def outputs_in(value, key=""):
+    """The strings under keys that end in output or error, at any depth."""
+    if isinstance(value, dict):
+        for name, inner in value.items():
+            yield from outputs_in(inner, str(name))
+    elif isinstance(value, list):
+        for inner in value:
+            yield from outputs_in(inner, key)
+    elif isinstance(value, str) and (key.endswith("output") or key.endswith("error")):
+        yield value
 
 
 def agent_audit(handle, roots=None):
@@ -178,8 +213,9 @@ def audit_run(run_dir, roots=None):
     for agent in plan.get("agents") or []:
         handle = agent.get("handle") or {}
         agents[agent["id"]] = agent_audit(handle, roots)
-    logs = [run_dir / "finish.out", *sorted(run_dir.glob("*_stream.jsonl")), *sorted(run_dir.glob("*.log"))]
-    pair_disk_full = sum(disk_full_lines(path) for path in logs)
+    agent_logs = [*sorted(run_dir.glob("*_stream.jsonl")),
+                  *(path for path in sorted(run_dir.glob("*.log")) if path.name not in SCORING_LOGS)]
+    pair_disk_full = sum(disk_full_count(path) for path in agent_logs) + scoring_disk_full(run_dir)
     harness = read_json(run_dir / "harness.json")
     return {"agents": agents, "disk_full_log_lines": pair_disk_full,
             "harness_error": harness_error(agents, pair_disk_full, harness)}

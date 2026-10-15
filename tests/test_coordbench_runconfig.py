@@ -205,6 +205,18 @@ class TheSummary(Case):
                          {"task": "t", "status": "error", "cost": None, "error": "DockerError: no", "eval": None})
         self.assertEqual(runconfig.eval_status({"error": "x", "both_passed": True}), "error")
         self.assertIsNone(runconfig.eval_status(None))
+        # A run the session route's audit found measured the harness is an
+        # error, whatever its evaluation scored, as summary.py and the
+        # report count it.
+        audited = self.tmp / "a"
+        self.write(audited / "result.json", json.dumps({"total_cost": 2.0}))
+        self.write(audited / "eval.json", json.dumps({"both_passed": True, "error": None}))
+        self.write(audited / "audit.json", json.dumps({"harness_error": "the run met a full disk"}))
+        report = runconfig.pair_report(audited, "t", "done")
+        self.assertEqual(report["entry"], {"task": "t", "status": "error", "cost": 2.0,
+                                           "error": "harness error: the run met a full disk",
+                                           "harness_error": "the run met a full disk", "eval": None})
+        self.assertEqual(runconfig.eval_tally([report]), {"passed": 0, "failed": 0, "errors": 0, "skipped": 0})
 
     def test_run_totals_are_get_run_totals_over_every_result_of_the_setting(self):
         setting = self.tmp / "coop"

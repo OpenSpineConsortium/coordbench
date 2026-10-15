@@ -7,7 +7,9 @@ finished (done or failed) are copied as they are, session transcripts
 included, since the report counts tool calls and messages from them, but
 for the archives of earlier attempts, which are large. The others are
 named and left out, so a sample still running reads as incomplete and
-not as smaller. Each arm gets its config.json and a summary.json rebuilt
+not as smaller, and so are those whose run was a harness error (the
+queue's harness_error, or the run's audit.json), which measured the
+session route rather than the arm. Each arm gets its config.json and a summary.json rebuilt
 from the copied pairs alone, by the runner's own refresh_summary, so the
 report's summary column counts the sample and not the tag, and OUT gets
 the sample's lines of the queue under the queue's own name, where
@@ -38,10 +40,13 @@ def copy_runs(items, logs, out):
     """Each finished item's run directory under out, at its path under
     logs; what was left out is returned by reason, not raised."""
     logs = plain_path(logs)
-    left = {"unfinished": [], "no_run_dir": [], "outside_logs": []}
+    left = {"unfinished": [], "harness_error": [], "no_run_dir": [], "outside_logs": []}
     for item in items:
         if item.get("status") not in FINISHED:
             left["unfinished"].append(item["id"])
+            continue
+        if harness_error(item):
+            left["harness_error"].append(item["id"])
             continue
         source = plain_path(item.get("run_dir") or "")
         if not item.get("run_dir") or not source.is_dir():
@@ -55,6 +60,20 @@ def copy_runs(items, logs, out):
             shutil.rmtree(target)
         shutil.copytree(source, target, ignore=shutil.ignore_patterns(*LEFT_BEHIND))
     return left
+
+
+def harness_error(item):
+    """Whether the item's run measured the harness rather than the arm, by
+    the queue (lane.py finish) or by its audit.json (audit.py run by hand):
+    such a run is no result of its arm, so the sample counts it as not
+    finished, to be run again."""
+    if item.get("harness_error"):
+        return True
+    try:
+        audit = json.loads((Path(item.get("run_dir") or "") / "audit.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(audit, dict) and bool(audit.get("harness_error"))
 
 
 def plain_path(path):
@@ -104,8 +123,8 @@ def refuse(out, logs):
 
 
 def report(copied, total, left, out):
-    words = {"unfinished": "not finished", "no_run_dir": "no run directory",
-             "outside_logs": "run directory outside LOGS"}
+    words = {"unfinished": "not finished", "harness_error": "a harness error, to be run again",
+             "no_run_dir": "no run directory", "outside_logs": "run directory outside LOGS"}
     parts = [f"copied {copied} of the sample's {total} runs to {out}"]
     parts += [f"{words[reason]}: {', '.join(ids)}" for reason, ids in left.items() if ids]
     return "; ".join(parts)

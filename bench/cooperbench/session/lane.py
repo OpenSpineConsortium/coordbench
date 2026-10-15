@@ -23,10 +23,11 @@ that returned without creating its marker is given one now, so the run
 ends as it did rather than at the deadline, and the fact is kept in
 harness.json beside the pair; one the harness lost (--dead) has its
 deadline brought forward and is marked lost, so run.py finish records it
-as an Error at once instead of waiting it out. Then run.py finish waits,
-scores and tears down, judge.py's free heuristics run on the pair,
-audit.py records what the session route did to the run, and the queue
-item takes the verdict. A run the audit finds measured the harness
+as an Error at once instead of waiting it out, unless it made its marker,
+which says it finished. Then run.py finish waits, scores and tears down,
+its output kept as scoring.log, judge.py's free heuristics run on the
+pair, audit.py records what the session route did to the run, and the
+queue item takes the verdict. A run the audit finds measured the harness
 rather than the arm (an agent lost, a full disk, an agent spawned twice)
 gets the verdict error, its score kept as scored_verdict, so the item is
 failed and requeued like any other error, whatever it scored.
@@ -270,6 +271,16 @@ def announce(plan, item):
 
 
 def command_prepare(args):
+    # One budget for every wait of this call, whichever item it is spent
+    # on, so a call that fails one item at its last wait and takes the
+    # next stays inside the relay's command timeout; a command run past
+    # it is moved to the background, not stopped, and a second prepare
+    # of the same lane would then take the same item.
+    started = time.time()
+
+    def minutes_left():
+        return max(0.0, args.wait_image_min - (time.time() - started) / 60)
+
     for _ in range(5):
         raw = queue("next", args.queue, "--worker", args.worker)
         if raw is None:
@@ -279,14 +290,13 @@ def command_prepare(args):
         if item.get("done"):
             print(json.dumps({"done": True}))
             return 0
-        started = time.time()
         if item.get("prepared_at") and item.get("run_dir"):
             if ran_before(item):
                 finish_ran_run(args, item)
                 continue
             announce(plan_from_disk(item), item)
             return 0
-        if not wait_for_image(item, args.wait_image_min):
+        if not wait_for_image(item, minutes_left()):
             # The item stays the worker's; the next call takes it up again,
             # so a caller with a short command timeout can wait in steps,
             # up to a limit, after which the item fails rather than hold
@@ -294,16 +304,14 @@ def command_prepare(args):
             waits = int(item.get("image_waits") or 0) + 1
             if waits >= MAX_IMAGE_WAITS:
                 queue("set", args.queue, item["id"], "status=failed",
-                      f"error={json.dumps('no task image after ' + str(waits) + ' waits')}")
+                      f"error={json.dumps('no task image after ' + str(waits) + ' waits')}",
+                      f"harness_error={json.dumps('no task image before prepare')}")
                 continue
             queue("set", args.queue, item["id"], f"image_waits={waits}")
             print(json.dumps({"done": False, "waiting": True, "item": item["id"],
                               "image": image_name(item["repo"], item["task"])}))
             return 0
-        # The disk wait takes what the image wait left of the minutes, so
-        # one prepare stays inside the relay's command timeout.
-        left = max(0.0, args.wait_image_min - (time.time() - started) / 60)
-        short = wait_for_disk(args.log_dir, args.min_free_gb, left)
+        short = wait_for_disk(args.log_dir, args.min_free_gb, minutes_left())
         if short:
             # Kept as the image wait is: the item stays the worker's, and a
             # disk that never frees fails it, to be requeued once it does.
@@ -344,11 +352,12 @@ def place_missing_markers(run_dir, returned, dead, unfinished=()):
     deadline has passed, when it overran and is left to expire as the
     driver expires it; bring a lost one's deadline forward and mark it
     lost, so the driver says the harness lost it rather than that it ran
-    out of time; say what was done in harness.json, with the subagents
-    that returned saying they had not finished."""
+    out of time, unless it made its marker, which says it finished; say
+    what was done in harness.json, with the subagents that returned
+    saying they had not finished."""
     plan = read_plan(run_dir)
     notes = {"placed_markers": [], "overran": [], "expired": [], "gone_workspaces": [],
-             "unfinished": sorted(unfinished), "at": time.time()}
+             "marked_but_not_returned": [], "unfinished": sorted(unfinished), "at": time.time()}
     changed = False
     for agent in plan["agents"]:
         handle = agent.get("handle") or {}
@@ -367,7 +376,12 @@ def place_missing_markers(run_dir, returned, dead, unfinished=()):
             else:
                 marker.touch()
                 notes["placed_markers"].append(agent["id"])
-        if agent["id"] in dead:
+        if agent["id"] in dead and marker.exists():
+            # Its marker says it finished; the call that spawned it came
+            # back empty after (an API error on its last turn, the usage
+            # limit), which is no loss of the agent's work.
+            notes["marked_but_not_returned"].append(agent["id"])
+        elif agent["id"] in dead:
             handle["deadline"] = time.time() - 1
             handle["lost"] = True
             notes["expired"].append(agent["id"])
@@ -469,6 +483,9 @@ def finish_pair(args):
                         "its patches and score are left as they are, to be recorded by hand"}
     out = subprocess.run([sys.executable, str(RUN_PY), "finish", "--run-dir", args.run_dir],
                          capture_output=True, text=True, env=clean_environment(), cwd=str(ROOT))
+    # Kept where audit.py reads it: a scoring that ran out of disk says so
+    # here and in eval.json's test output, nowhere an agent wrote.
+    (Path(args.run_dir) / audit.SCORING_LOGS[1]).write_text(out.stdout + out.stderr)
     last = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
     try:
         verdict = json.loads(last)
@@ -497,7 +514,20 @@ def judged_by_audit(verdict, run_dir):
         verdict["scored_verdict"] = verdict.get("verdict")
         verdict["verdict"] = "error"
         verdict["harness_error"] = found["harness_error"]
+        refresh_summary(run_dir)
     return verdict
+
+
+def refresh_summary(run_dir):
+    """run.py's summary.json for the run, rebuilt now that audit.json
+    names a harness error, which counts the pair as an error: run.py
+    finish wrote it before the audit ran. The runner is imported from its
+    own directory, where no queue.py stands in for the standard library's."""
+    code = "import json, sys, run; run.refresh_summary(json.load(open(sys.argv[1])))"
+    out = subprocess.run([sys.executable, "-c", code, str(Path(run_dir) / "plan.json")], capture_output=True,
+                         text=True, env=clean_environment(), cwd=str(ROOT / "coordbench"))
+    if out.returncode != 0:
+        say(f"summary.json not rebuilt for {run_dir}: {out.stderr.strip()[-500:]}")
 
 
 def command_finish(args):
