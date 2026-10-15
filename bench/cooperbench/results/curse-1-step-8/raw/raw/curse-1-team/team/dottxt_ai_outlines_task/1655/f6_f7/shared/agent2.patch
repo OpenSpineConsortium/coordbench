@@ -1,0 +1,19 @@
+diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py
+index 85af9adc..f2b4ca11 100644
+--- a/outlines/types/__init__.py
++++ b/outlines/types/__init__.py
+@@ -68,3 +68,14 @@ email = Regex(
+ isbn = Regex(
+     r"(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]"
+ )
++
++# Matches a 16-digit credit card number written as four groups of four digits.
++# The groups are joined by nothing, by single spaces or by single hyphens, but
++# never by a mix of the two separators, so each form is its own alternative
++# (a backreference would be shorter, but the regex DSL has to stay compatible
++# with the finite-state machines built from these patterns, which have none).
++# Only the shape is checked: the Luhn check digit and the card network's prefix
++# are not.
++credit_card = Regex(
++    r"([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}|[0-9]{4} [0-9]{4} [0-9]{4} [0-9]{4}|[0-9]{16})"
++)

@@ -1,0 +1,48 @@
+commit cc6b28f4ac237d341fe6850e8528aef3b8631acb (main)
+Merge: 56ca7e6 09a464b
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 11:02:37 2026 +0000
+
+    Merge claude/9: closes #9
+
+commit 09a464bbee0385aef705f7e2ccb670a368c044e0 (claude/9)
+Merge: 93df75f 56ca7e6
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:02:26 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/9
+
+commit 93df75fd015f391984eefc6247696cd79803964e
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:02:20 2026 +0000
+
+    Add search path monitoring to FileSystemLoader
+    
+    With auto_reload (on by default) the loader remembers the environments
+    that load templates through it and polls its search paths from a daemon
+    thread. A template whose file is modified, deleted or added is removed
+    from those environments cache. The thread and the environment set hold
+    only weak references, so neither keeps a loader or an environment alive.
+
+ src/jinja2/loaders.py | 287 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 287 insertions(+)
+
+commit 56ca7e644cfd4877dbe0fa71b17b1bfd65ca10e2
+Merge: a292075 db37b3a
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 10:58:51 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit db37b3a0c39410657b69db0a856b2a048f68e582 (claude/2)
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 10:58:44 2026 +0000
+
+    Normalize template paths in FileSystemLoader and PackageLoader
+    
+    Run os.path.normpath on the template name before split_template_path, so
+    foo//a.html, ./foo/a.html and foo/../a.html resolve like their plain forms.
+    A .. that survives normalizing is still rejected by split_template_path.
+
+ src/jinja2/loaders.py | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "1e229e86a4",
+    "title": "Lead-only: integrate and submit feature 1",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792068002.0134952,
+    "last_note": "integrated agent2 patch (cors.go + tree.go hunk) with feature 1; patch.txt written, builds and tests pass",
+    "metadata": {
+      "feature_id": 1,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "c58296100f",
+    "title": "Implement feature 5",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792068002.0134385,
+    "last_note": "patch at /workspace/shared/agent2.patch (cors.go new, tree.go bottom hunk only; context.go and mux.go untouched; applies cleanly to HEAD)",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent2"
+    }
+  }
+]

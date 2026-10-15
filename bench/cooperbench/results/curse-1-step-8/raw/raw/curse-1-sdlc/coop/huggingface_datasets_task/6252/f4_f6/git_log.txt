@@ -1,0 +1,46 @@
+commit dcf770463488a35a26d4939a4157285a8260d933 (main)
+Merge: 320a1593 20c12394
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 12:27:20 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 20c12394d2c2e170c96ecf544a08ed75d9582d87 (claude/6)
+Merge: e9e822dd 320a1593
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:27:16 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/6
+    
+    # Conflicts:
+    #       src/datasets/features/image.py
+
+commit e9e822dd1c884713d222c4194310e7b59d8431be
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:26:40 2026 +0000
+
+    Convert CMYK images to RGB when decoding an Image with no mode set
+    
+    Most vision models and viewers expect RGB, so decode_example now hands out RGB for a
+    CMYK image unless the feature asks for a mode, which is still honoured.
+
+ src/datasets/features/image.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+commit 320a15936f7042801d223e618c64077c484860e5
+Merge: 0b55ec53 1ffa2bb9
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 12:26:36 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit 1ffa2bb9273a45436b50724f7ec8b224f63b2b8f (claude/4)
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:26:31 2026 +0000
+
+    Add optional crop_margin to the Image feature
+    
+    Crops a fixed number of pixels from every edge while decoding, before any mode conversion. An image too small to keep a pixel after the crop is returned uncropped.
+
+ src/datasets/features/image.py | 11 +++++++++++
+ 1 file changed, 11 insertions(+)

@@ -1,0 +1,269 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..c1e451c4 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -4,6 +4,8 @@ sources.
+ import importlib.util
+ import os
+ import sys
++import threading
++import time
+ import typing as t
+ import weakref
+ import zipimport
+@@ -148,6 +150,75 @@ class BaseLoader:
+         )
+ 
+ 
++def _scan_files(
++    searchpath: t.Sequence[str], followlinks: bool
++) -> t.Dict[str, t.Tuple[int, int]]:
++    """Map every file below the search paths to its modification time
++    and size. Polling these is the one way to notice a change that works
++    the same on every platform, with no dependency on a native API.
++    """
++    found: t.Dict[str, t.Tuple[int, int]] = {}
++
++    for root in searchpath:
++        for dirpath, _, filenames in os.walk(root, followlinks=followlinks):
++            for filename in filenames:
++                path = os.path.join(dirpath, filename)
++
++                try:
++                    stat = os.stat(path)
++                except OSError:
++                    # Removed between listing and stat, or unreadable.
++                    continue
++
++                found[os.path.abspath(path)] = (stat.st_mtime_ns, stat.st_size)
++
++    return found
++
++
++def _changed_files(
++    old: t.Mapping[str, t.Tuple[int, int]], new: t.Mapping[str, t.Tuple[int, int]]
++) -> t.List[str]:
++    """Paths that were added, modified or removed between two scans."""
++    changed = [path for path, stamp in new.items() if old.get(path) != stamp]
++    changed.extend(path for path in old if path not in new)
++    return changed
++
++
++def _watch_search_paths(
++    loader_ref: "weakref.ref[FileSystemLoader]",
++    interval: float,
++    previous: t.Dict[str, t.Tuple[int, int]],
++) -> None:
++    """Body of a loader's monitor thread. It sees the loader only
++    through a weak reference, so it never keeps the loader alive, and it
++    ends once the loader has been collected.
++    """
++    while True:
++        time.sleep(interval)
++        loader = loader_ref()
++
++        if loader is None:
++            return
++
++        try:
++            # With no environment to clear there is nothing to do. The
++            # old scan is kept, so a change made meanwhile is reported
++            # (at worst once too often) when an environment returns.
++            if len(loader._environments):
++                current = _scan_files(loader.searchpath, loader.followlinks)
++                changed = _changed_files(previous, current)
++                previous = current
++
++                if changed:
++                    loader._on_template_changed(changed)
++        except Exception:
++            # A failed scan or invalidation must not end the monitor;
++            # the next poll tries again.
++            pass
++        finally:
++            del loader
++
++
+ class FileSystemLoader(BaseLoader):
+     """Load templates from a directory in the file system.
+ 
+@@ -170,16 +241,28 @@ class FileSystemLoader(BaseLoader):
+     :param encoding: Use this encoding to read the text from template
+         files.
+     :param followlinks: Follow symbolic links in the path.
++    :param auto_reload: Watch the search paths and drop a template from
++        the cache of every environment that loaded it through this
++        loader as soon as its file is modified, deleted or added. The
++        paths are polled in a background thread that starts with the
++        first template loaded and ends with the loader.
++
++    .. versionchanged:: 3.1
++        Added the ``auto_reload`` parameter.
+ 
+     .. versionchanged:: 2.8
+         Added the ``followlinks`` parameter.
+     """
+ 
++    #: Seconds between two looks at the search paths.
++    poll_interval = 0.5
++
+     def __init__(
+         self,
+         searchpath: t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]],
+         encoding: str = "utf-8",
+         followlinks: bool = False,
++        auto_reload: bool = True,
+     ) -> None:
+         if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+             searchpath = [searchpath]
+@@ -187,11 +270,138 @@ class FileSystemLoader(BaseLoader):
+         self.searchpath = [os.fspath(p) for p in searchpath]
+         self.encoding = encoding
+         self.followlinks = followlinks
++        self.auto_reload = auto_reload
++        # Weak, so tracking an environment never keeps it alive. Stays
++        # empty when auto_reload is off.
++        self._environments: "weakref.WeakSet[Environment]" = weakref.WeakSet()
++        self._monitor_lock = threading.Lock()
++        self._monitor_thread: t.Optional[threading.Thread] = None
++
++    def _track_environment(self, environment: "Environment") -> None:
++        """Remember an environment that loads from this loader, so a
++        change can clear its cache, and make sure the search paths are
++        being watched.
++        """
++        # getattr: a subclass may not have called __init__.
++        if not getattr(self, "auto_reload", False):
++            return
++
++        try:
++            self._environments.add(environment)
++        except TypeError:
++            # Not something that can be weakly referenced.
++            return
++
++        self._start_monitoring()
++
++    def _start_monitoring(self) -> None:
++        with self._monitor_lock:
++            thread = self._monitor_thread
++
++            if thread is not None and thread.is_alive():
++                return
++
++            # Scan before the caller reads any file, so a change after
++            # that read can never go unseen.
++            baseline = _scan_files(self.searchpath, self.followlinks)
++            thread = threading.Thread(
++                target=_watch_search_paths,
++                args=(weakref.ref(self), self.poll_interval, baseline),
++                name="jinja2-search-path-monitor",
++                daemon=True,
++            )
++
++            try:
++                thread.start()
++            except RuntimeError:
++                # No threads here; templates are still checked by
++                # their uptodate function when the environment reloads.
++                return
++
++            self._monitor_thread = thread
++
++    def _template_names(
++        self, file_path: t.Union[str, "os.PathLike[str]"]
++    ) -> t.Set[str]:
++        """Names of the templates that a file below the search paths
++        would be loaded as. The file need not exist, since a deleted
++        file is exactly what has to be forgotten.
++        """
++        names = set()
++        file_path = os.fspath(file_path)
++        candidates = {os.path.abspath(file_path), os.path.realpath(file_path)}
++
++        for searchpath in self.searchpath:
++            roots = {os.path.abspath(searchpath), os.path.realpath(searchpath)}
++
++            for root in roots:
++                for candidate in candidates:
++                    try:
++                        relative = os.path.relpath(candidate, root)
++                    except ValueError:
++                        # Another drive on Windows.
++                        continue
++
++                    first = relative.split(os.path.sep, 1)[0]
++
++                    if relative == os.curdir or first == os.pardir:
++                        continue
++
++                    names.add(relative.replace(os.path.sep, "/"))
++
++        return names
++
++    def _on_template_changed(self, file_paths: t.List[str]) -> None:
++        """Drop the templates behind the given absolute file paths from
++        the cache of every environment this loader has served. Paths
++        outside the search paths, and files that do not exist, are
++        ignored. The monitor calls this with what it saw change, and
++        tests can call it directly.
++        """
++        if isinstance(file_paths, (str, os.PathLike)):
++            file_paths = [file_paths]  # type: ignore
++
++        names: t.Set[str] = set()
++
++        for file_path in file_paths:
++            names.update(self._template_names(file_path))
++
++        if not names:
++            return
++
++        for environment in list(self._environments):
++            cache = environment.cache
++
++            if cache is None:
++                continue
++
++            # The cache is keyed by the environment's own loader, which
++            # is this one unless a ChoiceLoader or the like wraps it.
++            owners: t.List[BaseLoader] = [self]
++
++            if environment.loader is not None and environment.loader is not self:
++                owners.append(environment.loader)
++
++            for owner in owners:
++                loader_ref = weakref.ref(owner)
++
++                for name in names:
++                    try:
++                        del cache[(loader_ref, name)]
++                    except KeyError:
++                        pass
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
+-        pieces = split_template_path(template)
++        self._track_environment(environment)
++
++        # Normalize before splitting so redundant separators and "." or
++        # ".." segments resolve the same way on every platform. A path
++        # that still climbs out of the search path keeps its leading
++        # ".." and is refused by split_template_path.
++        normalized = os.path.normpath(template).replace(os.path.sep, "/")
++        pieces = split_template_path(normalized)
+         for searchpath in self.searchpath:
+             filename = os.path.join(searchpath, *pieces)
+             f = open_if_exists(filename)
+@@ -326,7 +536,9 @@ class PackageLoader(BaseLoader):
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Optional[t.Callable[[], bool]]]:
+-        p = os.path.join(self._template_root, *split_template_path(template))
++        # Normalize before splitting, as FileSystemLoader does.
++        normalized = os.path.normpath(template).replace(os.path.sep, "/")
++        p = os.path.join(self._template_root, *split_template_path(normalized))
+         up_to_date: t.Optional[t.Callable[[], bool]]
+ 
+         if self._archive is None:

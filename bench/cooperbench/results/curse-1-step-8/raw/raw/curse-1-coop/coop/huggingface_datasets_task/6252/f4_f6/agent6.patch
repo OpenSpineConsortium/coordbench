@@ -1,0 +1,23 @@
+diff --git a/src/datasets/features/image.py b/src/datasets/features/image.py
+index 7555e160a..54530a5c7 100644
+--- a/src/datasets/features/image.py
++++ b/src/datasets/features/image.py
+@@ -59,6 +59,8 @@ class Image:
+     - An `np.ndarray`: NumPy array representing an image.
+     - A `PIL.Image.Image`: PIL image object.
+ 
++    Images in CMYK mode are converted to RGB when they are decoded, unless `mode` asks for another mode.
++
+     Args:
+         mode (`str`, *optional*):
+             The mode to convert the image to. If `None`, the native mode of the image is used.
+@@ -186,6 +188,9 @@ class Image:
+         else:
+             image = PIL.Image.open(BytesIO(bytes_))
+         image.load()  # to avoid "Too many open files" errors
++        if not self.mode and image.mode == "CMYK":
++            # Most vision models and viewers expect RGB, so CMYK is converted unless `mode` asks for something else
++            image = image.convert("RGB")
+         if self.mode and self.mode != image.mode:
+             image = image.convert(self.mode)
+         return image

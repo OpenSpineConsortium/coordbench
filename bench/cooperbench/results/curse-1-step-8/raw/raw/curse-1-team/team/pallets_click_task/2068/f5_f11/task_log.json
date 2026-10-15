@@ -1,0 +1,62 @@
+[
+  {
+    "kind": "create",
+    "task_id": "6b5a3821f3",
+    "by": "bench-runner",
+    "title": "Implement feature 11",
+    "ts": 1792060728.4890435
+  },
+  {
+    "kind": "create",
+    "task_id": "bf79e54975",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 5",
+    "ts": 1792060728.4890869
+  },
+  {
+    "kind": "claim",
+    "task_id": "6b5a3821f3",
+    "by": "agent2",
+    "ts": 1792060757.4105582
+  },
+  {
+    "kind": "update",
+    "task_id": "bf79e54975",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing feature 5 (lock_files)",
+    "ts": 1792060764.1993814
+  },
+  {
+    "kind": "update",
+    "task_id": "6b5a3821f3",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "started",
+    "ts": 1792060765.7833416
+  },
+  {
+    "kind": "update",
+    "task_id": "bf79e54975",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 5 implemented and tested; waiting for agent2 patch to merge",
+    "ts": 1792060851.0168698
+  },
+  {
+    "kind": "update",
+    "task_id": "6b5a3821f3",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792060908.1949446
+  },
+  {
+    "kind": "update",
+    "task_id": "bf79e54975",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch (feature 11) onto feature 5; patch.txt written (321 lines, both features); 560 tests pass",
+    "ts": 1792060982.8448346
+  }
+]

@@ -1,0 +1,19 @@
+commit 831a0f6c6ac13a608a470305e8961acf4aa941bf (agent2, agent1)
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:02:31 2026 +0000
+
+    Add search path monitoring to FileSystemLoader for automatic cache invalidation
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ src/jinja2/loaders.py | 205 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 205 insertions(+)
+
+commit ab6a37def04aa6aeb7e1a6be3eb1330f68d5adef
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 10:59:59 2026 +0000
+
+    Normalize template paths with os.path.normpath in FileSystemLoader and PackageLoader
+
+ src/jinja2/loaders.py | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)

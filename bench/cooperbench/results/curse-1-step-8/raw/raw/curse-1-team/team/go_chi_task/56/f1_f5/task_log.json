@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "c58296100f",
+    "by": "bench-runner",
+    "title": "Implement feature 5",
+    "ts": 1792068002.0134416
+  },
+  {
+    "kind": "create",
+    "task_id": "1e229e86a4",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792068002.0134976
+  },
+  {
+    "kind": "claim",
+    "task_id": "c58296100f",
+    "by": "agent2",
+    "ts": 1792068027.3639197
+  },
+  {
+    "kind": "update",
+    "task_id": "c58296100f",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "starting CORS (cors.go, context.go, mux.go, tree.go)",
+    "ts": 1792068027.5078442
+  },
+  {
+    "kind": "claim",
+    "task_id": "1e229e86a4",
+    "by": "agent1",
+    "ts": 1792068085.018011
+  },
+  {
+    "kind": "update",
+    "task_id": "1e229e86a4",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing Allow header (context/tree/mux/middleware); will integrate agent2 patch last",
+    "ts": 1792068085.1491864
+  },
+  {
+    "kind": "update",
+    "task_id": "c58296100f",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch (cors.go new, tree.go bottom hunk only; context.go and mux.go untouched; applies cleanly to HEAD)",
+    "ts": 1792068372.4449432
+  },
+  {
+    "kind": "update",
+    "task_id": "1e229e86a4",
+    "by": "agent1",
+    "status": "done",
+    "note": "integrated agent2 patch (cors.go + tree.go hunk) with feature 1; patch.txt written, builds and tests pass",
+    "ts": 1792068483.0610418
+  }
+]

@@ -1,0 +1,52 @@
+diff --git a/src/datasets/features/image.py b/src/datasets/features/image.py
+index 7555e160a..a325bbda2 100644
+--- a/src/datasets/features/image.py
++++ b/src/datasets/features/image.py
+@@ -65,6 +65,12 @@ class Image:
+         decode (`bool`, defaults to `True`):
+             Whether to decode the image data. If `False`,
+             returns the underlying dictionary in the format `{"path": image_path, "bytes": image_bytes}`.
++        crop_margin (`int`, *optional*):
++            Number of pixels to crop from each of the four edges of the image when decoding, e.g. to remove
++            watermarks or frames at the borders. The image keeps its center and its size shrinks by
++            `2 * crop_margin` in both dimensions. If `None` or `0`, the image is not cropped. An image too small
++            to keep at least one pixel after the crop (`width <= 2 * crop_margin` or `height <= 2 * crop_margin`)
++            is returned uncropped.
+ 
+     Examples:
+ 
+@@ -84,6 +90,7 @@ class Image:
+     mode: Optional[str] = None
+     decode: bool = True
+     id: Optional[str] = None
++    crop_margin: Optional[int] = None
+     # Automatically constructed
+     dtype: ClassVar[str] = "PIL.Image.Image"
+     pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string()})
+@@ -188,6 +195,8 @@ class Image:
+         image.load()  # to avoid "Too many open files" errors
+         if self.mode and self.mode != image.mode:
+             image = image.convert(self.mode)
++        if self.crop_margin:
++            image = _crop_margin(image, self.crop_margin)
+         return image
+ 
+     def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:
+@@ -282,6 +291,17 @@ class Image:
+         return array_cast(storage, self.pa_type)
+ 
+ 
++def _crop_margin(image: "PIL.Image.Image", margin: int) -> "PIL.Image.Image":
++    """Crop `margin` pixels from each edge of the image, keeping its center.
++
++    A non-positive margin, or one that would leave nothing of the image, returns the image unchanged.
++    """
++    width, height = image.size
++    if margin <= 0 or 2 * margin >= width or 2 * margin >= height:
++        return image
++    return image.crop((margin, margin, width - margin, height - margin))
++
++
+ def list_image_compression_formats() -> List[str]:
+     if config.PIL_AVAILABLE:
+         import PIL.Image

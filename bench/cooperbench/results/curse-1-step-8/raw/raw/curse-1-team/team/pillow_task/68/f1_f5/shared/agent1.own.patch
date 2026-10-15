@@ -1,0 +1,49 @@
+diff --git a/Tests/test_imageops.py b/Tests/test_imageops.py
+index 3621aa50f..44b457184 100644
+--- a/Tests/test_imageops.py
++++ b/Tests/test_imageops.py
+@@ -458,6 +458,19 @@ def test_exif_transpose_xml_without_xmp() -> None:
+         assert 0x0112 not in transposed_im.getexif()
+ 
+ 
++def test_exif_transpose_with_xmp_tuple() -> None:
++    with Image.open("Tests/images/xmp_tags_orientation.png") as im:
++        assert im.getexif()[0x0112] == 3
++
++        assert isinstance(im.info["xmp"], bytes)
++        im.info["xmp"] = (im.info["xmp"],)
++        transposed_im = ImageOps.exif_transpose(im)
++        assert 0x0112 not in transposed_im.getexif()
++
++        for xmp in transposed_im.info["xmp"]:
++            assert b"tiff:Orientation" not in xmp
++
++
+ def test_exif_transpose_in_place() -> None:
+     with Image.open("Tests/images/orientation_rectangle.jpg") as im:
+         assert im.size == (2, 1)
+diff --git a/src/PIL/ImageOps.py b/src/PIL/ImageOps.py
+index fef1d7328..75dfbee22 100644
+--- a/src/PIL/ImageOps.py
++++ b/src/PIL/ImageOps.py
+@@ -729,11 +729,15 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+                         r"<tiff:Orientation>([0-9])</tiff:Orientation>",
+                     ):
+                         value = exif_image.info[key]
+-                        exif_image.info[key] = (
+-                            re.sub(pattern, "", value)
+-                            if isinstance(value, str)
+-                            else re.sub(pattern.encode(), b"", value)
+-                        )
++                        if isinstance(value, str):
++                            value = re.sub(pattern, "", value)
++                        elif isinstance(value, tuple):
++                            value = tuple(
++                                re.sub(pattern.encode(), b"", v) for v in value
++                            )
++                        else:
++                            value = re.sub(pattern.encode(), b"", value)
++                        exif_image.info[key] = value
+         if not in_place:
+             return transposed_image
+     elif not in_place:

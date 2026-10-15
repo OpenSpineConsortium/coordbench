@@ -1,0 +1,31 @@
+commit eda8c29d774e24c4a061f99dc069325a67663487 (agent2)
+Merge: 19e962d 01c4318
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:13:19 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit fa58c5c54207056c0a382921993c3e5f8fe0e8e4 (agent1)
+Merge: 01c4318 19e962d
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 11:13:06 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 01c431852560f678cdd922a45697f1db05a89451
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 11:13:06 2026 +0000
+
+    feat(types): add url regex type for HTTP and HTTPS URLs
+
+ outlines/types/__init__.py | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+commit 19e962deeb066986abe3b60a84a69f05479baf63
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:11:43 2026 +0000
+
+    feat(types): add credit_card regex type
+
+ outlines/types/__init__.py | 9 +++++++++
+ 1 file changed, 9 insertions(+)

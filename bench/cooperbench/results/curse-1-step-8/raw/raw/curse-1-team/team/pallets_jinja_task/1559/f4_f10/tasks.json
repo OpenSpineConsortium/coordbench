@@ -1,0 +1,29 @@
+[
+  {
+    "id": "19f379b30a",
+    "title": "Lead-only: integrate and submit feature 4",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792061547.4794936,
+    "last_note": "merged agent2.patch, 840 tests pass, patch.txt written",
+    "metadata": {
+      "feature_id": 4,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "aa7fd2c153",
+    "title": "Implement feature 10",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792061547.4794233,
+    "last_note": "patch at /workspace/shared/agent2.patch (src/jinja2/ext.py only; hunks: import hashlib, __init__ + extend kwargs, new methods between _uninstall and _extract; parse() and _make_node() untouched)",
+    "metadata": {
+      "feature_id": 10,
+      "assigned_to": "agent2"
+    }
+  }
+]

@@ -1,0 +1,321 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..c7fa1aa 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -478,6 +478,144 @@ def _nullpager(
+         stream.write(text)
+ 
+ 
++_MONITOR_POLL_INTERVAL = 0.1
++
++
++def _monitor_callback(
++    monitor_process: t.Any,
++) -> cabc.Callable[[str, int, str, float], None] | None:
++    """Find the callback in what was passed as ``monitor_process``: the
++    callback itself, or a mapping or an object with a ``callback``
++    entry. Anything else turns monitoring off.
++    """
++    if monitor_process is None or monitor_process is False:
++        return None
++
++    if callable(monitor_process):
++        return monitor_process  # type: ignore[no-any-return]
++
++    if isinstance(monitor_process, cabc.Mapping):
++        callback = monitor_process.get("callback")
++    else:
++        callback = getattr(monitor_process, "callback", None)
++
++    return callback if callable(callback) else None
++
++
++def _process_is_stopped(pid: int) -> bool | None:
++    """Whether the process is stopped by a signal, or ``None`` when the
++    platform cannot say. Windows has no such state, Linux tells it in
++    ``/proc`` and the other POSIX systems through ``ps``.
++    """
++    if WIN:
++        return None
++
++    try:
++        pid = int(pid)
++
++        try:
++            with open(f"/proc/{pid}/stat", "rb") as f:
++                stat = f.read()
++        except FileNotFoundError:
++            stat = b""
++
++        if stat:
++            # The state follows the command, which is in parentheses
++            # and may contain spaces and parentheses itself.
++            state = stat.rpartition(b")")[2].split()[0]
++            return state in (b"T", b"t")
++
++        if os.path.isdir("/proc/self"):
++            # /proc exists, so the process is gone.
++            return None
++
++        import subprocess
++
++        out = subprocess.run(
++            ["ps", "-o", "stat=", "-p", str(pid)],
++            stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL,
++            check=False,
++        ).stdout
++        return out.strip().startswith(b"T")
++    except Exception:
++        return None
++
++
++class _ProcessMonitor:
++    """Reports the life of an editor process to a callback from a
++    background thread: ``start`` when the monitor starts, ``suspend`` and
++    ``resume`` when the process is stopped and continued by a signal,
++    where the platform shows it, and ``terminate`` after :meth:`stop`.
++
++    One thread makes every call, so the events arrive in order, and
++    :meth:`stop` returns after the last of them. A callback that raises
++    gets a :exc:`UserWarning` and monitoring goes on.
++    """
++
++    def __init__(
++        self,
++        callback: cabc.Callable[[str, int, str, float], None],
++        process_id: int,
++        editor_command: str,
++    ) -> None:
++        import threading
++
++        self._callback = callback
++        self._process_id = process_id
++        self._editor_command = editor_command
++        self._start_time = time.time()
++        self._end_time = self._start_time
++        self._done = threading.Event()
++        self._thread = threading.Thread(
++            target=self._run, name="click-editor-monitor", daemon=True
++        )
++
++    def start(self) -> None:
++        self._thread.start()
++
++    def stop(self) -> None:
++        self._end_time = time.time()
++        self._done.set()
++        self._thread.join()
++
++    def _notify(self, event_type: str, timestamp: float) -> None:
++        try:
++            self._callback(
++                event_type, self._process_id, self._editor_command, timestamp
++            )
++        except Exception as e:
++            import warnings
++
++            try:
++                warnings.warn(
++                    _(
++                        "Editor process monitor callback failed on"
++                        " {event!r}: {error}"
++                    ).format(event=event_type, error=e),
++                    UserWarning,
++                    stacklevel=2,
++                )
++            except Exception:
++                # Warnings turned into errors must not end monitoring.
++                pass
++
++    def _run(self) -> None:
++        self._notify("start", self._start_time)
++        stopped = False
++
++        while not self._done.wait(_MONITOR_POLL_INTERVAL):
++            now_stopped = _process_is_stopped(self._process_id)
++
++            if now_stopped is None or now_stopped == stopped:
++                continue
++
++            stopped = now_stopped
++            self._notify("suspend" if stopped else "resume", time.time())
++
++        self._notify("terminate", self._end_time)
++
++
+ class Editor:
+     def __init__(
+         self,
+@@ -485,11 +623,15 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        lock_files: bool = False,
++        monitor_process: t.Any = None,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.lock_files = lock_files
++        self.monitor_process = monitor_process
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,6 +647,57 @@ class Editor:
+                 return editor
+         return "vi"
+ 
++    def _get_lock_filename(self, filename: str) -> str:
++        """Return the path of the lock file for ``filename``: the same
++        directory, named ``.{original_filename}.lock``.
++        """
++        directory, base = os.path.split(filename)
++        return os.path.join(directory, f".{base}.lock")
++
++    def _create_lock_file(self, filename: str) -> str:
++        """Create the lock file for ``filename`` and return its path.
++
++        The file is created with ``O_CREAT | O_EXCL``, so the check for an
++        existing lock and the creation are one atomic step, and two
++        processes can never both believe they hold the lock. The file
++        records the process ID and the time for whoever finds it.
++
++        :raises ClickException: if the file is already locked.
++        """
++        import datetime
++
++        lock_filename = self._get_lock_filename(filename)
++
++        try:
++            fd = os.open(lock_filename, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
++        except FileExistsError:
++            raise ClickException(
++                _(
++                    "{filename}: File is already being edited."
++                    " Lock file exists: {lock_filename}"
++                ).format(filename=filename, lock_filename=lock_filename)
++            ) from None
++
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as f:
++                f.write(f"PID: {os.getpid()}\n")
++                f.write(f"Time: {datetime.datetime.now().isoformat()}\n")
++        except BaseException:
++            # The lock exists but could not be filled in; do not leave a
++            # lock behind that nobody will remove.
++            self._remove_lock_file(lock_filename)
++            raise
++
++        return lock_filename
++
++    def _remove_lock_file(self, lock_filename: str) -> None:
++        """Remove a lock file. A lock that is already gone, or that cannot
++        be removed, is ignored so that cleanup never hides the error that
++        led to it.
++        """
++        with contextlib.suppress(OSError):
++            os.unlink(lock_filename)
++
+     def edit_file(self, filename: str) -> None:
+         import subprocess
+ 
+@@ -515,9 +708,26 @@ class Editor:
+             environ = os.environ.copy()
+             environ.update(self.env)
+ 
++        lock_filename: str | None = None
++        callback = _monitor_callback(self.monitor_process)
++
+         try:
++            if self.lock_files:
++                lock_filename = self._create_lock_file(filename)
++
+             c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
+-            exit_code = c.wait()
++            monitor = None
++
++            if callback is not None:
++                monitor = _ProcessMonitor(callback, c.pid, editor)
++                monitor.start()
++
++            try:
++                exit_code = c.wait()
++            finally:
++                if monitor is not None:
++                    monitor.stop()
++
+             if exit_code != 0:
+                 raise ClickException(
+                     _("{editor}: Editing failed").format(editor=editor)
+@@ -526,6 +736,11 @@ class Editor:
+             raise ClickException(
+                 _("{editor}: Editing failed: {e}").format(editor=editor, e=e)
+             ) from e
++        finally:
++            # Runs on success, on a failed or interrupted editor and on
++            # KeyboardInterrupt, but only for a lock this call created.
++            if lock_filename is not None:
++                self._remove_lock_file(lock_filename)
+ 
+     def edit(self, text: t.AnyStr | None) -> t.AnyStr | None:
+         import tempfile
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..d72587b 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,10 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    lock_files: bool = False,
++    monitor_process: cabc.Callable[[str, int, str, float], None]
++    | cabc.Mapping[str, t.Any]
++    | None = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +681,41 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param lock_files: if this is true, a lock file named
++                       ``.{filename}.lock`` is created next to the file
++                       before the editor opens and removed once it closes,
++                       also when it fails or is interrupted.  If the lock
++                       file already exists, another edit is in progress
++                       and a :exc:`ClickException` is raised.  The lock
++                       file holds the process ID and the time it was
++                       created.  Defaults to false.
++    :param monitor_process: if provided, the life of the editor process is
++        reported to a callback from a background thread while the editor
++        runs.  This is the callback itself, or a mapping or an object whose
++        ``callback`` entry is the callback.  It is called as
++        ``callback(event_type, process_id, editor_command, timestamp)``
++        where ``event_type`` is ``"start"`` when the editor begins,
++        ``"terminate"`` when it ends, and, where the platform shows it,
++        ``"suspend"`` and ``"resume"`` when it is stopped and continued;
++        ``process_id`` is the id of the process the editor was started
++        with, ``editor_command`` the editor that was run and ``timestamp``
++        the time of the event as :func:`time.time` gives it.  A callback
++        that raises an exception causes a :exc:`UserWarning` and the
++        monitoring goes on.  The editing waits for the last call.
++
++    .. versionchanged:: 8.2
++        Added the ``lock_files`` and ``monitor_process`` parameters.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        lock_files=lock_files,
++        monitor_process=monitor_process,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

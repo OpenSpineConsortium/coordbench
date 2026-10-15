@@ -1,0 +1,64 @@
+diff --git a/src/datasets/features/image.py b/src/datasets/features/image.py
+index 7555e160a..bef791b95 100644
+--- a/src/datasets/features/image.py
++++ b/src/datasets/features/image.py
+@@ -65,6 +65,12 @@ class Image:
+         decode (`bool`, defaults to `True`):
+             Whether to decode the image data. If `False`,
+             returns the underlying dictionary in the format `{"path": image_path, "bytes": image_bytes}`.
++        crop_margin (`int`, *optional*):
++            Number of pixels to crop from each of the four edges of the image when it is decoded, for example
++            to remove a watermark or a border. If `None` or `0`, the image is not cropped. It must not be
++            negative, and the image must be larger than twice the margin in both dimensions.
++
++    Images in the CMYK mode are converted to RGB when they are decoded, unless `mode` asks for another mode.
+ 
+     Examples:
+ 
+@@ -84,11 +90,16 @@ class Image:
+     mode: Optional[str] = None
+     decode: bool = True
+     id: Optional[str] = None
++    crop_margin: Optional[int] = None
+     # Automatically constructed
+     dtype: ClassVar[str] = "PIL.Image.Image"
+     pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string()})
+     _type: str = field(default="Image", init=False, repr=False)
+ 
++    def __post_init__(self):
++        if self.crop_margin is not None and self.crop_margin < 0:
++            raise ValueError(f"crop_margin must be a non-negative integer or None, but got {self.crop_margin!r}.")
++
+     def __call__(self):
+         return self.pa_type
+ 
+@@ -186,10 +197,27 @@ class Image:
+         else:
+             image = PIL.Image.open(BytesIO(bytes_))
+         image.load()  # to avoid "Too many open files" errors
+-        if self.mode and self.mode != image.mode:
+-            image = image.convert(self.mode)
++        if self.crop_margin:
++            image = self._crop_margin(image)
++        if self.mode:
++            if self.mode != image.mode:
++                image = image.convert(self.mode)
++        elif image.mode == "CMYK":
++            # most vision models and viewers expect RGB, so CMYK images are converted unless a mode is asked for
++            image = image.convert("RGB")
+         return image
+ 
++    def _crop_margin(self, image: "PIL.Image.Image") -> "PIL.Image.Image":
++        """Remove `crop_margin` pixels from each edge of the image."""
++        margin = self.crop_margin
++        width, height = image.size
++        if 2 * margin >= width or 2 * margin >= height:
++            raise ValueError(
++                f"Cannot crop a margin of {margin} pixels from each edge of an image of size {width}x{height}: "
++                "nothing would be left."
++            )
++        return image.crop((margin, margin, width - margin, height - margin))
++
+     def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:
+         """If in the decodable state, return the feature itself, otherwise flatten the feature into a dictionary."""
+         from .features import Value

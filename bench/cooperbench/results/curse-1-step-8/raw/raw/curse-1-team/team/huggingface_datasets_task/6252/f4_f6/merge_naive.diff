@@ -1,0 +1,20 @@
+diff --cc src/datasets/features/image.py
+index 29115d807,74d7eee28..000000000
+--- a/src/datasets/features/image.py
++++ b/src/datasets/features/image.py
+@@@ -192,6 -198,12 +198,15 @@@ class Image
+          # is converted to RGB here; a user who asked for CMYK explicitly keeps it.
+          if image.mode == "CMYK" and self.mode != "CMYK":
+              image = image.convert("RGB")
+++<<<<<<< HEAD
+++=======
++         if self.crop_margin:
++             # crop the same number of pixels from every edge; a margin that would leave nothing is ignored
++             margin = self.crop_margin
++             width, height = image.size
++             if margin > 0 and 2 * margin < width and 2 * margin < height:
++                 image = image.crop((margin, margin, width - margin, height - margin))
+++>>>>>>> agent1
+          return image
+  
+      def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:

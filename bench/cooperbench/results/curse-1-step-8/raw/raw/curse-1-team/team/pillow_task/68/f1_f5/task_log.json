@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "create",
+    "task_id": "67cb930f61",
+    "by": "bench-runner",
+    "title": "Implement feature 5",
+    "ts": 1792068576.4418879
+  },
+  {
+    "kind": "create",
+    "task_id": "216f9da128",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792068576.4419603
+  },
+  {
+    "kind": "claim",
+    "task_id": "67cb930f61",
+    "by": "agent2",
+    "ts": 1792068610.41916
+  },
+  {
+    "kind": "claim",
+    "task_id": "216f9da128",
+    "by": "agent1",
+    "ts": 1792068654.9888911
+  },
+  {
+    "kind": "update",
+    "task_id": "216f9da128",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 1 implemented and tested; waiting for agent2 patch to integrate",
+    "ts": 1792068655.107395
+  },
+  {
+    "kind": "update",
+    "task_id": "67cb930f61",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch (src only: agent2.src.patch)",
+    "ts": 1792068792.7320583
+  },
+  {
+    "kind": "update",
+    "task_id": "216f9da128",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch + feature 1; patch.txt written (src/PIL/ImageOps.py), 42 tests pass",
+    "ts": 1792068822.0129442
+  }
+]

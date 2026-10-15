@@ -1,0 +1,299 @@
+diff --git a/context.go b/context.go
+index e78a238..008cb09 100644
+--- a/context.go
++++ b/context.go
+@@ -74,6 +74,12 @@ type Context struct {
+ 	// patterns across a stack of sub-routers.
+ 	RoutePatterns []string
+ 
++	// methodsAllowed holds the methods registered for the route pattern that
++	// matched the request path when the request's own method did not, so that
++	// a 405 response can list them in its Allow header. It is only filled on
++	// the method-not-allowed path.
++	methodsAllowed []methodTyp
++
+ 	// methodNotAllowed hint
+ 	methodNotAllowed bool
+ }
+@@ -91,6 +97,7 @@ func (x *Context) Reset() {
+ 	x.routeParams.Keys = x.routeParams.Keys[:0]
+ 	x.routeParams.Values = x.routeParams.Values[:0]
+ 	x.methodNotAllowed = false
++	x.methodsAllowed = x.methodsAllowed[:0]
+ 	x.parentCtx = nil
+ }
+ 
+diff --git a/middleware/allowed_methods.go b/middleware/allowed_methods.go
+new file mode 100644
+index 0000000..6dfae0c
+--- /dev/null
++++ b/middleware/allowed_methods.go
+@@ -0,0 +1,100 @@
++package middleware
++
++import (
++	"net/http"
++	"sync"
++
++	"github.com/go-chi/chi/v5"
++)
++
++// allowedMethods are the methods SetAllowHeader looks for, in the order
++// it lists them.
++var allowedMethods = []string{
++	http.MethodGet,
++	http.MethodHead,
++	http.MethodPost,
++	http.MethodPut,
++	http.MethodPatch,
++	http.MethodDelete,
++	http.MethodConnect,
++	http.MethodOptions,
++	http.MethodTrace,
++}
++
++// probeContexts holds the routing contexts SetAllowHeader looks ahead with.
++// Match updates the context it is given, so the request's own context is
++// never used for it.
++var probeContexts = sync.Pool{
++	New: func() interface{} { return chi.NewRouteContext() },
++}
++
++// SetAllowHeader adds the Allow header for 405 responses based on
++// registered methods for the requested path.
++//
++// When the router has no route for the request's method on its path, the
++// middleware looks up which of the standard methods the router does have a
++// route for, and lists them in the Allow header, one value for each, in a
++// stable order. Its answer is set before the next handler runs, so it holds
++// for the router's own 405 response and for one from a handler set with
++// MethodNotAllowed alike. A request that has a route for its method gets no
++// Allow header from it, and neither does one whose path matches no route.
++// The status code of the response is never looked at.
++func SetAllowHeader(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.Routes != nil {
++			addAllowHeader(w.Header(), rctx, r)
++		}
++		next.ServeHTTP(w, r)
++	})
++}
++
++// addAllowHeader sets the Allow header when the request's method has no
++// route on the request's path but others do.
++func addAllowHeader(header http.Header, rctx *chi.Context, r *http.Request) {
++	if len(header["Allow"]) > 0 {
++		return
++	}
++
++	method := r.Method
++	if rctx.RouteMethod != "" {
++		method = rctx.RouteMethod
++	}
++	path := lookupPath(rctx, r)
++
++	probe := probeContexts.Get().(*chi.Context)
++	defer probeContexts.Put(probe)
++
++	if matches(rctx.Routes, probe, method, path) {
++		return
++	}
++	for _, m := range allowedMethods {
++		if matches(rctx.Routes, probe, m, path) {
++			header.Add("Allow", m)
++		}
++	}
++}
++
++// matches reports whether routes has a handler for the method and path,
++// leaving the probe context clean for the next look-up.
++func matches(routes chi.Routes, probe *chi.Context, method, path string) bool {
++	probe.Reset()
++	return routes.Match(probe, method, path)
++}
++
++// lookupPath is the path the router is searched with at this point of the
++// request: the routing path another middleware has set at the top of the
++// router, else the URL's own. Inside a sub-router the routing context holds
++// the part of the path left for the sub-router, while its Routes is still the
++// router the request came in at, so the URL's path is the one that fits it.
++func lookupPath(rctx *chi.Context, r *http.Request) string {
++	if rctx.RoutePath != "" && len(rctx.RoutePatterns) == 0 {
++		return rctx.RoutePath
++	}
++	if r.URL.RawPath != "" {
++		return r.URL.RawPath
++	}
++	if r.URL.Path == "" {
++		return "/"
++	}
++	return r.URL.Path
++}
+diff --git a/mux.go b/mux.go
+index 0d1caa6..7696c4c 100644
+--- a/mux.go
++++ b/mux.go
+@@ -377,12 +377,14 @@ func (mx *Mux) NotFoundHandler() http.HandlerFunc {
+ }
+ 
+ // MethodNotAllowedHandler returns the default Mux 405 responder whenever
+-// a method cannot be resolved for a route.
+-func (mx *Mux) MethodNotAllowedHandler() http.HandlerFunc {
++// a method cannot be resolved for a route. The default responder lists
++// the methods that are allowed for the route in its Allow header; a handler
++// set with MethodNotAllowed is returned as it is.
++func (mx *Mux) MethodNotAllowedHandler(methodsAllowed ...methodTyp) http.HandlerFunc {
+ 	if mx.methodNotAllowedHandler != nil {
+ 		return mx.methodNotAllowedHandler
+ 	}
+-	return methodNotAllowedHandler
++	return methodNotAllowedHandler(methodsAllowed...)
+ }
+ 
+ // handle registers a http.Handler in the routing tree for a particular http method
+@@ -445,7 +447,7 @@ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	if rctx.methodNotAllowed {
+-		mx.MethodNotAllowedHandler().ServeHTTP(w, r)
++		mx.MethodNotAllowedHandler(rctx.methodsAllowed...).ServeHTTP(w, r)
+ 	} else {
+ 		mx.NotFoundHandler().ServeHTTP(w, r)
+ 	}
+@@ -480,8 +482,17 @@ func (mx *Mux) updateRouteHandler() {
+ }
+ 
+ // methodNotAllowedHandler is a helper function to respond with a 405,
+-// method not allowed.
+-func methodNotAllowedHandler(w http.ResponseWriter, r *http.Request) {
+-	w.WriteHeader(405)
+-	w.Write(nil)
++// method not allowed, and an Allow header naming the methods allowed for
++// the route (RFC 9110, section 15.5.6). An Allow header that is already set,
++// by middleware.SetAllowHeader for one, is left as it is.
++func methodNotAllowedHandler(methodsAllowed ...methodTyp) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		if h := w.Header(); len(h["Allow"]) == 0 {
++			for _, name := range allowedMethodNames(methodsAllowed) {
++				h.Add("Allow", name)
++			}
++		}
++		w.WriteHeader(405)
++		w.Write(nil)
++	}
+ }
+diff --git a/tree.go b/tree.go
+index 4189b52..04f28eb 100644
+--- a/tree.go
++++ b/tree.go
+@@ -59,9 +59,92 @@ func RegisterMethod(method string) {
+ 	}
+ 	mt := methodTyp(2 << n)
+ 	methodMap[method] = mt
++	reverseMethodMap[mt] = method
+ 	mALL |= mt
+ }
+ 
++// reverseMethodMap converts a method type back to its method name. It is
++// the inverse of methodMap, kept in step with it by RegisterMethod.
++var reverseMethodMap = map[methodTyp]string{
++	mCONNECT: http.MethodConnect,
++	mDELETE:  http.MethodDelete,
++	mGET:     http.MethodGet,
++	mHEAD:    http.MethodHead,
++	mOPTIONS: http.MethodOptions,
++	mPATCH:   http.MethodPatch,
++	mPOST:    http.MethodPost,
++	mPUT:     http.MethodPut,
++	mTRACE:   http.MethodTrace,
++}
++
++// allowOrder is the order in which the methods of an Allow header are
++// listed, so that the header is the same for every request. Methods added
++// by RegisterMethod follow in the order they were registered.
++var allowOrder = []methodTyp{
++	mGET, mHEAD, mPOST, mPUT, mPATCH, mDELETE, mCONNECT, mOPTIONS, mTRACE,
++}
++
++// allowRank gives the place of a method in an Allow header.
++func allowRank(m methodTyp) int {
++	for i, s := range allowOrder {
++		if s == m {
++			return i
++		}
++	}
++	return len(allowOrder)
++}
++
++// allowedMethodNames returns the names of the given method types, each once,
++// in the stable order of allowOrder.
++func allowedMethodNames(methods []methodTyp) []string {
++	sorted := make([]methodTyp, 0, len(methods))
++	for _, m := range methods {
++		if _, ok := reverseMethodMap[m]; ok {
++			sorted = append(sorted, m)
++		}
++	}
++	sort.Slice(sorted, func(i, j int) bool {
++		ri, rj := allowRank(sorted[i]), allowRank(sorted[j])
++		if ri != rj {
++			return ri < rj
++		}
++		return sorted[i] < sorted[j]
++	})
++
++	names := make([]string, 0, len(sorted))
++	for i, m := range sorted {
++		if i > 0 && m == sorted[i-1] {
++			continue
++		}
++		names = append(names, reverseMethodMap[m])
++	}
++	return names
++}
++
++// addMethodsAllowed records the methods registered on a node whose path
++// matched the request while its handler for the request's method did not.
++// mALL and mSTUB are bookkeeping keys, not methods, and a method is listed
++// once however many matching nodes register it.
++func (x *Context) addMethodsAllowed(eps endpoints) {
++	for m, ep := range eps {
++		if m == mALL || m == mSTUB || ep == nil || ep.handler == nil {
++			continue
++		}
++		if !x.hasMethodAllowed(m) {
++			x.methodsAllowed = append(x.methodsAllowed, m)
++		}
++	}
++}
++
++func (x *Context) hasMethodAllowed(m methodTyp) bool {
++	for _, have := range x.methodsAllowed {
++		if have == m {
++			return true
++		}
++	}
++	return false
++}
++
+ type nodeTyp uint8
+ 
+ const (
+@@ -454,6 +537,8 @@ func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {
+ 							return xn
+ 						}
+ 
++						rctx.addMethodsAllowed(xn.endpoints)
++
+ 						// flag that the routing context found a route, but not a corresponding
+ 						// supported method
+ 						rctx.methodNotAllowed = true
+@@ -493,6 +578,8 @@ func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {
+ 					return xn
+ 				}
+ 
++				rctx.addMethodsAllowed(xn.endpoints)
++
+ 				// flag that the routing context found a route, but not a corresponding
+ 				// supported method
+ 				rctx.methodNotAllowed = true

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "a587df7b1f",
+    "title": "Implement feature 9",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792062028.8228118,
+    "last_note": "patch at /workspace/shared/agent2.patch",
+    "metadata": {
+      "feature_id": 9,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "fedb8c2593",
+    "title": "Lead-only: integrate and submit feature 2",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792062028.8228652,
+    "last_note": "merged f2 (normpath) + f9 (auto_reload) into patch.txt; 841 tests pass",
+    "metadata": {
+      "feature_id": 2,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

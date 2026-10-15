@@ -1,0 +1,1 @@
+{"id": "fedb8c2593", "title": "Lead-only: integrate and submit feature 2", "owner": "agent1", "status": "in_progress", "created_by": "bench-runner", "created_at": 1792062028.8228652, "last_note": "implementing normpath in the two get_source methods", "metadata": {"feature_id": 2, "assigned_to": "agent1", "lead_task": true}}

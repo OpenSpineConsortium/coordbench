@@ -1,0 +1,188 @@
+{
+  "repo": "dottxt_ai_outlines_task",
+  "task_id": 1655,
+  "features": [
+    6,
+    7
+  ],
+  "setting": "coop",
+  "apply_status": {
+    "agent1": "applied",
+    "agent2": "applied"
+  },
+  "merge": {
+    "status": "identical",
+    "strategy": "skip-merge-identical",
+    "diff": "diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py\nindex 85af9adc..27ff12c0 100644\n--- a/outlines/types/__init__.py\n+++ b/outlines/types/__init__.py\n@@ -59,6 +59,16 @@ email = Regex(\n     r\"\"\"(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|\"(?:[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x21\\x23-\\x5b\\x5d-\\x7f]|\\\\[\\x01-\\x09\\x0b\\x0c\\x0e-\\x7f])*\")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x21-\\x5a\\x53-\\x7f]|\\\\[\\x01-\\x09\\x0b\\x0c\\x0e-\\x7f])+)\\])\"\"\"\n )\n \n+# Matches a 16-digit credit card number written as four groups of four digits,\n+# with no separators, with spaces only, or with hyphens only. Mixing the two\n+# separators (1234-5678 9012-3456) is refused, so the alternatives are spelled\n+# out instead of using a backreference, which no finite automaton can follow.\n+# [0-9] rather than \\d keeps other scripts' digits out. Like the ISBN pattern\n+# below, it checks the format only, not the Luhn check digit.\n+credit_card = Regex(\n+    r\"[0-9]{4}(-[0-9]{4}){3}|[0-9]{4}( [0-9]{4}){3}|[0-9]{16}\"\n+)\n+\n # Matches any ISBN number. Note that this is not completely correct as not all\n # 10 or 13 digits numbers are valid ISBNs. See https://en.wikipedia.org/wiki/ISBN\n # Taken from O'Reilly's Regular Expression Cookbook:\n@@ -68,3 +78,23 @@ email = Regex(\n isbn = Regex(\n     r\"(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]\"\n )\n+\n+# Matches HTTP and HTTPS web URLs: the scheme, a host, an optional port, and an\n+# optional path, query string and fragment. The host is a domain name (labels of\n+# letters, digits and inner hyphens, ending in a label that starts with a letter,\n+# so \"localhost\" and \"a.co\" match but \"1.2.3.4.5\" does not), an IPv4 address\n+# whose four numbers are 0 to 255, or an IPv6 address in brackets (checked only\n+# for its characters). The port is 0 to 65535. The path, query and fragment take\n+# any character but white space, so a URL with a space never matches. The\n+# pattern uses no look-around, which the regex engines that guide generation\n+# do not support.\n+url = Regex(\n+    r\"https?://\"\n+    r\"(([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\"\n+    r\"|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\"\n+    r\"|\\[[0-9a-fA-F:.]*:[0-9a-fA-F:.]*\\])\"\n+    r\"(:([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?\"\n+    r\"(/[^\\s?#]*)?\"\n+    r\"(\\?[^\\s#]*)?\"\n+    r\"(#[^\\s]*)?\"\n+)\n"
+  },
+  "feature1": {
+    "passed": false,
+    "output": "Note: switching to '4dd7802a8a5021f31dac75bc652f88d410a28675'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving outlines.egg-info/\nRemoving outlines/_version.py\nApplying feature patch: merged.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 54.75s\n   Building outlines @ file:///workspace/repo\n      Built outlines @ file:///workspace/repo\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading sympy (5.9MiB)\nDownloading torch (743.1MiB)\nDownloading networkx (1.6MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading triton (160.3MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading pydantic-core (1.9MiB)\nDownloading nvidia-curand-cu12 (53.9MiB)\nDownloading nvidia-cuda-nvrtc-cu12 (22.6MiB)\nDownloading nvidia-nvjitlink-cu12 (18.8MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading pillow (4.3MiB)\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading nvidia-cuda-cupti-cu12 (13.5MiB)\n Downloaded networkx\n Downloaded pydantic-core\n Downloaded pillow\n Downloaded sympy\n Downloaded nvidia-cuda-cupti-cu12\n Downloaded nvidia-nvjitlink-cu12\n Downloaded nvidia-cuda-nvrtc-cu12\n Downloaded nvidia-curand-cu12\n  \u00d7 Failed to download `triton==2.3.0`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   triton-2.3.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file `/root/.cache/uv/.tmpb687by/triton/_C/libtriton.so`:\n      No space left on device (os error 28)\n\nhint: `triton` (v2.3.0) was included because `outlines` depends on `torch` (v2.3.0) which depends on `triton`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRemoving outlines.egg-info/\nRemoving outlines/_version.py\nRepository cleaned.\n",
+    "exit_code": 1,
+    "tests_passed": 0,
+    "tests_failed": 0
+  },
+  "feature2": {
+    "passed": false,
+    "output": "HEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nApplying feature patch: merged.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 346ms\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading triton (160.3MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading torch (743.1MiB)\n  \u00d7 Failed to download `nvidia-cudnn-cu12==8.9.2.26`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   nvidia_cudnn_cu12-8.9.2.26-py3-none-manylinux1_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file\n      `/root/.cache/uv/.tmpCmeQ5H/nvidia/cudnn/lib/libcudnn_adv_infer.so.8`:\n      No space left on device (os error 28)\n\nhint: `nvidia-cudnn-cu12` (v8.9.2.26) was included because `outlines` depends on `torch` (v2.3.0) which depends on `nvidia-cudnn-cu12`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRepository cleaned.\n",
+    "exit_code": 1,
+    "tests_passed": 0,
+    "tests_failed": 0
+  },
+  "both_passed": false,
+  "error": null,
+  "evaluated_at": "2026-10-15T11:21:36.501224",
+  "cascade": {
+    "cascade_version": 1,
+    "ran": true,
+    "basis": "the paper's cascade on the CooperBench 63b9d44 dataset",
+    "cooperbench_commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+    "verdict_63b9d44": false,
+    "verdict_paper_era": false,
+    "verdict_paper_era_regex": false,
+    "route": "none",
+    "route_regex": "none",
+    "lower_bound": false,
+    "verdict_63b9d44_rerun": false,
+    "deciding_artifact": {
+      "verdict_63b9d44": "agent6.patch",
+      "verdict_paper_era": "merge_naive.diff"
+    },
+    "apply_status": {
+      "agent1": "applied",
+      "agent2": "applied"
+    },
+    "has_naive_merge_conflict": false,
+    "naive": {
+      "conflict": false,
+      "conflict_sections": 0,
+      "conflict_lines": 0,
+      "avg_lines_per_conflict": 0,
+      "conflict_score": 0,
+      "severity": "NONE",
+      "diff_file": "merge_naive.diff",
+      "f1": false,
+      "f2": false,
+      "f1_regex": false,
+      "f2_regex": false,
+      "tests": {
+        "f1": {
+          "passed": false,
+          "passed_regex": false,
+          "exit_code": 1,
+          "tests_passed": 0,
+          "tests_failed": 0,
+          "test_output": "Note: switching to '4dd7802a8a5021f31dac75bc652f88d410a28675'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving outlines.egg-info/\nRemoving outlines/_version.py\nApplying feature patch: merged.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 54.75s\n   Building outlines @ file:///workspace/repo\n      Built outlines @ file:///workspace/repo\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading sympy (5.9MiB)\nDownloading torch (743.1MiB)\nDownloading networkx (1.6MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading triton (160.3MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading pydantic-core (1.9MiB)\nDownloading nvidia-curand-cu12 (53.9MiB)\nDownloading nvidia-cuda-nvrtc-cu12 (22.6MiB)\nDownloading nvidia-nvjitlink-cu12 (18.8MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading pillow (4.3MiB)\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading nvidia-cuda-cupti-cu12 (13.5MiB)\n Downloaded networkx\n Downloaded pydantic-core\n Downloaded pillow\n Downloaded sympy\n Downloaded nvidia-cuda-cupti-cu12\n Downloaded nvidia-nvjitlink-cu12\n Downloaded nvidia-cuda-nvrtc-cu12\n Downloaded nvidia-curand-cu12\n  \u00d7 Failed to download `triton==2.3.0`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   triton-2.3.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file `/root/.cache/uv/.tmpb687by/triton/_C/libtriton.so`:\n      No space left on device (os error 28)\n\nhint: `triton` (v2.3.0) was included because `outlines` depends on `torch` (v2.3.0) which depends on `triton`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRemoving outlines.egg-info/\nRemoving outlines/_version.py\nRepository cleaned.\n"
+        },
+        "f2": {
+          "passed": false,
+          "passed_regex": false,
+          "exit_code": 1,
+          "tests_passed": 0,
+          "tests_failed": 0,
+          "test_output": "HEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nApplying feature patch: merged.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 346ms\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading triton (160.3MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading torch (743.1MiB)\n  \u00d7 Failed to download `nvidia-cudnn-cu12==8.9.2.26`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   nvidia_cudnn_cu12-8.9.2.26-py3-none-manylinux1_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file\n      `/root/.cache/uv/.tmpCmeQ5H/nvidia/cudnn/lib/libcudnn_adv_infer.so.8`:\n      No space left on device (os error 28)\n\nhint: `nvidia-cudnn-cu12` (v8.9.2.26) was included because `outlines` depends on `torch` (v2.3.0) which depends on `nvidia-cudnn-cu12`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRepository cleaned.\n"
+        }
+      },
+      "tests_from": "test_merged"
+    },
+    "union": {
+      "ran": false,
+      "clean": null,
+      "f1": null,
+      "f2": null,
+      "f1_regex": null,
+      "f2_regex": null,
+      "tests": {
+        "f1": null,
+        "f2": null
+      },
+      "diff_file": null,
+      "reason": "the naive merge was clean"
+    },
+    "llm": {
+      "ran": false,
+      "needed": false,
+      "reason": "not needed: the naive merge was clean"
+    },
+    "agent_alone": {
+      "agent1": {
+        "feature": 6,
+        "patch_file": "agent6.patch",
+        "f1": false,
+        "f2": false,
+        "f1_regex": false,
+        "f2_regex": false,
+        "tests": {
+          "f1": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "Note: switching to '4dd7802a8a5021f31dac75bc652f88d410a28675'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving outlines.egg-info/\nRemoving outlines/_version.py\nApplying feature patch: patch1.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 8.32s\n   Building outlines @ file:///workspace/repo\nDownloading networkx (1.6MiB)\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading sympy (5.9MiB)\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading torch (743.1MiB)\nDownloading nvidia-cuda-cupti-cu12 (13.5MiB)\nDownloading pillow (4.3MiB)\nDownloading nvidia-cuda-nvrtc-cu12 (22.6MiB)\nDownloading triton (160.3MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading pydantic-core (1.9MiB)\nDownloading nvidia-curand-cu12 (53.9MiB)\nDownloading nvidia-nvjitlink-cu12 (18.8MiB)\n      Built outlines @ file:///workspace/repo\n Downloaded pydantic-core\n Downloaded pillow\n Downloaded networkx\n Downloaded sympy\n Downloaded nvidia-cuda-cupti-cu12\n Downloaded nvidia-nvjitlink-cu12\n Downloaded nvidia-cuda-nvrtc-cu12\n Downloaded nvidia-curand-cu12\n  \u00d7 Failed to download `nvidia-cusparse-cu12==12.1.0.106`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   nvidia_cusparse_cu12-12.1.0.106-py3-none-manylinux1_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file\n      `/root/.cache/uv/.tmpaU0KBA/nvidia/cusparse/lib/libcusparse.so.12`: No\n      space left on device (os error 28)\n\nhint: `nvidia-cusparse-cu12` (v12.1.0.106) was included because `outlines` depends on `torch` (v2.3.0) which depends on `nvidia-cusparse-cu12`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRemoving outlines.egg-info/\nRemoving outlines/_version.py\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nApplying feature patch: patch1.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 327ms\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading triton (160.3MiB)\nDownloading torch (743.1MiB)\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\n  \u00d7 Failed to download `nvidia-cusolver-cu12==11.4.5.107`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   nvidia_cusolver_cu12-11.4.5.107-py3-none-manylinux1_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file\n      `/root/.cache/uv/.tmp9V7UT7/nvidia/cusolver/lib/libcusolver.so.11`: No\n      space left on device (os error 28)\n\nhint: `nvidia-cusolver-cu12` (v11.4.5.107) was included because `outlines` depends on `torch` (v2.3.0) which depends on `nvidia-cusolver-cu12`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRepository cleaned.\n"
+          }
+        }
+      },
+      "agent2": {
+        "feature": 7,
+        "patch_file": "agent7.patch",
+        "f1": false,
+        "f2": false,
+        "f1_regex": false,
+        "f2_regex": false,
+        "tests": {
+          "f1": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nApplying feature patch: patch2.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 364ms\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading torch (743.1MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading triton (160.3MiB)\n  \u00d7 Failed to download `nvidia-cufft-cu12==11.0.2.54`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   nvidia_cufft_cu12-11.0.2.54-py3-none-manylinux1_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file\n      `/root/.cache/uv/.tmpeugD18/nvidia/cufft/lib/libcufft.so.11`: No space\n      left on device (os error 28)\n\nhint: `nvidia-cufft-cu12` (v11.0.2.54) was included because `outlines` depends on `torch` (v2.3.0) which depends on `nvidia-cufft-cu12`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 4dd7802a Add setup example for local server (#1646)\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nReset to base: 4dd7802a8a5021f31dac75bc652f88d410a28675\nEnsuring clean repository state...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nApplying feature patch: patch2.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nSetting up Python environment with uv...\nInstalling dependencies...\nSyncing from uv.lock...\nwarning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.\nUsing CPython 3.11.15 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\nResolved 248 packages in 305ms\nDownloading nvidia-nccl-cu12 (168.1MiB)\nDownloading nvidia-cublas-cu12 (391.6MiB)\nDownloading torch (743.1MiB)\nDownloading nvidia-cusolver-cu12 (118.4MiB)\nDownloading nvidia-cusparse-cu12 (186.9MiB)\nDownloading nvidia-cufft-cu12 (116.0MiB)\nDownloading nvidia-cudnn-cu12 (697.8MiB)\nDownloading triton (160.3MiB)\n  \u00d7 Failed to download `nvidia-cufft-cu12==11.0.2.54`\n  \u251c\u2500\u25b6 Failed to extract archive:\n  \u2502   nvidia_cufft_cu12-11.0.2.54-py3-none-manylinux1_x86_64.whl\n  \u251c\u2500\u25b6 I/O operation failed during extraction\n  \u2570\u2500\u25b6 failed to flush file\n      `/root/.cache/uv/.tmpx0tydV/nvidia/cufft/lib/libcufft.so.11`: No space\n      left on device (os error 28)\n\nhint: `nvidia-cufft-cu12` (v11.0.2.54) was included because `outlines` depends on `torch` (v2.3.0) which depends on `nvidia-cufft-cu12`\nCleaning up repository...\nHEAD is now at 4dd7802a Add setup example for local server (#1646)\nRemoving .venv/\nRepository cleaned.\n"
+          }
+        }
+      }
+    },
+    "test_file_filter": {
+      "verdict_63b9d44": "63b9d44 eval/sandbox.py _filter_test_files",
+      "verdict_paper_era": "63b9d44 eval/sandbox.py _filter_test_files, so both verdicts judge the same merges; 59bbf65 kept only code files (core/patch.py _filter_patch), see dropped_by_filter"
+    },
+    "dropped_by_filter": {
+      "agent1": {
+        "63b9d44": [],
+        "59bbf65": []
+      },
+      "agent2": {
+        "63b9d44": [],
+        "59bbf65": []
+      }
+    },
+    "filters_agree": true,
+    "rules": {
+      "verdict_63b9d44": "eval.json both_passed, from CooperBench's test_merged: the naive merge's tests when it is clean, else agent1's patch alone against both suites",
+      "verdict_paper_era": "naive merge, then union when naive conflicts, then the learned resolver when union fails a suite (59bbf65 run_merge_evaluation); no agent1-alone fallback; 63b9d44's pass rule",
+      "verdict_paper_era_regex": "the same cascade under 59bbf65's pass rule",
+      "pass_rule": "exit code 0 and a parsed passed count above 0 (63b9d44 eval/sandbox.py _run_tests)",
+      "pass_rule_regex": "59bbf65 evaluation/test_runner.py _parse_test_output: a pass word and no failure word, exit code ignored",
+      "patch_apply": "63b9d44 _setup_branches: git apply, then git apply --3way; 59bbf65 used git apply --whitespace=fix and stopped the evaluation when a patch failed",
+      "conflict_size": "59bbf65 core/merge.py _analyze_diff_content over the conflicted merge's git diff; conflict_score 20 per section and 2 per line; severity by reporter.py _get_severity_level",
+      "llm": "59bbf65 evaluation/llm_merge.py: its system prompt, 5 lines of context, temperature 0, 3 retries, its splice; the merge then tested from its own diff"
+    },
+    "error": null
+  }
+}

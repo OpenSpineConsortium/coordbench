@@ -1,0 +1,77 @@
+{
+  "repo": "go_chi_task",
+  "task_id": 56,
+  "features": [
+    1,
+    5
+  ],
+  "setting": "coop",
+  "apply_status": {
+    "agent1": "applied",
+    "agent2": "applied"
+  },
+  "merge": {
+    "status": "clean",
+    "strategy": "naive",
+    "diff": "diff --git a/context.go b/context.go\nindex e78a238..008cb09 100644\n--- a/context.go\n+++ b/context.go\n@@ -74,6 +74,12 @@ type Context struct {\n \t// patterns across a stack of sub-routers.\n \tRoutePatterns []string\n \n+\t// methodsAllowed holds the methods registered for the route pattern that\n+\t// matched the request path when the request's own method did not, so that\n+\t// a 405 response can list them in its Allow header. It is only filled on\n+\t// the method-not-allowed path.\n+\tmethodsAllowed []methodTyp\n+\n \t// methodNotAllowed hint\n \tmethodNotAllowed bool\n }\n@@ -91,6 +97,7 @@ func (x *Context) Reset() {\n \tx.routeParams.Keys = x.routeParams.Keys[:0]\n \tx.routeParams.Values = x.routeParams.Values[:0]\n \tx.methodNotAllowed = false\n+\tx.methodsAllowed = x.methodsAllowed[:0]\n \tx.parentCtx = nil\n }\n \ndiff --git a/cors.go b/cors.go\nnew file mode 100644\nindex 0000000..d823e8e\n--- /dev/null\n+++ b/cors.go\n@@ -0,0 +1,268 @@\n+package chi\n+\n+import (\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"strings\"\n+)\n+\n+// CORSOptions configures the CORS middleware and Mux.EnableCORSWithOptions.\n+type CORSOptions struct {\n+\t// AllowOrigin is the value of Access-Control-Allow-Origin. The wildcard\n+\t// \"*\" allows any origin; an empty string sends no header, so no\n+\t// cross-origin caller is allowed.\n+\tAllowOrigin string\n+\n+\t// AllowMethods lists the methods named in Access-Control-Allow-Methods on\n+\t// a preflight response. When empty, the methods the requested route\n+\t// answers are detected from the router.\n+\tAllowMethods []string\n+\n+\t// AllowHeaders lists the request headers named in\n+\t// Access-Control-Allow-Headers on a preflight response. When empty, the\n+\t// headers the browser asked for are allowed.\n+\tAllowHeaders []string\n+\n+\t// ExposeHeaders lists the response headers a browser may read, sent as\n+\t// Access-Control-Expose-Headers.\n+\tExposeHeaders []string\n+\n+\t// MaxAge is how many seconds a browser may cache a preflight response,\n+\t// sent as Access-Control-Max-Age. Zero sends no header.\n+\tMaxAge int\n+\n+\t// AllowCredentials sets Access-Control-Allow-Credentials to true, which\n+\t// lets the browser send cookies and authorization headers.\n+\tAllowCredentials bool\n+}\n+\n+// DefaultCORSOptions returns options that allow any origin, the common request\n+// headers and a one hour preflight cache. The allowed methods are left empty,\n+// so they are detected from the routes.\n+func DefaultCORSOptions() CORSOptions {\n+\treturn CORSOptions{\n+\t\tAllowOrigin:  \"*\",\n+\t\tAllowHeaders: []string{\"Accept\", \"Authorization\", \"Content-Type\", \"X-CSRF-Token\"},\n+\t\tMaxAge:       3600,\n+\t}\n+}\n+\n+// CORS returns a middleware that adds the CORS headers of options to every\n+// response and answers preflight requests itself.\n+//\n+// Every OPTIONS request counts as a preflight: it is answered with 204 and the\n+// Access-Control-Allow-Methods, -Allow-Headers and -Max-Age headers, and never\n+// reaches the route's own OPTIONS handler. A request for a path that no route\n+// answers, with no AllowMethods set to advertise, is passed on to the next\n+// handler, so the router still reports it as not found.\n+//\n+// The methods of a route are detected through the routing context, so the\n+// middleware has to run inside a chi router.\n+func CORS(options CORSOptions) func(http.Handler) http.Handler {\n+\tpolicy := newCORSPolicy(options)\n+\treturn func(next http.Handler) http.Handler {\n+\t\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\tpolicy.setHeaders(w.Header(), r)\n+\t\t\tif r.Method == http.MethodOptions && policy.preflight(w, r) {\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tnext.ServeHTTP(w, r)\n+\t\t})\n+\t}\n+}\n+\n+// corsPolicy is a CORSOptions with its header values joined once, when the\n+// middleware is made, instead of on every request.\n+type corsPolicy struct {\n+\torigin      string\n+\tmethods     string\n+\theaders     string\n+\texpose      string\n+\tmaxAge      string\n+\tcredentials bool\n+}\n+\n+func newCORSPolicy(options CORSOptions) *corsPolicy {\n+\tp := &corsPolicy{\n+\t\torigin:      options.AllowOrigin,\n+\t\tmethods:     strings.Join(options.AllowMethods, \", \"),\n+\t\theaders:     strings.Join(options.AllowHeaders, \", \"),\n+\t\texpose:      strings.Join(options.ExposeHeaders, \", \"),\n+\t\tcredentials: options.AllowCredentials,\n+\t}\n+\tif options.MaxAge > 0 {\n+\t\tp.maxAge = strconv.Itoa(options.MaxAge)\n+\t}\n+\treturn p\n+}\n+\n+// setHeaders sets the headers every response carries, preflight or not.\n+func (p *corsPolicy) setHeaders(h http.Header, r *http.Request) {\n+\tif origin := p.allowOrigin(r); origin != \"\" {\n+\t\th.Set(\"Access-Control-Allow-Origin\", origin)\n+\t\tif origin != \"*\" {\n+\t\t\th.Add(\"Vary\", \"Origin\")\n+\t\t}\n+\t}\n+\tif p.credentials {\n+\t\th.Set(\"Access-Control-Allow-Credentials\", \"true\")\n+\t}\n+\tif p.expose != \"\" {\n+\t\th.Set(\"Access-Control-Expose-Headers\", p.expose)\n+\t}\n+}\n+\n+// allowOrigin returns the origin to allow for r. A browser refuses the\n+// wildcard on a request with credentials, so then the caller's own origin is\n+// named instead.\n+func (p *corsPolicy) allowOrigin(r *http.Request) string {\n+\tif p.origin"
+  },
+  "feature1": {
+    "feature_id": 1,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 8,
+    "tests_failed": 0,
+    "test_output": "Note: switching to '7f280968675bcc9f310008fc6b8abff0b923734c'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestSetAllowHeader|TestMuxNestedNotFound|TestMethodNotAllowed|TestMuxNestedMethodNotAllowed)$\nRunning Go tests...\n=== RUN   TestMuxNestedNotFound\n--- PASS: TestMuxNestedNotFound (0.03s)\n=== RUN   TestMethodNotAllowed\n=== RUN   TestMethodNotAllowed/Registered_Method\n=== RUN   TestMethodNotAllowed/Unregistered_Method\n--- PASS: TestMethodNotAllowed (0.00s)\n    --- PASS: TestMethodNotAllowed/Registered_Method (0.00s)\n    --- PASS: TestMethodNotAllowed/Unregistered_Method (0.00s)\n=== RUN   TestMuxNestedMethodNotAllowed\n--- PASS: TestMuxNestedMethodNotAllowed (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.101s\n=== RUN   TestSetAllowHeader\n=== RUN   TestSetAllowHeader/Registered_Method\n=== RUN   TestSetAllowHeader/Unregistered_Method\n--- PASS: TestSetAllowHeader (0.00s)\n    --- PASS: TestSetAllowHeader/Registered_Method (0.00s)\n    --- PASS: TestSetAllowHeader/Unregistered_Method (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.022s\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRemoving middleware/allowed_methods_test.go\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "feature_id": 5,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 5,
+    "tests_failed": 0,
+    "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestServerBaseContext|TestCORS)$\nRunning Go tests...\n=== RUN   TestServerBaseContext\n--- PASS: TestServerBaseContext (0.00s)\n=== RUN   TestCORS\n=== RUN   TestCORS/Basic_request_includes_CORS_headers\n=== RUN   TestCORS/OPTIONS_request_returns_appropriate_CORS_headers\n=== RUN   TestCORS/Method_not_allowed_includes_Allow_header\n--- PASS: TestCORS (0.00s)\n    --- PASS: TestCORS/Basic_request_includes_CORS_headers (0.00s)\n    --- PASS: TestCORS/OPTIONS_request_returns_appropriate_CORS_headers (0.00s)\n    --- PASS: TestCORS/Method_not_allowed_includes_Allow_header (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.048s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.084s [no tests to run]\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRepository cleaned.\n"
+  },
+  "both_passed": true,
+  "error": null,
+  "evaluated_at": "2026-10-15T12:36:26.836789",
+  "cascade": {
+    "cascade_version": 1,
+    "ran": true,
+    "basis": "the paper's cascade on the CooperBench 63b9d44 dataset",
+    "cooperbench_commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+    "verdict_63b9d44": true,
+    "verdict_paper_era": null,
+    "verdict_paper_era_regex": null,
+    "route": null,
+    "route_regex": null,
+    "lower_bound": null,
+    "verdict_63b9d44_rerun": null,
+    "deciding_artifact": {
+      "verdict_63b9d44": "merge_naive.diff",
+      "verdict_paper_era": null
+    },
+    "apply_status": null,
+    "has_naive_merge_conflict": null,
+    "naive": null,
+    "union": null,
+    "llm": null,
+    "agent_alone": null,
+    "test_file_filter": {
+      "verdict_63b9d44": "63b9d44 eval/sandbox.py _filter_test_files",
+      "verdict_paper_era": "63b9d44 eval/sandbox.py _filter_test_files, so both verdicts judge the same merges; 59bbf65 kept only code files (core/patch.py _filter_patch), see dropped_by_filter"
+    },
+    "dropped_by_filter": null,
+    "filters_agree": null,
+    "rules": {
+      "verdict_63b9d44": "eval.json both_passed, from CooperBench's test_merged: the naive merge's tests when it is clean, else agent1's patch alone against both suites",
+      "verdict_paper_era": "naive merge, then union when naive conflicts, then the learned resolver when union fails a suite (59bbf65 run_merge_evaluation); no agent1-alone fallback; 63b9d44's pass rule",
+      "verdict_paper_era_regex": "the same cascade under 59bbf65's pass rule",
+      "pass_rule": "exit code 0 and a parsed passed count above 0 (63b9d44 eval/sandbox.py _run_tests)",
+      "pass_rule_regex": "59bbf65 evaluation/test_runner.py _parse_test_output: a pass word and no failure word, exit code ignored",
+      "patch_apply": "63b9d44 _setup_branches: git apply, then git apply --3way; 59bbf65 used git apply --whitespace=fix and stopped the evaluation when a patch failed",
+      "conflict_size": "59bbf65 core/merge.py _analyze_diff_content over the conflicted merge's git diff; conflict_score 20 per section and 2 per line; severity by reporter.py _get_severity_level",
+      "llm": "59bbf65 evaluation/llm_merge.py: its system prompt, 5 lines of context, temperature 0, 3 retries, its splice; the merge then tested from its own diff"
+    },
+    "error": "SandboxError: open: APIError: 500 Server Error for http+docker://localhost/v1.56/containers/create: Internal Server Error (\"mount callback failed on /tmp/containerd-mount1263804447: open /tmp/containerd-mount1263804447/.dockerenv: read-only file system\")"
+  }
+}

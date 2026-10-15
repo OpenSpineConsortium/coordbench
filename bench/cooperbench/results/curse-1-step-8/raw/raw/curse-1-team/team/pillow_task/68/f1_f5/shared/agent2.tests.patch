@@ -1,0 +1,122 @@
+diff --git a/Tests/test_imageops.py b/Tests/test_imageops.py
+index 3621aa50f..b9725cad0 100644
+--- a/Tests/test_imageops.py
++++ b/Tests/test_imageops.py
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+ 
++import logging
++
+ import pytest
+ 
+ from PIL import Image, ImageDraw, ImageOps, ImageStat, features
+@@ -580,3 +582,109 @@ def test_autocontrast_preserve_one_color(color: tuple[int, int, int]) -> None:
+         img, cutoff=10, preserve_tone=True
+     )  # single color 10 cutoff
+     assert_image_equal(img, out)
++
++
++def test_exif_transpose_logger_callable() -> None:
++    messages: list[str] = []
++
++    with Image.open("Tests/images/hopper_orientation_3.jpg") as im:
++        transposed_im = ImageOps.exif_transpose(im, logger=messages.append)
++
++    # The logger changes nothing about the result
++    with Image.open("Tests/images/hopper_orientation_3.jpg") as im:
++        assert_image_equal(transposed_im, ImageOps.exif_transpose(im))
++
++    text = "\n".join(messages)
++    assert "orientation 3" in text
++    assert "ROTATE_180" in text
++    assert "removed orientation tag" in text
++    assert '"exif"' in text
++    assert "completed in" in messages[-1]
++    assert all(message.startswith("exif_transpose: ") for message in messages)
++
++
++def test_exif_transpose_logger_no_orientation() -> None:
++    messages: list[str] = []
++
++    im = hopper()
++    transposed_im = ImageOps.exif_transpose(im, logger=messages.append)
++    assert_image_equal(im, transposed_im)
++
++    text = "\n".join(messages)
++    assert "no EXIF orientation tag found" in text
++    assert "no transformation needed" in text
++    assert "completed in" in messages[-1]
++    assert "removed orientation tag" not in text
++
++
++def test_exif_transpose_logger_unrecognised_orientation(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    im = hopper()
++    im.getexif()[0x0112] = 9
++
++    logger = logging.getLogger("test_exif_transpose")
++    with caplog.at_level(logging.INFO, logger=logger.name):
++        transposed_im = ImageOps.exif_transpose(im, logger=logger)
++    assert_image_equal(im, transposed_im)
++
++    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
++    assert len(warnings) == 1
++    assert "orientation 9 is not recognised" in warnings[0].getMessage()
++    assert im.getexif()[0x0112] == 9
++
++
++def test_exif_transpose_logger_standard_logger(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    logger = logging.getLogger("test_exif_transpose")
++    with Image.open("Tests/images/hopper_orientation_6.jpg") as im:
++        with caplog.at_level(logging.INFO, logger=logger.name):
++            ImageOps.exif_transpose(im, logger=logger)
++
++    assert caplog.records
++    assert all(r.name == logger.name for r in caplog.records)
++    assert all(r.levelno == logging.INFO for r in caplog.records)
++    assert any("ROTATE_270" in r.getMessage() for r in caplog.records)
++
++    # A logger that is not enabled for INFO receives nothing
++    caplog.clear()
++    with Image.open("Tests/images/hopper_orientation_6.jpg") as im:
++        with caplog.at_level(logging.ERROR, logger=logger.name):
++            ImageOps.exif_transpose(im, logger=logger)
++    assert not caplog.records
++
++
++def test_exif_transpose_logger_in_place() -> None:
++    messages: list[str] = []
++
++    with Image.open("Tests/images/orientation_rectangle.jpg") as im:
++        assert im.getexif()[0x0112] == 8
++        result = ImageOps.exif_transpose(im, in_place=True, logger=messages.append)
++        assert result is None
++        assert im.size == (1, 2)
++
++    text = "\n".join(messages)
++    assert "in_place=True" in text
++    assert "ROTATE_90" in text
++    assert "completed in" in messages[-1]
++
++
++def test_exif_transpose_logger_xmp() -> None:
++    messages: list[str] = []
++
++    with Image.open("Tests/images/xmp_tags_orientation.png") as im:
++        transposed_im = ImageOps.exif_transpose(im, logger=messages.append)
++    assert 0x0112 not in transposed_im.getexif()
++
++    text = "\n".join(messages)
++    assert "removing XMP orientation" in text
++    assert "XML:com.adobe.xmp" in text
++
++
++def test_exif_transpose_logger_none() -> None:
++    # Without a logger, nothing changes
++    with Image.open("Tests/images/hopper_orientation_2.jpg") as im:
++        assert_image_equal(
++            ImageOps.exif_transpose(im), ImageOps.exif_transpose(im, logger=None)
++        )
