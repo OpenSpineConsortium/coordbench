@@ -1,0 +1,11 @@
+{
+  "entry": "arm.py:XblossomArm",
+  "name": "xblossom",
+  "description": "coordbench's xblossom arm: CooperBench's team mode plus four moves, facts filed under a file's content hash on the shared volume, a disjoint file plan, open tasks taken by claim, and done notes that carry evidence.",
+  "setting": "team",
+  "needs": [
+    "shared_volume"
+  ],
+  "plugins": [],
+  "mcp_servers": {}
+}

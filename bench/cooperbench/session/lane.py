@@ -127,7 +127,10 @@ def plan_from_disk(item):
 
 
 def announce(plan, item):
-    plan.update({"done": False, "item": item["id"], "arm": item["arm"], "repo": item["repo"],
+    # The arm by its name, which the bench agent's spawn prompt shows; an
+    # arm given by its directory is named by the directory, as queue.py does.
+    arm = Path(item["arm"]).name if "/" in item["arm"] else item["arm"]
+    plan.update({"done": False, "item": item["id"], "arm": arm, "repo": item["repo"],
                  "task": item["task"], "features": item["features"], "timeout_min": item["timeout_min"]})
     print(json.dumps(plan))
 

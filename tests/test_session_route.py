@@ -2,6 +2,8 @@
 accidents reach: what the finish does about a returned agent's marker,
 which files a results directory takes, and which runs a sample's logs
 take."""
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -342,6 +344,54 @@ class SummaryCountsWhatWasMeasured(unittest.TestCase):
         result = summary.paired(solo, coop)
         self.assertEqual(result["cost_ratio_b_over_a"], round(1.16 / 0.64, 3), "not 1.2 / 0.6 = 2.0")
         self.assertEqual(result["total_tokens_ratio_b_over_a"], 2.0, "over the shared pairs both arms measured")
+
+
+
+class AnArmGivenByItsDirectory(unittest.TestCase):
+    """run.py's --arm takes a directory, so an arm outside coordbench's
+    tree (bench/cooperbench/arms/xblossom) is queued by its path: the
+    item keeps the path for prepare, and its id, run name and logs go by
+    the directory's name, as a built-in arm's go by its own."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-arm-path-"))
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(self.tmp)], check=False))
+        dataset = self.tmp / "dataset" / "subsets"
+        dataset.mkdir(parents=True)
+        (dataset / "flash.json").write_text(json.dumps(
+            {"tasks": [{"repo": "pallets_click_task", "task_id": 2068, "pairs": [[5, 11]]}]}))
+
+    def test_the_queue_names_the_item_by_the_directory_and_keeps_the_path(self):
+        arm = str(ROOT / "bench" / "cooperbench" / "arms" / "xblossom")
+        queue_file = self.tmp / "q.jsonl"
+        out = subprocess.run([sys.executable, str(ROOT / "bench" / "cooperbench" / "session" / "queue.py"),
+                              "add", str(queue_file), "--tag", "xb1", "--arms", f"team,{arm}",
+                              "--pairs", "pallets_click_task/2068/f5_f11",
+                              "--dataset-dir", str(self.tmp / "dataset")], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        items = [json.loads(line) for line in queue_file.read_text().splitlines() if line.strip()]
+        by_arm = {item["arm"]: item for item in items}
+        self.assertEqual(by_arm[arm]["run_name"], "xb1-xblossom")
+        self.assertEqual(by_arm[arm]["id"], "xb1__xblossom__pallets_click_task__2068__f5_f11")
+        self.assertEqual(by_arm["team"]["run_name"], "xb1-team")
+
+    def test_the_lane_shows_the_agents_the_arm_by_its_name(self):
+        item = {"id": "xb1__xblossom__r__1__f1_f2", "arm": "/somewhere/arms/xblossom", "repo": "r",
+                "task": 1, "features": "1,2", "timeout_min": 45}
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            lane.announce({"run_dir": "/x", "agents": []}, item)
+        self.assertEqual(json.loads(printed.getvalue())["arm"], "xblossom")
+
+    def test_bundle_takes_the_arms_it_is_given(self):
+        logs = self.tmp / "logs"
+        result = logs / "xb1-xblossom" / "team" / "r" / "1" / "f1_f2" / "result.json"
+        result.parent.mkdir(parents=True)
+        result.write_text("{}\n")
+        out = self.tmp / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            bundle.main(["--logs", str(logs), "--tag", "xb1", "--out", str(out), "--arms", "team,xblossom"])
+        self.assertTrue((out / "raw" / "xb1-xblossom" / "team" / "r" / "1" / "f1_f2" / "result.json").exists())
 
 
 if __name__ == "__main__":
