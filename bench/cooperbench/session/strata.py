@@ -4,6 +4,9 @@ sample of them, so a run can start small and grow without redrawing.
     python3 strata.py [--pairs @file|flash] [--published coop/index.json] [--by language,conflict,published] table [--md]
     python3 strata.py [the same options] sample N [--allocation equal|proportional] [--seed 0]
 
+Both take --skip REPO/TASK,REPO/TASK, the tasks queue.py add --skip leaves
+out before its draw, so the same skip reproduces the queue's order.
+
 Each pair has, from the dataset alone: its repository and the language
 of the code the features change (by repository), whether the two gold
 patches conflict when merged (gold_conflict_report.json, the paper's
@@ -217,7 +220,7 @@ def main(argv=None):
     sample.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
     dataset = dataset_dir(args)
-    skip = set(filter(None, args.skip.split(",")))
+    skip = {entry.strip() for entry in args.skip.split(",") if entry.strip()}
     pairs = [p for p in flash_pairs(dataset, args.pairs) if f"{p[0]}/{p[1]}" not in skip]
     rows = describe(dataset, pairs, published_results(args.published))
     try:

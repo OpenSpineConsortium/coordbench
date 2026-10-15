@@ -213,8 +213,20 @@ def place_missing_markers(run_dir, returned, dead):
             changed = True
     if changed:
         write_plan(run_dir, plan)
-    (Path(run_dir) / "harness.json").write_text(json.dumps(notes, indent=2) + "\n")
+    record_notes(Path(run_dir) / "harness.json", notes)
     return notes
+
+
+def record_notes(path, notes):
+    """Write this finish's notes, keeping an earlier finish's under
+    "previous", so a finish run again does not erase what the first one
+    found (a marker placed, an agent that overran)."""
+    try:
+        earlier = json.loads(path.read_text()) if path.exists() else None
+    except (OSError, ValueError):
+        earlier = None
+    record = dict(notes, previous=earlier) if earlier else notes
+    path.write_text(json.dumps(record, indent=2) + "\n")
 
 
 def pid_alive(pid):

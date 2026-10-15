@@ -81,7 +81,10 @@ much of the benchmark a run takes, and the readers of what came out.
   the copied pairs, so the three tools above read the stratified sample
   alone when the tag also holds pairs outside it, as a tag grown from a
   pilot does; the sample is the queue's items that carry a sample
-  record.
+  record. Only finished runs are copied, transcripts included, and the
+  sample's lines of the queue go beside them, where bundle.py looks;
+  runs not finished are named, so a sample still running reads as
+  incomplete.
 
 What differs from a run on the runners is in coordbench/README.md's
 session-driver section and in each pair's result.json (driver: session,
@@ -122,7 +125,8 @@ and grown by adding again with a larger N once the window has reset.
         --run sdlc=TAG-sdlc --run coop-git=TAG-coop-git --run team=TAG-team --cooperbench-dir ~/cooperbench
     python3 bench/cooperbench/session/summary.py --logs $LOGS --tag TAG --out summary.json --csv pairs.csv --md summary.md
     python3 bench/cooperbench/session/bundle.py --logs $LOGS --tag TAG --out bench/cooperbench/results/TAG
-    python3 bench/cooperbench/session/subset.py $Q $LOGS $LOGS-sample    # then the three above with --logs $LOGS-sample
+    python3 bench/cooperbench/session/subset.py $Q $LOGS $LOGS-sample    # then the three above with --logs $LOGS-sample;
+        # it copies the sample's finished runs and its lines of the queue, and names what is not finished
 
 The three tasks skipped above download at test time, which the cloud
 session's network refuses; a runner can take them. coop-index.json is

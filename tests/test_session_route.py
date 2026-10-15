@@ -3,6 +3,8 @@ accidents reach: what the finish does about a returned agent's marker,
 which files a results directory takes, and which runs a sample's logs
 take."""
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -67,6 +69,16 @@ class PlaceMissingMarkers(unittest.TestCase):
         self.assertFalse((workspace / lane.MARKER).exists())
         self.assertEqual(notes["overran"], ["agent1"])
 
+    def test_a_second_finish_keeps_the_first_finishs_notes(self):
+        workspace = self.run_dir / "agent1"
+        workspace.mkdir()
+        self.write_plan({"agent1": workspace}, time.time() + 600)
+        lane.place_missing_markers(self.run_dir, {"agent1"}, set())
+        lane.place_missing_markers(self.run_dir, {"agent1"}, set())
+        record = json.loads((self.run_dir / "harness.json").read_text())
+        self.assertEqual(record["placed_markers"], [])
+        self.assertEqual(record["previous"]["placed_markers"], ["agent1"])
+
     def test_a_dead_agent_has_its_deadline_brought_forward(self):
         workspace = self.run_dir / "agent2"
         workspace.mkdir()
@@ -125,33 +137,100 @@ class BundleWanted(unittest.TestCase):
 
 
 class SubsetCopiesTheSample(unittest.TestCase):
-    """A sample's logs hold the runs of the items that carry a sample
-    record, without the transcripts and the archives, and none of the
-    tag's other runs."""
+    """A sample's logs hold the finished runs of the items that carry a
+    sample record, transcripts included and archives not, none of the
+    tag's other runs, and the sample's lines of the queue; what is left
+    out is named by its reason."""
 
-    def test_sampled_runs_are_copied_without_transcripts_and_others_are_not(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            logs = Path(tmp) / "logs"
-            sampled = logs / "t-solo" / "solo" / "repo" / "1" / "f1_f2"
-            other = logs / "t-solo" / "solo" / "repo" / "2" / "f1_f2"
-            for run in (sampled, other):
-                run.mkdir(parents=True)
-                (run / "result.json").write_text("{}\n")
-                (run / "agent1_session.jsonl").write_text("{}\n")
-                (run / "previous-20261015T120000.tar.gz").write_bytes(b"\x1f\x8b")
-            queue = Path(tmp) / "q.jsonl"
-            queue.write_text("".join(json.dumps(item) + "\n" for item in [
-                {"id": "a", "sample": {"sample": 8}, "run_dir": str(sampled)},
-                {"id": "b", "run_dir": str(other)},
-                {"id": "c", "sample": {"sample": 8}},
-                {"id": "d", "sample": {"sample": 8}, "run_dir": str(logs / "t-solo" / "solo" / "repo" / "3" / "f1_f2")}]))
-            out = Path(tmp) / "out"
-            items = subset.sampled(queue)
-            missing = subset.copy_runs(items, logs, out)
-            copied = sorted(path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file())
-        self.assertEqual([item["id"] for item in items], ["a", "d"])
-        self.assertEqual(missing, ["d"])
-        self.assertEqual(copied, ["t-solo/solo/repo/1/f1_f2/result.json"])
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        self.logs = self.base / "logs"
+        self.queue = self.base / "t-queue.jsonl"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_dir(self, task, files=True):
+        run = self.logs / "t-solo" / "solo" / "repo" / str(task) / "f1_f2"
+        if files:
+            run.mkdir(parents=True)
+            (run / "result.json").write_text("{}\n")
+            (run / "agent1_session.jsonl").write_text("{}\n")
+            (run / "previous-20261015T120000.tar.gz").write_bytes(b"\x1f\x8b")
+        return run
+
+    def write_queue(self, items):
+        self.queue.write_text("".join(json.dumps(item) + "\n" for item in items))
+
+    def copied(self, out):
+        return sorted(path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file())
+
+    def test_finished_sampled_runs_are_copied_and_the_rest_named(self):
+        outside = self.base / "elsewhere" / "run"
+        outside.mkdir(parents=True)
+        self.write_queue([
+            {"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(1))},
+            {"id": "b", "status": "done", "run_dir": str(self.run_dir(2))},
+            {"id": "c", "sample": {"sample": 8}, "status": "pending"},
+            {"id": "d", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(3, files=False))},
+            {"id": "e", "sample": {"sample": 8}, "status": "running", "run_dir": str(self.run_dir(4))},
+            {"id": "f", "sample": {"sample": 8}, "status": "failed", "run_dir": str(outside)}])
+        out = self.base / "out"
+        left = subset.copy_runs(subset.sampled(self.queue), self.logs, out)
+        self.assertEqual(left, {"unfinished": ["c", "e"], "no_run_dir": ["d"], "outside_logs": ["f"]})
+        self.assertEqual(self.copied(out), ["t-solo/solo/repo/1/f1_f2/agent1_session.jsonl",
+                                            "t-solo/solo/repo/1/f1_f2/result.json"])
+
+    def test_logs_spelled_relative_to_the_working_directory(self):
+        self.write_queue([{"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(1))}])
+        here = os.getcwd()
+        os.chdir(self.base)
+        try:
+            left = subset.copy_runs(subset.sampled(self.queue), Path("logs"), Path("out"))
+        finally:
+            os.chdir(here)
+        self.assertEqual(sum(len(ids) for ids in left.values()), 0)
+        self.assertTrue((self.base / "out" / "t-solo" / "solo" / "repo" / "1" / "f1_f2" / "result.json").exists())
+
+    def test_out_that_is_logs_or_inside_it_is_refused_and_nothing_moves(self):
+        run = self.run_dir(1)
+        self.write_queue([{"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(run)}])
+        for out in (self.logs, self.logs / "sample"):
+            with mock.patch("sys.stderr"):
+                self.assertEqual(subset.main([str(self.queue), str(self.logs), str(out)]), 2)
+        self.assertTrue((run / "result.json").exists())
+        self.assertFalse((self.logs / "sample").exists())
+
+    def test_nothing_finished_ends_quietly_with_the_queue_written(self):
+        self.write_queue([{"id": "c", "sample": {"sample": 8}, "status": "pending"},
+                          {"id": "x", "status": "done", "run_dir": str(self.run_dir(2))}])
+        out = self.base / "out"
+        with mock.patch("builtins.print") as printed:
+            self.assertEqual(subset.main([str(self.queue), str(self.logs), str(out)]), 1)
+        self.assertIn("not finished: c", printed.call_args[0][0])
+        self.assertEqual([json.loads(line)["id"] for line in (out / self.queue.name).read_text().splitlines()], ["c"])
+
+    def test_main_rebuilds_each_arm_from_the_copied_pairs(self):
+        run = self.run_dir(1)
+        (run / "plan.json").write_text(json.dumps({"run_dir": str(run), "arm_name": "solo"}) + "\n")
+        (self.logs / "t-solo" / "config.json").write_text("{}\n")
+        self.write_queue([{"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(run)}])
+        out = self.base / "out"
+        runner = mock.Mock()
+        with mock.patch.object(subset, "load_runner", return_value=runner), mock.patch("builtins.print"):
+            self.assertEqual(subset.main([str(self.queue), str(self.logs), str(out)]), 0)
+        self.assertTrue((out / "t-solo" / "config.json").exists())
+        plan = runner.refresh_summary.call_args[0][0]
+        self.assertEqual(Path(plan["run_dir"]), out / "t-solo" / "solo" / "repo" / "1" / "f1_f2")
+
+    def test_the_runner_loads_with_the_standard_librarys_queue(self):
+        probe = ("import sys; sys.path.insert(0, sys.argv[1]); import subset; subset.load_runner(); "
+                 "import queue; print(queue.__file__)")
+        out = subprocess.run([sys.executable, "-c", probe, str(ROOT / "bench" / "cooperbench" / "session")],
+                             capture_output=True, text=True, cwd=str(ROOT))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("session", out.stdout)
 
 
 if __name__ == "__main__":
