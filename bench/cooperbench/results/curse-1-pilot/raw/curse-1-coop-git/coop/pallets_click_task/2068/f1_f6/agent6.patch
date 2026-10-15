@@ -1,0 +1,241 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..c92b02b 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -478,6 +478,27 @@ def _nullpager(
+         stream.write(text)
+ 
+ 
++# Process priority levels accepted by ``Editor(process_priority=...)``,
++# mapped to a POSIX nice value (lower is a higher priority) and to a
++# Windows priority class flag for ``subprocess.Popen(creationflags=...)``.
++# The Windows flags are written as numbers because the subprocess
++# constants only exist on Windows.
++_PRIORITY_NICE: dict[str, int] = {
++    "low": 19,
++    "below_normal": 10,
++    "normal": 0,
++    "above_normal": -5,
++    "high": -10,
++}
++_PRIORITY_WIN_CLASS: dict[str, int] = {
++    "low": 0x00000040,  # IDLE_PRIORITY_CLASS
++    "below_normal": 0x00004000,  # BELOW_NORMAL_PRIORITY_CLASS
++    "normal": 0x00000020,  # NORMAL_PRIORITY_CLASS
++    "above_normal": 0x00008000,  # ABOVE_NORMAL_PRIORITY_CLASS
++    "high": 0x00000080,  # HIGH_PRIORITY_CLASS
++}
++
++
+ class Editor:
+     def __init__(
+         self,
+@@ -485,11 +506,13 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        process_priority: str | None = None,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.process_priority = process_priority
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,9 +528,79 @@ class Editor:
+                 return editor
+         return "vi"
+ 
+-    def edit_file(self, filename: str) -> None:
++    def _get_priority(self) -> str | None:
++        """The requested priority as one of the known names, or ``None``
++        if none was requested or the value is not recognized. An unknown
++        value is ignored rather than rejected, since a priority is only
++        a hint and must never stop the editor from opening.
++        """
++        priority = self.process_priority
++
++        if not isinstance(priority, str):
++            return None
++
++        priority = priority.strip().lower()
++
++        if priority in _PRIORITY_NICE:
++            return priority
++
++        return None
++
++    def _priority_popen_kwargs(self) -> dict[str, t.Any]:
++        """Extra ``subprocess.Popen`` arguments that start the editor at
++        the requested priority, empty for the system default.
++        """
++        priority = self._get_priority()
++
++        if priority is None:
++            return {}
++
++        if WIN:
++            return {"creationflags": _PRIORITY_WIN_CLASS[priority]}
++
++        target = _PRIORITY_NICE[priority]
++
++        def set_priority() -> None:
++            # Runs in the child just before the shell starts, so the
++            # editor inherits the value. It must not raise: raising here
++            # would fail the launch. Lowering the nice value below the
++            # current one usually needs privileges and may be refused.
++            try:
++                delta = target - os.nice(0)
++
++                if delta:
++                    os.nice(delta)
++            except Exception:
++                pass
++
++        return {"preexec_fn": set_priority}
++
++    def _popen(self, args: str, env: dict[str, str] | None) -> t.Any:
++        """Start the editor shell command, at the requested priority if
++        the platform lets us and at the default priority if not.
++        """
+         import subprocess
+ 
++        kwargs = self._priority_popen_kwargs()
++
++        if kwargs:
++            try:
++                return subprocess.Popen(args, env=env, shell=True, **kwargs)
++            except (OSError, ValueError, subprocess.SubprocessError):
++                # Setting the priority is best effort. Nothing was
++                # started, so fall through to a plain launch, which
++                # reports a real failure to start the editor as before.
++                pass
++
++        return subprocess.Popen(args, env=env, shell=True)
++
++    def edit_file(self, filename: str) -> None:
++        """Edit a single file. Kept for code written before
++        :meth:`edit_files` took several files at once.
++        """
++        self.edit_files((filename,))
++
++    def edit_files(self, filenames: cabc.Iterable[str]) -> None:
+         editor = self.get_editor()
+         environ: dict[str, str] | None = None
+ 
+@@ -515,8 +608,10 @@ class Editor:
+             environ = os.environ.copy()
+             environ.update(self.env)
+ 
++        exc_filename = " ".join(f'"{filename}"' for filename in filenames)
++
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
++            c = self._popen(f"{editor} {exc_filename}", environ)
+             exit_code = c.wait()
+             if exit_code != 0:
+                 raise ClickException(
+@@ -559,7 +654,7 @@ class Editor:
+             # recorded, so get the new recorded value.
+             timestamp = os.path.getmtime(name)
+ 
+-            self.edit_file(name)
++            self.edit_files((name,))
+ 
+             if self.require_save and os.path.getmtime(name) == timestamp:
+                 return None
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..b2ca387 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -643,13 +643,37 @@ def secho(
+     return echo(message, file=file, nl=nl, err=err, color=color)
+ 
+ 
++@t.overload
++def edit(
++    text: t.AnyStr,
++    editor: str | None = None,
++    env: cabc.Mapping[str, str] | None = None,
++    require_save: bool = True,
++    extension: str = ".txt",
++    process_priority: str | None = None,
++) -> t.AnyStr | None: ...
++
++
++@t.overload
++def edit(
++    text: None = None,
++    editor: str | None = None,
++    env: cabc.Mapping[str, str] | None = None,
++    require_save: bool = True,
++    extension: str = ".txt",
++    filename: str | cabc.Iterable[str] | None = None,
++    process_priority: str | None = None,
++) -> None: ...
++
++
+ def edit(
+     text: t.AnyStr | None = None,
+     editor: str | None = None,
+     env: cabc.Mapping[str, str] | None = None,
+     require_save: bool = True,
+     extension: str = ".txt",
+-    filename: str | None = None,
++    filename: str | cabc.Iterable[str] | None = None,
++    process_priority: str | None = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -676,16 +700,46 @@ def edit(
+                       highlighting.
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+-                     file as an indirection in that case.
++                     file as an indirection in that case. If the editor supports
++                     editing multiple files at once, a sequence of files may be
++                     passed as well. Invoke :func:`edit` for each file instead
++                     if multiple files cannot be managed at once or editing the
++                     files serially is desired.
++    :param process_priority: optionally the CPU priority to start the editor
++                             with, one of ``"low"``, ``"below_normal"``,
++                             ``"normal"``, ``"above_normal"`` or ``"high"``.
++                             Defaults to ``None``, which leaves the priority
++                             as the system sets it.  This is a best effort:
++                             a value that is not recognized is ignored, and
++                             so is a priority the platform does not support
++                             or the user may not set, such as ``"high"``
++                             without privileges on most Unix systems.  The
++                             editor is started either way.
++
++    .. versionchanged:: 8.2.0
++        ``filename`` now accepts any ``Iterable[str]`` in addition to a ``str``
++        if the ``editor`` supports editing multiple files at once.
++
++    .. versionchanged:: 8.2.0
++        Added the ``process_priority`` parameter.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        process_priority=process_priority,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)
+ 
+-    ed.edit_file(filename)
++    if isinstance(filename, str):
++        filename = (filename,)
++
++    ed.edit_files(filenames=filename)
+     return None
+ 
+ 

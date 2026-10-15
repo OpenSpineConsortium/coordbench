@@ -1,0 +1,281 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..298ea5b 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -11,8 +11,10 @@ import contextlib
+ import math
+ import os
+ import sys
++import threading
+ import time
+ import typing as t
++import warnings
+ from gettext import gettext as _
+ from io import StringIO
+ from types import TracebackType
+@@ -478,6 +480,166 @@ def _nullpager(
+         stream.write(text)
+ 
+ 
++# Seconds between looks at whether the editor process was stopped or continued.
++_DEFAULT_POLL_INTERVAL = 0.1
++
++
++def _process_is_stopped(pid: int) -> bool | None:
++    """Tell whether a process is stopped by a signal, as ``^Z`` does.
++
++    Returns ``None`` when the platform has no way to tell or the process
++    cannot be looked at, for example because it already ended. Suspending
++    and resuming are reported on a best effort basis for that reason.
++    """
++    if WIN:
++        return None
++
++    try:
++        with open(f"/proc/{pid}/stat", "rb") as f:
++            stat = f.read()
++    except OSError:
++        if os.path.isdir("/proc"):
++            return None
++
++        return _ps_is_stopped(pid)
++
++    # The state letter follows the command name, which sits in
++    # parentheses and may itself contain spaces and parentheses.
++    fields = stat.rpartition(b")")[2].split()
++    return bool(fields) and fields[0] in {b"T", b"t"}
++
++
++def _ps_is_stopped(pid: int) -> bool | None:
++    """Fallback for systems without ``/proc``, such as macOS."""
++    import subprocess
++
++    try:
++        out = subprocess.run(
++            ["ps", "-o", "state=", "-p", str(pid)],
++            capture_output=True,
++            text=True,
++            timeout=2,
++        ).stdout.strip()
++    except (OSError, subprocess.SubprocessError):
++        return None
++
++    return out.startswith("T") if out else None
++
++
++class _EditorMonitor:
++    """Reports the life of an editor process to a callback.
++
++    A background thread calls ``callback(event_type, process_id,
++    editor_command, timestamp)`` with ``"start"`` once the editor runs,
++    ``"suspend"`` and ``"resume"`` when it is stopped and continued by a
++    signal, where the platform allows telling, and ``"terminate"`` after
++    :meth:`stop`. Every event is delivered from that one thread, in order.
++    A callback that raises produces a :exc:`UserWarning` and monitoring
++    carries on.
++    """
++
++    def __init__(
++        self,
++        callback: t.Callable[[str, int, str, float], t.Any] | None,
++        poll_interval: float,
++    ) -> None:
++        self.callback = callback
++        self.poll_interval = poll_interval
++        self._done = threading.Event()
++        self._thread: threading.Thread | None = None
++        self._pid = 0
++        self._editor = ""
++
++    def start(self, pid: int, editor: str) -> None:
++        self._pid = pid
++        self._editor = editor
++        self._thread = threading.Thread(
++            target=self._run, name="click-editor-monitor", daemon=True
++        )
++        self._thread.start()
++
++    def stop(self) -> None:
++        """Ends monitoring and waits until ``"terminate"`` is delivered."""
++        self._done.set()
++
++        if self._thread is not None:
++            self._thread.join()
++
++    def _run(self) -> None:
++        self._emit("start")
++        suspended = False
++
++        while not self._done.wait(self.poll_interval):
++            stopped = _process_is_stopped(self._pid)
++
++            if stopped is None or stopped == suspended:
++                continue
++
++            suspended = stopped
++            self._emit("suspend" if suspended else "resume")
++
++        self._emit("terminate")
++
++    def _emit(self, event_type: str) -> None:
++        if self.callback is None:
++            return
++
++        try:
++            self.callback(event_type, self._pid, self._editor, time.time())
++        except Exception as e:
++            try:
++                warnings.warn(
++                    f"Editor monitor callback failed on {event_type!r}: {e!r}",
++                    UserWarning,
++                    stacklevel=2,
++                )
++            except Exception:
++                # A warnings filter that turns warnings into errors must
++                # not end monitoring.
++                pass
++
++
++def _resolve_monitor(
++    monitor_process: t.Any,
++) -> tuple[t.Callable[[str, int, str, float], t.Any] | None, float] | None:
++    """Turn the ``monitor_process`` argument into a callback and a poll
++    interval, or ``None`` if monitoring is off.
++
++    The argument is a callable, or a mapping or an object with a
++    ``callback`` and optionally a ``poll_interval`` in seconds. ``True``
++    monitors without a callback.
++    """
++    if monitor_process is None or monitor_process is False:
++        return None
++
++    callback: t.Any = None
++    interval: t.Any = _DEFAULT_POLL_INTERVAL
++
++    if monitor_process is True:
++        pass
++    elif callable(monitor_process):
++        callback = monitor_process
++    elif isinstance(monitor_process, cabc.Mapping):
++        callback = monitor_process.get("callback")
++        interval = monitor_process.get("poll_interval", interval)
++    elif hasattr(monitor_process, "callback"):
++        callback = monitor_process.callback
++        interval = getattr(monitor_process, "poll_interval", interval)
++    else:
++        raise TypeError(
++            "monitor_process must be a callable or a configuration with a"
++            f" 'callback', not {type(monitor_process).__name__!r}."
++        )
++
++    if callback is not None and not callable(callback):
++        raise TypeError("The monitor_process callback must be callable.")
++
++    if not isinstance(interval, (int, float)) or interval <= 0:
++        raise ValueError("The monitor_process poll interval must be positive.")
++
++    return callback, float(interval)
++
++
+ class Editor:
+     def __init__(
+         self,
+@@ -485,11 +647,15 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        monitor_process: t.Any = None,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.monitor_process = monitor_process
++        # Resolve now so a bad argument fails before an editor opens.
++        _resolve_monitor(monitor_process)
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,6 +671,17 @@ class Editor:
+                 return editor
+         return "vi"
+ 
++    def _start_monitor(self, pid: int, editor: str) -> _EditorMonitor | None:
++        """Start reporting on the editor process if monitoring is on."""
++        resolved = _resolve_monitor(self.monitor_process)
++
++        if resolved is None:
++            return None
++
++        monitor = _EditorMonitor(*resolved)
++        monitor.start(pid, editor)
++        return monitor
++
+     def edit_file(self, filename: str) -> None:
+         import subprocess
+ 
+@@ -517,7 +694,14 @@ class Editor:
+ 
+         try:
+             c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
+-            exit_code = c.wait()
++            monitor = self._start_monitor(c.pid, editor)
++
++            try:
++                exit_code = c.wait()
++            finally:
++                if monitor is not None:
++                    monitor.stop()
++
+             if exit_code != 0:
+                 raise ClickException(
+                     _("{editor}: Editing failed").format(editor=editor)
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..dbe09ff 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,10 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    monitor_process: t.Callable[[str, int, str, float], t.Any]
++    | cabc.Mapping[str, t.Any]
++    | bool
++    | None = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +681,32 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param monitor_process: if provided, a background thread watches the
++        editor process while this function blocks, and calls
++        ``callback(event_type, process_id, editor_command, timestamp)``
++        for each event. ``event_type`` is ``"start"`` when the editor
++        process begins, ``"terminate"`` when it ends, and ``"suspend"``
++        or ``"resume"`` when it is stopped or continued by a signal,
++        which can only be detected on some platforms. ``process_id`` is
++        the process id, ``editor_command`` the editor that was run, and
++        ``timestamp`` the time of the event in seconds since the epoch.
++        Instead of a callable, a mapping with a ``"callback"`` and an
++        optional ``"poll_interval"`` in seconds may be given. If the
++        callback raises an exception, a :exc:`UserWarning` is issued and
++        monitoring continues with the next event.
++
++    .. versionchanged:: 8.2
++        Added the ``monitor_process`` parameter.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        monitor_process=monitor_process,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

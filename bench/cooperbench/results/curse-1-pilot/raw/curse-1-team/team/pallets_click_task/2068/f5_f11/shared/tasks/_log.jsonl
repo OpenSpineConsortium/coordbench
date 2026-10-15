@@ -1,0 +1,3 @@
+{"kind": "create", "task_id": "092f80e1ba", "by": "bench-runner", "title": "Implement feature 11", "ts": 1792044326.2450569}
+{"kind": "create", "task_id": "b5642539b1", "by": "bench-runner", "title": "Lead-only: integrate and submit feature 5", "ts": 1792044326.2451098}
+{"kind": "claim", "task_id": "092f80e1ba", "by": "agent2", "ts": 1792044354.032722}
