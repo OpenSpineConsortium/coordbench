@@ -7,6 +7,8 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +75,37 @@ class PlaceMissingMarkers(unittest.TestCase):
         self.assertEqual(notes["expired"], ["agent2"])
         deadline = lane.read_plan(self.run_dir)["agents"][0]["handle"]["deadline"]
         self.assertLess(deadline, time.time())
+
+
+class FinishAfterTeardown(unittest.TestCase):
+    """A finish run again once an earlier one has torn the run down
+    leaves that earlier finish's patches and score alone: run.py finish
+    would find no marker and no patch, call the agents failed and write
+    empty patches over the only copy."""
+
+    def test_a_gone_workspace_stops_the_finish_before_run_py(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            lane.write_plan(run_dir, plan_with({"agent1": run_dir / "gone1", "agent2": run_dir / "gone2"},
+                                               time.time() + 600))
+            (run_dir / "agent1.patch").write_text("diff --git a/x b/x\n")
+            args = SimpleNamespace(run_dir=str(run_dir), returned=["agent1", "agent2"], dead=None)
+            with mock.patch.object(lane.subprocess, "run", side_effect=AssertionError("run.py was called")):
+                verdict = lane.finish_pair(args)
+            self.assertEqual(verdict["verdict"], "error")
+            self.assertEqual(verdict["harness"]["gone_workspaces"], ["agent1", "agent2"])
+            self.assertEqual((run_dir / "agent1.patch").read_text(), "diff --git a/x b/x\n")
+
+    def test_an_agent_not_returned_with_a_gone_workspace_stops_it_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            (run_dir / "here").mkdir()
+            lane.write_plan(run_dir, plan_with({"agent1": run_dir / "here", "agent2": run_dir / "gone"},
+                                               time.time() + 600))
+            args = SimpleNamespace(run_dir=str(run_dir), returned=["agent1"], dead=None)
+            with mock.patch.object(lane.subprocess, "run", side_effect=AssertionError("run.py was called")):
+                verdict = lane.finish_pair(args)
+            self.assertEqual(verdict["harness"]["gone_workspaces"], ["agent2"])
 
 
 class BundleWanted(unittest.TestCase):

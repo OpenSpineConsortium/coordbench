@@ -196,13 +196,13 @@ def place_missing_markers(run_dir, returned, dead):
         if not workspace:
             continue
         marker = Path(workspace) / MARKER
-        if agent["id"] in returned and not marker.exists():
-            if not Path(workspace).is_dir():
-                # The run's teardown has taken the workspace: a finish run
-                # again after one that scored the pair and died, as a full
-                # disk made one do; there is nothing left to mark.
-                notes["gone_workspaces"].append(agent["id"])
-            elif time.time() > float(handle.get("deadline") or 0):
+        if not Path(workspace).is_dir():
+            # The run's teardown has taken the workspace: a finish run
+            # again after one that scored the pair and died, as a full
+            # disk made one do; there is nothing left to mark.
+            notes["gone_workspaces"].append(agent["id"])
+        elif agent["id"] in returned and not marker.exists():
+            if time.time() > float(handle.get("deadline") or 0):
                 notes["overran"].append(agent["id"])
             else:
                 marker.touch()
@@ -281,6 +281,13 @@ def command_wait(args):
 
 def finish_pair(args):
     notes = place_missing_markers(args.run_dir, set(args.returned or ()), set(args.dead or ()))
+    if notes["gone_workspaces"]:
+        # run.py finish would find no marker and no patch in a gone
+        # workspace, call the agents failed and write their empty patches
+        # and a fresh score over the only copy an earlier finish left.
+        return {"verdict": "error", "harness": notes,
+                "note": "the agents' workspaces are gone, so an earlier finish tore the run down; "
+                        "its patches and score are left as they are, to be recorded by hand"}
     out = subprocess.run([sys.executable, str(RUN_PY), "finish", "--run-dir", args.run_dir],
                          capture_output=True, text=True, env=clean_environment(), cwd=str(ROOT))
     last = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
