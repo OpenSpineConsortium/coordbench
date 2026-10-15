@@ -8,13 +8,14 @@ included, since the report counts tool calls and messages from them, but
 for the archives of earlier attempts, which are large. The others are
 named and left out, so a sample still running reads as incomplete and
 not as smaller, and so are those whose run was a harness error (the
-queue's harness_error, or the run's audit.json), which measured the
-session route rather than the arm. Each arm gets its config.json and a summary.json rebuilt
-from the copied pairs alone, by the runner's own refresh_summary, so the
-report's summary column counts the sample and not the tag, and OUT gets
-the sample's lines of the queue under the queue's own name, where
-bundle.py looks for it. OUT must be new or empty, so nothing an earlier
-pass copied is read as part of this one.
+run's audit.json, or the queue's harness_error for a run with none),
+which measured the session route rather than the arm. Each arm gets its
+config.json and a summary.json rebuilt from the copied pairs alone, by
+the runner's own refresh_summary, so the report's summary column counts
+the sample and not the tag, and OUT gets the sample's lines of the queue
+under the queue's own name, where bundle.py looks for it. OUT must be
+new or empty, so nothing an earlier pass copied is read as part of this
+one.
     python3 subset.py QUEUE LOGS OUT
 """
 import argparse
@@ -64,16 +65,19 @@ def copy_runs(items, logs, out):
 
 def harness_error(item):
     """Whether the item's run measured the harness rather than the arm, by
-    the queue (lane.py finish) or by its audit.json (audit.py run by hand):
-    such a run is no result of its arm, so the sample counts it as not
-    finished, to be run again."""
-    if item.get("harness_error"):
-        return True
-    try:
-        audit = json.loads((Path(item.get("run_dir") or "") / "audit.json").read_text())
-    except (OSError, ValueError):
-        return False
-    return isinstance(audit, dict) and bool(audit.get("harness_error"))
+    its audit.json wherever the run has one (audit.py, from lane.py finish
+    or run again by hand, whose verdict the report reads too), else by
+    the queue's mark: such a run is no result of its arm, so the sample
+    counts it as not finished, to be run again."""
+    audit = None
+    if item.get("run_dir"):
+        try:
+            audit = json.loads((Path(item["run_dir"]) / "audit.json").read_text())
+        except (OSError, ValueError):
+            audit = None
+    if isinstance(audit, dict):
+        return bool(audit.get("harness_error"))
+    return bool(item.get("harness_error"))
 
 
 def plain_path(path):

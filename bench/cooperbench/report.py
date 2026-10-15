@@ -247,11 +247,11 @@ class Pair:
     @property
     def harness_error(self):
         """Why the session route's audit (session/audit.py) found the run
-        measured the harness rather than the arm, or None; read once."""
-        if "audit" not in self.cache:
-            read = read_json(self.dir / "audit.json")
-            self.cache["audit"] = read if isinstance(read, dict) else {}
-        return self.cache["audit"].get("harness_error")
+        measured the harness rather than the arm, or None; read once, by
+        difficulty.py's reader, so difficulty.json leaves out these runs."""
+        if "harness_error" not in self.cache:
+            self.cache["harness_error"] = difficulty.audited_harness_error(self.dir)
+        return self.cache["harness_error"]
 
     @property
     def model(self):

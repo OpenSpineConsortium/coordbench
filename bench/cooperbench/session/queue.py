@@ -44,9 +44,11 @@ every repetition of an add.
 
 requeue --harness-only takes back only the finished items, done or
 failed, whose run measured the harness rather than the arm (an agent the
-harness lost, a full disk, an agent spawned twice), as lane.py finish
-marked the item or audit.py, run by hand, marked the run's audit.json;
-an agent that ran out of time is the arm's result and stays failed.
+harness lost, a full disk, a transcript not found or cut short, an agent
+spawned twice), by the run's audit.json, which lane.py finish writes and
+audit.py run by hand writes again, or, for a run stopped before prepare,
+by the mark lane.py put on the item; an agent that ran out of time is
+the arm's result and stays failed.
 """
 
 import argparse
@@ -334,15 +336,25 @@ FINISHED = ("done", "failed")
 
 def harness_error_of(item):
     """Why the item's run measured the harness rather than the arm, or
-    None: lane.py finish's harness_error on the item, else audit.py's in
-    the run's audit.json, which a run audited by hand carries alone."""
-    if item.get("harness_error"):
-        return item["harness_error"]
+    None: audit.py's verdict in the run's audit.json wherever the run has
+    one, since an audit run again by hand may have changed it, as the
+    report and summary.py read it; else the mark lane.py put on the item,
+    which a run stopped before prepare, with no run directory, has alone."""
+    audit = audit_of(item)
+    if audit is not None:
+        return audit.get("harness_error")
+    return item.get("harness_error")
+
+
+def audit_of(item):
+    """The item's run's audit.json, or None when it has none to read."""
+    if not item.get("run_dir"):
+        return None
     try:
-        audit = json.loads((Path(item.get("run_dir") or "") / "audit.json").read_text())
+        audit = json.loads((Path(item["run_dir"]) / "audit.json").read_text())
     except (OSError, ValueError):
         return None
-    return audit.get("harness_error") if isinstance(audit, dict) else None
+    return audit if isinstance(audit, dict) else None
 
 
 def parse_option(text):

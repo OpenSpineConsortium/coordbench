@@ -514,20 +514,8 @@ def judged_by_audit(verdict, run_dir):
         verdict["scored_verdict"] = verdict.get("verdict")
         verdict["verdict"] = "error"
         verdict["harness_error"] = found["harness_error"]
-        refresh_summary(run_dir)
+        audit.refresh_summary(run_dir)
     return verdict
-
-
-def refresh_summary(run_dir):
-    """run.py's summary.json for the run, rebuilt now that audit.json
-    names a harness error, which counts the pair as an error: run.py
-    finish wrote it before the audit ran. The runner is imported from its
-    own directory, where no queue.py stands in for the standard library's."""
-    code = "import json, sys, run; run.refresh_summary(json.load(open(sys.argv[1])))"
-    out = subprocess.run([sys.executable, "-c", code, str(Path(run_dir) / "plan.json")], capture_output=True,
-                         text=True, env=clean_environment(), cwd=str(ROOT / "coordbench"))
-    if out.returncode != 0:
-        say(f"summary.json not rebuilt for {run_dir}: {out.stderr.strip()[-500:]}")
 
 
 def command_finish(args):

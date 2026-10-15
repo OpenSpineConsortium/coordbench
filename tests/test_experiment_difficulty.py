@@ -141,6 +141,18 @@ class ReadRunsTest(unittest.TestCase):
         found = difficulty.scored_runs(self.logs, "solo")
         self.assertEqual(found, {"m1": {"r/1/f1_f2": [True], "r/1/f1_f3": [False]}})
 
+    def test_a_run_the_audit_found_a_harness_error_is_no_trial(self):
+        """The session route's audit (session/audit.py) found the run met a
+        full disk: it failed for the route, not the solo agent, so it enters
+        d(t) no more than it enters report.py's figures."""
+        write_pair(self.logs, "solo", "r/1/f1_f2", "m1", passed=True)
+        write_pair(self.logs, "solo", "r/1/f1_f3", "m1", passed=False)
+        audited = self.logs / "solo" / "coop" / "r" / "1" / "f1_f3"
+        self.assertTrue((audited / "result.json").is_file(), "write_pair's layout")
+        (audited / "audit.json").write_text(json.dumps({"harness_error": "the run met a full disk"}))
+        self.assertEqual(difficulty.scored_runs(self.logs, "solo"), {"m1": {"r/1/f1_f2": [True]}})
+        self.assertEqual(difficulty.audited_harness_error(audited), "the run met a full disk")
+
     def test_the_command_writes_difficulty_json(self):
         write_pair(self.logs, "solo", "r/1/f1_f2", "m1", passed=True)
         write_pair(self.logs, "solo", "r/1/f1_f3", "m1", passed=False)

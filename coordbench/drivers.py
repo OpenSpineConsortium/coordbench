@@ -1018,7 +1018,8 @@ def find_transcripts(token, roots, since, prompt_file=None):
     """The subagent transcripts touched since `since` that are this
     agent's (carries_token), those whose reply carries the token first,
     then those whose prompt does, then those whose prompt names the
-    agent's own prompt file, each newest first. Claude Code keeps a
+    agent's own prompt file, then those that lost their prompt, each
+    newest first. Claude Code keeps a
     subagent's transcript under <project>/<session>/subagents/."""
     candidates = []
     for root in roots:
@@ -1035,8 +1036,9 @@ def find_transcripts(token, roots, since, prompt_file=None):
     return [path for _, _, path in found]
 
 
-# How a transcript was found to be the agent's, most certain first.
-MATCH_ORDER = ("reply", "prompt", "named")
+# How a transcript was found to be the agent's, most certain first;
+# "headless" (carries_token) is taken only when nothing else is.
+MATCH_ORDER = ("reply", "prompt", "named", "headless")
 
 
 # A run token as run_token writes it; the agent's name ends on a letter,
@@ -1046,12 +1048,13 @@ RUN_TOKEN = re.compile(r"coordbench-run-token (\S+) ([A-Za-z0-9_.-]*[A-Za-z0-9_-
 
 def carries_token(path, token, prompt_file=None):
     """Where the transcript carries the agent's token, "reply" or "prompt",
-    "named" when only its prompt names the agent's own prompt file, or
-    None when it is not the agent's. The prompt is every user line
-    before the first reply (a Workflow subagent gets the harness's request
-    first and its pasted task second); a reply counts by its text blocks
-    only, never a tool call's input, where an orchestrator that launched
-    the agents would have pasted their prompts. A transcript that holds
+    "named" when only its prompt names the agent's own prompt file,
+    "headless" (below) when it lost its prompt, or None when it is not
+    the agent's. The prompt is every user line before the first reply (a
+    Workflow subagent gets the harness's request first and its pasted
+    task second); a reply counts by its text blocks only, never a tool
+    call's input, where an orchestrator that launched the agents would
+    have pasted their prompts. A transcript that holds
     another agent's token of the same run anywhere in what is read is
     such an orchestrator's, and none of the agents'.
 
@@ -1066,10 +1069,20 @@ def carries_token(path, token, prompt_file=None):
     result holds this one: what an agent read decides over what it typed,
     since one solo agent of the X-Blossom screen opened its reply with its
     token short of the run id's suffix, though the prompt file it had just
-    read back held the token whole."""
+    read back held the token whole.
+
+    With a prompt file given, every match needs a prompt that names it,
+    which keeps out a review agent whose prompt quoted the token.
+    "headless" is a transcript that does not open on its prompt: a disk
+    that was full as the agent was spawned dropped the first lines and
+    kept the rest (one relay of the curse-1 jinja 1559 run did so). Its
+    prompt cannot be read, so it is the agent's by an exact token in a
+    reply alone, and last of all, since a relay that echoed the token
+    in a reply would match the same way."""
+    events = opening_events(path)
     found, replied, prompt = None, False, []
     read_own = read_foreign = typed_foreign = False
-    for kind, message in opening_messages(path):
+    for kind, message in ((event["type"], event["message"]) for event in events):
         text = content_blocks_to_text(message.get("content"))
         if names_another_agent(text, token):
             return None
@@ -1084,6 +1097,8 @@ def carries_token(path, token, prompt_file=None):
         else:
             read_own = read_own or holds_token(text, token)
         read_foreign = read_foreign or carries_other_token(text, token)
+    if not events or not opens_on_its_prompt(events[0]):
+        return "headless" if found == "reply" else None
     if prompt_file and not names_file(" ".join(prompt), prompt_file):
         return None
     if found or not prompt_file or read_foreign or (typed_foreign and not read_own):
@@ -1110,6 +1125,12 @@ def opening_messages(path):
     """The (type, message) of the transcript's user and assistant lines
     among its first TOKEN_SEARCH_LINES, where the prompt and the first
     replies are; empty when the file cannot be read."""
+    return [(event["type"], event["message"]) for event in opening_events(path)]
+
+
+def opening_events(path):
+    """The transcript's user and assistant lines among its first
+    TOKEN_SEARCH_LINES, whole; empty when the file cannot be read."""
     found = []
     try:
         with open(path, encoding="utf-8", errors="replace") as stream:
@@ -1119,10 +1140,18 @@ def opening_messages(path):
                 event = next(json_lines(line), None)
                 message = event.get("message") if isinstance(event, dict) else None
                 if isinstance(message, dict) and event.get("type") in ("user", "assistant"):
-                    found.append((event["type"], message))
+                    found.append(event)
     except OSError:
         return []
     return found
+
+
+def opens_on_its_prompt(event):
+    """Whether a transcript's first user or assistant line is its prompt:
+    a user line with no parent, as Claude Code writes the first line of
+    every subagent's transcript (660 of 661 on this host on 2026-10-15;
+    the other lost its prompt to a full disk)."""
+    return event.get("type") == "user" and event.get("parentUuid") is None
 
 
 def reply_text(message):

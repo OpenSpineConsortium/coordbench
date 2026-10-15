@@ -200,14 +200,21 @@ class SubsetCopiesTheSample(unittest.TestCase):
             {"id": "f", "sample": {"sample": 8}, "status": "failed", "run_dir": str(outside)},
             {"id": "g", "sample": {"sample": 8}, "status": "failed", "run_dir": str(self.run_dir(5)),
              "harness_error": "the harness lost agent1"},
-            {"id": "h", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(6))}])
+            {"id": "h", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(6))},
+            {"id": "i", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(7)),
+             "harness_error": "agent1 ran more than once"}])
         (self.run_dir(6, files=False) / "audit.json").write_text(json.dumps({"harness_error": "the run met a full disk"}))
+        # audit.py run again by hand cleared i's mark, as the report reads it.
+        (self.run_dir(7, files=False) / "audit.json").write_text(json.dumps({"harness_error": None}))
         out = self.base / "out"
         left = subset.copy_runs(subset.sampled(self.queue), self.logs, out)
         self.assertEqual(left, {"unfinished": ["c", "e"], "harness_error": ["g", "h"], "no_run_dir": ["d"],
                                 "outside_logs": ["f"]})
         self.assertEqual(self.copied(out), ["t-solo/solo/repo/1/f1_f2/agent1_session.jsonl",
-                                            "t-solo/solo/repo/1/f1_f2/result.json"])
+                                            "t-solo/solo/repo/1/f1_f2/result.json",
+                                            "t-solo/solo/repo/7/f1_f2/agent1_session.jsonl",
+                                            "t-solo/solo/repo/7/f1_f2/audit.json",
+                                            "t-solo/solo/repo/7/f1_f2/result.json"])
 
     def test_logs_spelled_relative_to_the_working_directory(self):
         self.write_queue([{"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(self.run_dir(1))}])

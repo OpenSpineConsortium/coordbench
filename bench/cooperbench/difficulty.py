@@ -226,13 +226,24 @@ def read_json(path):
         return None
 
 
+def audited_harness_error(pair_dir):
+    """Why the session route's audit (session/audit.py) found the run in
+    pair_dir measured the harness rather than the arm, or None; report.py
+    reads it here too, so the two leave out the same runs."""
+    audited = read_json(Path(pair_dir) / "audit.json")
+    return audited.get("harness_error") if isinstance(audited, dict) else None
+
+
 def scored_runs(logs, run_name):
     """{model: {pair: [passed]}} over a run's scored pairs, the model from
-    result.json, the pair keyed repo/task/pair as report.py keys it."""
+    result.json, the pair keyed repo/task/pair as report.py keys it; a
+    harness error is no trial, as report.py leaves it out."""
     found = {}
     for result_file in sorted((Path(logs) / run_name).glob("*/*/*/*/result.json")):
         evaluation = read_json(result_file.parent / "eval.json")
         if not isinstance(evaluation, dict) or evaluation.get("error"):
+            continue
+        if audited_harness_error(result_file.parent):
             continue
         model = (read_json(result_file) or {}).get("model") or "unknown"
         key = "/".join(result_file.parent.parts[-3:])

@@ -245,7 +245,8 @@ def pair_report(run_dir, task, status, eval_skipped=False):
     before its agents ran (its result.json carries a top-level error) or
     whose audit.json names a harness error."""
     result = read_json(Path(run_dir) / "result.json") or {}
-    harness_error = (read_json(Path(run_dir) / "audit.json") or {}).get("harness_error")
+    audited = read_json(Path(run_dir) / "audit.json")
+    harness_error = audited.get("harness_error") if isinstance(audited, dict) else None
     if status == "done" and (result.get("error") or harness_error):
         status = "error"
     entry = {"task": task, "status": status, "cost": result.get("total_cost")}

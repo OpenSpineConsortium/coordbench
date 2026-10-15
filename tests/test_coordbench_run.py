@@ -2429,6 +2429,36 @@ class SessionTranscripts(unittest.TestCase):
         self.assertIsNone(drivers.carries_token(earlier, token, str(prompt_file)),
                           "another attempt's token read back bars the match")
 
+    def test_a_transcript_that_lost_its_prompt_is_found_by_its_reply_last_of_all(self):
+        """A disk that was full as an agent was spawned dropped its
+        transcript's first lines and kept the rest (one relay of the
+        curse-1 jinja 1559 run): with no prompt to read, the transcript is
+        the agent's by the exact token in a reply, but only when no
+        transcript that kept its prompt is, since a relay that echoed the
+        token would match the same way."""
+        token = drivers.run_token("solo-56-f1_f5-47085d", "agent1")
+        prompt_file = "/logs/f1_f5/agent1.session-prompt.md"
+        subagents = self.root / "p" / "s" / "subagents"
+        lines = transcript_lines(token, prompt_file=prompt_file)
+        whole = write_lines(subagents / "agent-whole.jsonl", lines)
+        headless = write_lines(subagents / "agent-headless.jsonl", lines[1:])
+        os.utime(whole, (time.time() - 60, time.time() - 60))
+        self.assertEqual(drivers.carries_token(whole, token, prompt_file), "reply")
+        self.assertEqual(drivers.carries_token(headless, token, prompt_file), "headless")
+        self.assertEqual(drivers.carries_token(headless, token), "headless")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, prompt_file), [whole, headless],
+                         "the transcript that kept its prompt comes first, though older")
+        whole.unlink()
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, prompt_file), [headless])
+        result = {"type": "user", "parentUuid": "9911e9ea", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": f"Begin with {token}."}]}}
+        kept_a_result = write_lines(subagents / "agent-result.jsonl", [result, *lines[1:]])
+        self.assertEqual(drivers.carries_token(kept_a_result, token, prompt_file), "headless",
+                         "a first user line with a parent is a tool result, not the prompt")
+        read_only = write_lines(subagents / "agent-read.jsonl", [result, lines[3]])
+        self.assertIsNone(drivers.carries_token(read_only, token, prompt_file),
+                          "without its prompt, a token only read is no match")
+
     def test_usage_counts_each_api_message_once_with_its_largest_figures(self):
         usage = drivers.transcript_usage("".join(json.dumps(line) + "\n" for line in transcript_lines("t")))
         self.assertEqual(usage["tokens"], TRANSCRIPT_TOKENS)

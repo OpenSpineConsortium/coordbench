@@ -112,6 +112,74 @@ class TheAuditReadsATranscript(unittest.TestCase):
         self.assertEqual(record["harness_error"], "the run met a full disk")
         self.assertNotIn(str(self.tmp / "projects"), (run_dir / "audit.json").read_text())
 
+    def test_a_transcript_not_found_or_cut_at_its_head_is_a_harness_error(self):
+        """A run whose agent's transcript was not found, or lost its first
+        lines to a disk full at the agent's spawn, has tokens and tool
+        results that were not all read, so it measured the harness; a plan
+        from before the run token looks for no transcript."""
+        run_dir = self.tmp / "cut"
+        run_dir.mkdir()
+        handle = {"run_token": TOKEN, "workspace": str(run_dir / "ws"),
+                  "log_path": str(run_dir / "agent1_stream.jsonl")}
+        lane.write_plan(run_dir, {"agents": [{"id": "agent1", "handle": handle}]})
+        record = audit.audit_run(run_dir, roots=[])
+        self.assertIs(record["agents"]["agent1"]["transcript_copied"], False)
+        self.assertEqual(record["harness_error"], "no transcript was found for agent1")
+        write_lines(run_dir / "agent1_session.jsonl", [assistant("m1", TOKEN)])
+        record = audit.audit_run(run_dir, roots=[])
+        self.assertIs(record["agents"]["agent1"]["transcript_whole"], False)
+        self.assertEqual(record["harness_error"], "the transcript of agent1 lost its first lines")
+        write_lines(run_dir / "agent1_session.jsonl", [user("Your task is in the file."), assistant("m1", TOKEN)])
+        self.assertIsNone(audit.audit_run(run_dir, roots=[])["harness_error"])
+        (run_dir / "agent1_session.jsonl").unlink()
+        lane.write_plan(run_dir, {"agents": [{"id": "agent1", "handle": {
+            key: value for key, value in handle.items() if key != "run_token"}}]})
+        record = audit.audit_run(run_dir, roots=[])
+        self.assertEqual((record["agents"]["agent1"]["transcript_copied"], record["harness_error"]), (None, None))
+
+    def test_an_audit_by_hand_rebuilds_each_audited_settings_summary_once(self):
+        """run.py finish wrote summary.json before the audit, so audit.py
+        run by hand rebuilds it, once for each setting, from every pair on
+        disk, now counting a harness error as an error."""
+        logs = self.tmp / "logs"
+        run_dirs = [logs / "t1" / "solo" / "r" / "1" / "f1_f2", logs / "t1" / "solo" / "r" / "2" / "f1_f3",
+                    logs / "t2" / "solo" / "r" / "1" / "f1_f2"]
+        for run_dir in run_dirs:
+            run_dir.mkdir(parents=True)
+            lane.write_plan(run_dir, {"run_dir": str(run_dir), "arm_name": "solo", "driver": "session",
+                                      "model": "sonnet", "setting": "solo", "run_name": run_dir.parts[-5],
+                                      "agents": []})
+            (run_dir / "result.json").write_text(json.dumps({"repo": "r", "task_id": int(run_dir.parts[-2]),
+                                                             "features": [1, 2], "total_cost": 0.5}))
+            (run_dir / "eval.json").write_text(json.dumps({"both_passed": True}))
+        (run_dirs[0] / "finish.out").write_text("OSError: [Errno 28] No space left on device\n")
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(audit, "refresh_summary", wraps=audit.refresh_summary) as refresh:
+            self.assertEqual(audit.main([str(run_dir) for run_dir in run_dirs]), 0)
+        self.assertEqual([call.args[0] for call in refresh.call_args_list], [str(run_dirs[0]), str(run_dirs[2])])
+        rebuilt = json.loads((logs / "t1" / "summary.json").read_text())
+        self.assertEqual((rebuilt["completed"], rebuilt["failed"]), (1, 1))
+        self.assertEqual(rebuilt["results"][0]["harness_error"], "the run met a full disk")
+
+    def test_a_harness_error_found_at_finish_is_an_error_and_rebuilds_the_summary(self):
+        """lane.py finish keeps the score as scored_verdict, gives the run
+        the verdict error and rebuilds the summary run.py finish wrote; an
+        audit that fails costs the verdict nothing."""
+        found = {"harness_error": "the run met a full disk"}
+        with mock.patch.object(audit, "write_audit", return_value=found), \
+                mock.patch.object(audit, "refresh_summary") as refresh:
+            judged = lane.judged_by_audit({"verdict": "fail"}, "RUN")
+        self.assertEqual((judged["verdict"], judged["scored_verdict"], judged["harness_error"]),
+                         ("error", "fail", "the run met a full disk"))
+        refresh.assert_called_once_with("RUN")
+        with mock.patch.object(audit, "write_audit", return_value={"harness_error": None}), \
+                mock.patch.object(audit, "refresh_summary") as refresh:
+            self.assertEqual(lane.judged_by_audit({"verdict": "pass"}, "RUN"), {"verdict": "pass"})
+        refresh.assert_not_called()
+        with mock.patch.object(audit, "write_audit", side_effect=OSError("gone")):
+            judged = lane.judged_by_audit({"verdict": "pass"}, "RUN")
+        self.assertEqual((judged["verdict"], judged["audit_error"]), ("pass", "OSError: gone"))
+
 
     def test_a_full_disk_in_the_scoring_is_read_where_the_scoring_wrote(self):
         """Every arm's evaluation of outlines 1655 f6_f7 in curse-1 failed for
@@ -355,6 +423,25 @@ class TheQueueOrdersArmsBySeed(unittest.TestCase):
         after = self.items(path)
         self.assertEqual([i["status"] for i in after[:3]], ["pending", "pending", "done"])
         self.assertNotIn("run_dir", after[0])
+
+
+    def test_a_re_audit_decides_over_the_queues_mark(self):
+        """lane.py finish marked the item; audit.py run again by hand cleared
+        it, and the report counts the run as the arm's, so requeue leaves it
+        alone. An item stopped before prepare has no run directory, and its
+        mark decides."""
+        path = self.tmp / "r.jsonl"
+        items = self.add(path, "solo")
+        run_dir = self.tmp / "cleared"
+        run_dir.mkdir()
+        (run_dir / "audit.json").write_text(json.dumps({"harness_error": None}))
+        items[0].update(status="failed", verdict="error", run_dir=str(run_dir),
+                        harness_error="agent1 ran more than once")
+        items[1].update(status="failed", harness_error="no task image before prepare")
+        path.write_text("".join(json.dumps(i) + "\n" for i in items))
+        self.queue("requeue", str(path), "--harness-only")
+        after = self.items(path)
+        self.assertEqual((after[0]["status"], after[1]["status"]), ("failed", "pending"))
 
 
 class TheSummaryLeavesHarnessErrorsOut(unittest.TestCase):

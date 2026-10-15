@@ -38,8 +38,9 @@ much of the benchmark a run takes, and the readers of what came out.
   failed ones back, with what the run left on them cleared, so they
   are prepared afresh, and `requeue --harness-only` only the finished
   ones, done or failed, whose run measured the harness (below), by the
-  queue's mark or the run's audit.json, since an agent that ran out of
-  time is its arm's result. `add --order-seed N`, or `shuffle` on a queue
+  run's audit.json, or the queue's mark for a run stopped before prepare,
+  which has none, since an agent that ran out of time is its arm's
+  result. `add --order-seed N`, or `shuffle` on a queue
   already filled, puts each pair's arms in an order drawn from the seed
   and the pair, so no arm always meets a lane's first minutes or the
   end of a usage window. `add --option KEY=VALUE` gives every item a
@@ -80,17 +81,23 @@ much of the benchmark a run takes, and the readers of what came out.
   the session refused (a permission decision other than accept, or
   Claude Code's own guard, such as "Blocked: sleep"), the tool results
   that say the disk was full, and how many subagents were spawned as
-  it; per run, what the scoring's own output says of the disk (the
-  tests' output in eval.json and scoring.log), since a scoring that ran
-  out of room fails tests it never ran, as every arm's evaluation of
-  outlines 1655 f6_f7 did in curse-1. A run with an agent the harness lost, a full disk or an agent
+  it, and whether its transcript was found and opens on its prompt; per
+  run, what the scoring's own output says of the disk (the tests' output
+  in eval.json and scoring.log), since a scoring that ran out of room
+  fails tests it never ran, as every arm's evaluation of outlines 1655
+  f6_f7 did in curse-1. A run with an agent the harness lost, a full
+  disk, an agent whose transcript was not found or lost its first lines
+  (its tokens and tool results are then not all read), or an agent
   spawned twice measured the harness, not the arm: finish gives it the
   verdict error whatever it scored (scored_verdict keeps the score),
   marks the item's harness_error, so `requeue --harness-only` runs it
   again, and rebuilds the arm's summary.json, where it counts as an
-  error; report.py, summary.py and subset.py leave it out of every
-  figure and name it. `python3 audit.py RUN_DIR ...` audits runs finished before it,
-  while the session's transcripts are still on disk.
+  error; report.py, summary.py, subset.py, difficulty.py and judge.py
+  (with annotate.py's cause review) leave it out and name it.
+  `python3 audit.py RUN_DIR ...` audits runs finished before it, while
+  the session's transcripts are still on disk, and rebuilds the
+  summary.json of each arm it audited; run again, its audit.json is
+  what every reader, `requeue --harness-only` included, goes by.
 - lane.js: the lane as a Claude Code Workflow script: prepare, spawn the
   bench agents in parallel, finish, until the queue is empty. `args.root`
   is the checkout whose lane.py runs, and is required: a default checkout

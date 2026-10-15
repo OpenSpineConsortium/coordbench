@@ -25,24 +25,38 @@ For each agent:
 - attempts: how many subagent transcripts carry the agent's run token in
   a reply or in the prompt. More than one is a respawn: the copied
   transcript is the newest, so the agent's token count misses the others.
+- transcript_copied: whether the session driver found and copied the
+  agent's transcript (None for a plan from before the run token), and
+  transcript_whole: whether that copy opens on its prompt, as Claude Code
+  writes every transcript, since a disk that was full as the agent was
+  spawned drops the first lines and keeps the rest.
 
 For the pair, disk_full_log_lines counts what says the disk was full in
 the agents' logs and in the scoring's output (run.py finish's, kept as
 scoring.log and finish.out, and the tests' output in eval.json), since a
 scoring that ran out of room fails every test it never ran; harness_error
 says why the run measured the harness rather than the arm, or is None:
-an agent the harness lost, a full disk, or a respawn. No transcript path is kept, since
-the file is copied into the repository's results.
+an agent the harness lost, a full disk, a transcript not found or cut
+short at its head, whose tokens and tool results are then not all read,
+or a respawn. No transcript path is kept, since the file is copied into
+the repository's results.
+
+Run by hand, it also rebuilds the summary.json of each setting it audited,
+as lane.py finish does, since run.py finish wrote that summary before the
+audit and the report reads its pass rate beside its own.
 """
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent.parent.parent / "coordbench"))
+COORDBENCH = HERE.parent.parent.parent / "coordbench"
+sys.path.insert(0, str(COORDBENCH))
 import drivers  # noqa: E402 - coordbench's own module, found by its directory
 
 # A full disk as the error reaches a command's output in an agent's
@@ -188,9 +202,16 @@ def agent_audit(handle, roots=None):
     facts = transcript_facts(copied) if copied else None
     record = facts or {"calls": None, "first_context": None, "efforts": [], "refusals": None,
                        "refusal_examples": [], "disk_full": None}
-    record["transcript_copied"] = facts is not None
+    expected = bool(handle.get("run_token"))
+    record["transcript_copied"] = (facts is not None) if expected else None
+    record["transcript_whole"] = opens_on_its_prompt(copied) if facts is not None else None
     record["attempts"] = attempts_of(handle, roots)
     return record
+
+
+def opens_on_its_prompt(path):
+    events = drivers.opening_events(path)
+    return bool(events) and drivers.opens_on_its_prompt(events[0])
 
 
 def harness_error(agents, pair_disk_full, harness):
@@ -200,6 +221,12 @@ def harness_error(agents, pair_disk_full, harness):
         return f"the harness lost {', '.join(lost)}"
     if pair_disk_full or any(a.get("disk_full") for a in agents.values()):
         return "the run met a full disk"
+    missing = [name for name, a in agents.items() if a.get("transcript_copied") is False]
+    if missing:
+        return f"no transcript was found for {', '.join(missing)}"
+    cut = [name for name, a in agents.items() if a.get("transcript_whole") is False]
+    if cut:
+        return f"the transcript of {', '.join(cut)} lost its first lines"
     respawned = [name for name, a in agents.items() if (a.get("attempts") or 0) > 1]
     if respawned:
         return f"{', '.join(respawned)} ran more than once"
@@ -234,13 +261,43 @@ def write_audit(run_dir, roots=None):
     return record
 
 
+def refresh_summary(run_dir):
+    """run.py's summary.json for the run's setting, rebuilt from every pair
+    on disk now that audit.json may count the pair as an error: run.py
+    finish wrote it before the audit ran. The runner is imported from its
+    own directory, where no queue.py stands in for the standard library's;
+    True when the summary was rebuilt."""
+    code = "import json, sys, run; run.refresh_summary(json.load(open(sys.argv[1])))"
+    env = {name: value for name, value in os.environ.items()
+           if name not in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL")}
+    out = subprocess.run([sys.executable, "-c", code, str(Path(run_dir) / "plan.json")], capture_output=True,
+                         text=True, env=env, cwd=str(COORDBENCH))
+    if out.returncode != 0:
+        print(f"summary.json not rebuilt for {run_dir}: {out.stderr.strip()[-500:]}", file=sys.stderr)
+    return out.returncode == 0
+
+
+def setting_of(run_dir):
+    """The setting directory whose summary.json counts the run, as
+    run.refresh_summary finds it, or None when the plan cannot be read."""
+    plan = read_json(Path(run_dir) / "plan.json")
+    if not isinstance(plan, dict) or not plan.get("run_dir"):
+        return None
+    return str(Path(plan["run_dir"]).parents[2])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("run_dirs", nargs="+")
     args = parser.parse_args(argv)
+    refreshed = set()
     for run_dir in args.run_dirs:
         record = write_audit(run_dir)
         print(json.dumps({"run_dir": run_dir, "harness_error": record["harness_error"]}))
+        setting = setting_of(run_dir)
+        if setting is not None and setting not in refreshed:
+            refreshed.add(setting)
+            refresh_summary(run_dir)
     return 0
 
 
