@@ -928,7 +928,12 @@ class SessionDriver:
             time.sleep(max(0.0, min(self.poll_seconds, handle["deadline"] - time.time())))
             found = poll_marker(handle["agent"], marker)
         outcome = AgentOutcome(status="Submitted", measured=())
-        if not found:
+        if not found and handle.get("lost"):
+            # The orchestrating session lost the subagent (lane.py finish
+            # --dead): no time limit passed, so none is named.
+            reason = "the harness lost the subagent before it made its marker"
+            outcome = AgentOutcome(status="Error", error=reason, end_reason=reason, measured=())
+        elif not found:
             minutes = handle.get("timeout_s", 0) / 60
             reason = f"no {DONE_MARKER} within {minutes:.0f} minutes"
             # The adapter's own timeout is an exception, which it writes as the error.
@@ -1013,7 +1018,8 @@ def find_transcripts(token, roots, since, prompt_file=None):
     """The subagent transcripts touched since `since` that are this
     agent's (carries_token), those whose reply carries the token first,
     then those whose prompt does, then those whose prompt names the
-    agent's own prompt file, each newest first. Claude Code keeps a
+    agent's own prompt file, then those that lost their prompt, each
+    newest first. Claude Code keeps a
     subagent's transcript under <project>/<session>/subagents/."""
     candidates = []
     for root in roots:
@@ -1030,8 +1036,9 @@ def find_transcripts(token, roots, since, prompt_file=None):
     return [path for _, _, path in found]
 
 
-# How a transcript was found to be the agent's, most certain first.
-MATCH_ORDER = ("reply", "prompt", "named")
+# How a transcript was found to be the agent's, most certain first;
+# "headless" (carries_token) is taken only when nothing else is.
+MATCH_ORDER = ("reply", "prompt", "named", "headless")
 
 
 # A run token as run_token writes it; the agent's name ends on a letter,
@@ -1041,12 +1048,13 @@ RUN_TOKEN = re.compile(r"coordbench-run-token (\S+) ([A-Za-z0-9_.-]*[A-Za-z0-9_-
 
 def carries_token(path, token, prompt_file=None):
     """Where the transcript carries the agent's token, "reply" or "prompt",
-    "named" when only its prompt names the agent's own prompt file, or
-    None when it is not the agent's. The prompt is every user line
-    before the first reply (a Workflow subagent gets the harness's request
-    first and its pasted task second); a reply counts by its text blocks
-    only, never a tool call's input, where an orchestrator that launched
-    the agents would have pasted their prompts. A transcript that holds
+    "named" when only its prompt names the agent's own prompt file,
+    "headless" (below) when it lost its prompt, or None when it is not
+    the agent's. The prompt is every user line before the first reply (a
+    Workflow subagent gets the harness's request first and its pasted
+    task second); a reply counts by its text blocks only, never a tool
+    call's input, where an orchestrator that launched the agents would
+    have pasted their prompts. A transcript that holds
     another agent's token of the same run anywhere in what is read is
     such an orchestrator's, and none of the agents'.
 
@@ -1055,24 +1063,48 @@ def carries_token(path, token, prompt_file=None):
     curse-1 step; one echoed it only through a shell command): its prompt
     names the file, and an orchestrator's prompt never does. The file's
     path is the pair's, shared by every attempt of the pair, so a
-    transcript that carries any other run token anywhere in what is read,
-    prompt, reply or tool result, is an earlier attempt's agent or some
-    other run's, and is "named" for none."""
-    found, replied, prompt, foreign = None, False, [], False
-    for kind, message in opening_messages(path):
+    transcript whose prompt or tool results carry any other run token is
+    an earlier attempt's agent or some other run's, and is "named" for
+    none. So is one whose reply carries another token, unless a tool
+    result holds this one: what an agent read decides over what it typed,
+    since one solo agent of the X-Blossom screen opened its reply with its
+    token short of the run id's suffix, though the prompt file it had just
+    read back held the token whole.
+
+    With a prompt file given, every match but a headless one needs a
+    prompt that names it, which keeps out a review agent whose prompt
+    quoted the token.
+    "headless" is a transcript that does not open on its prompt: a disk
+    that was full as the agent was spawned dropped the first lines and
+    kept the rest (one relay of the curse-1 jinja 1559 run did so). Its
+    prompt cannot be read, so it is the agent's by an exact token in a
+    reply alone, and last of all, since a relay that echoed the token
+    in a reply would match the same way."""
+    events = opening_events(path)
+    found, replied, prompt = None, False, []
+    read_own = read_foreign = typed_foreign = False
+    for kind, message in ((event["type"], event["message"]) for event in events):
         text = content_blocks_to_text(message.get("content"))
         if names_another_agent(text, token):
             return None
-        foreign = foreign or carries_other_token(text, token)
         if kind == "assistant":
             replied = True
             found = "reply" if holds_token(reply_text(message), token) else found
-        elif kind == "user" and not replied:
+            typed_foreign = typed_foreign or carries_other_token(text, token)
+            continue
+        if not replied:
             prompt.append(text)
             found = found or ("prompt" if holds_token(text, token) else None)
-    if found or foreign or not prompt_file:
+        else:
+            read_own = read_own or holds_token(text, token)
+        read_foreign = read_foreign or carries_other_token(text, token)
+    if not events or not opens_on_its_prompt(events[0]):
+        return "headless" if found == "reply" else None
+    if prompt_file and not names_file(" ".join(prompt), prompt_file):
+        return None
+    if found or not prompt_file or read_foreign or (typed_foreign and not read_own):
         return found
-    return "named" if names_file(" ".join(prompt), prompt_file) else None
+    return "named"
 
 
 def carries_other_token(text, token):
@@ -1094,6 +1126,12 @@ def opening_messages(path):
     """The (type, message) of the transcript's user and assistant lines
     among its first TOKEN_SEARCH_LINES, where the prompt and the first
     replies are; empty when the file cannot be read."""
+    return [(event["type"], event["message"]) for event in opening_events(path)]
+
+
+def opening_events(path):
+    """The transcript's user and assistant lines among its first
+    TOKEN_SEARCH_LINES, whole; empty when the file cannot be read."""
     found = []
     try:
         with open(path, encoding="utf-8", errors="replace") as stream:
@@ -1103,10 +1141,18 @@ def opening_messages(path):
                 event = next(json_lines(line), None)
                 message = event.get("message") if isinstance(event, dict) else None
                 if isinstance(message, dict) and event.get("type") in ("user", "assistant"):
-                    found.append((event["type"], message))
+                    found.append(event)
     except OSError:
         return []
     return found
+
+
+def opens_on_its_prompt(event):
+    """Whether a transcript's first user or assistant line is its prompt:
+    a user line with no parent, as Claude Code writes the first line of
+    every subagent's transcript (660 of 661 on this host on 2026-10-15;
+    the other lost its prompt to a full disk)."""
+    return event.get("type") == "user" and event.get("parentUuid") is None
 
 
 def reply_text(message):

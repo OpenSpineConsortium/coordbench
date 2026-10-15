@@ -1,5 +1,12 @@
 # The curse of coordination, and the claim protocol against it: the step of 8 pairs, 2026-10-15
 
+Added at 22:45 UTC the same day. The audit that #21 adds found 11 of
+this step's 40 runs to be harness errors, ten of them a full disk and
+one a respawned pair of agents. Each run's audit.json under raw/ says
+which. The figures below count those runs as the arms' results, and
+they are to be regenerated once the runs are made again.
+../curse-of-coordination-notes/README.md has the list and the steps.
+
 The question (bench/cooperbench/PLAN.md, and the pilot in
 results/curse-1-pilot/): CooperBench found that two agents coordinating
 on a pair of features pass far less often than one agent given both,

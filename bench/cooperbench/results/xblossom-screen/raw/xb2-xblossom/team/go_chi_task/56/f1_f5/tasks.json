@@ -1,0 +1,29 @@
+[
+  {
+    "id": "cc46e8ad19",
+    "title": "Lead-only: integrate and submit feature 1",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792091058.7920005,
+    "last_note": "patch: the lead working tree (patch.txt, merged with /workspace/shared/agent2.patch)\n context.go                    |   6 +\n cors.go                       | 289 ++++++++++++++++++++++++++++++++++++++++++\n middleware/allowed_methods.go |  74 +++++++++++\n mux.go                        |  44 ++++++-\n tree.go                       | 101 ++++++++++++++-\n 5 files changed, 506 insertions(+), 8 deletions(-)\ntest: go test ./... -> exit 0",
+    "metadata": {
+      "feature_id": 1,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "dc188be735",
+    "title": "Implement feature 5",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792091058.7919552,
+    "last_note": "patch: /workspace/shared/agent2.patch\n cors.go | 289 +++++++++++++++++++++++++++++++\n tree.go |  24 ++++++\n 2 files changed, 313 insertions(+)\ntest: go test -run \"CORS|GetMethodName\" . -> exit 0 (13 scratch tests, kept at /workspace/shared/agent2-scratch/cors_test.go.txt, not in the patch); go test . -> exit 0",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent2"
+    }
+  }
+]

@@ -1,0 +1,1 @@
+src/click/termui.py: edit() passes lock_files to Editor(...) which was reformatted onto several lines; lock_files is the last kwarg after filename -- checked by: git diff -- src/click/termui.py

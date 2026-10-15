@@ -463,7 +463,7 @@ TRANSCRIPT_TOKENS = {"input_tokens": 3 + 4, "output_tokens": 128 + 20, "cache_re
 TRANSCRIPT_COST = (7 * 3.0 + 148 * 15.0 + 51258 * 0.3 + 52158 * 3.75) / 1_000_000
 
 
-def transcript_lines(token, model="claude-sonnet-4-5", final=True):
+def transcript_lines(token, model="claude-sonnet-4-5", final=True, prompt_file="/tmp/agent1.session-prompt.md"):
     def assistant(message_id, blocks, usage, stop=None):
         return {"type": "assistant", "isSidechain": True, "version": "2.1.295",
                 "timestamp": "2026-10-09T21:05:50.000Z",
@@ -473,7 +473,7 @@ def transcript_lines(token, model="claude-sonnet-4-5", final=True):
              "cache_creation_input_tokens": 51258}
     return [
         {"type": "user", "isSidechain": True, "version": "2.1.295", "timestamp": "2026-10-09T21:05:48.000Z",
-         "message": {"role": "user", "content": "Your task is in /tmp/agent1.session-prompt.md."}},
+         "message": {"role": "user", "content": f"Your task is in {prompt_file}."}},
         assistant("msg_1", [{"type": "text", "text": f"{token}\nReading the task."}], first),
         assistant("msg_1", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}],
                   {**first, "output_tokens": 128}, stop="tool_use"),
@@ -483,10 +483,13 @@ def transcript_lines(token, model="claude-sonnet-4-5", final=True):
     ]
 
 
-def write_transcript(path, token, model="claude-sonnet-4-5", age=10, final=True):
-    """A transcript `age` seconds old, so the copy need not wait for it to settle."""
+def write_transcript(path, token, model="claude-sonnet-4-5", age=10, final=True,
+                     prompt_file="/tmp/agent1.session-prompt.md"):
+    """A transcript `age` seconds old, so the copy need not wait for it to
+    settle, whose prompt names the agent's prompt file, as a bench agent's
+    spawn prompt does."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(line) + "\n" for line in transcript_lines(token, model, final)))
+    path.write_text("".join(json.dumps(line) + "\n" for line in transcript_lines(token, model, final, prompt_file)))
     os.utime(path, (time.time() - age, time.time() - age))
     return path
 
@@ -1867,7 +1870,8 @@ class Runs(RunnerCase):
         token = saved["agents"][0]["handle"]["run_token"]
         self.assertEqual(token, f"coordbench-run-token {saved['run_id']} agent1")
         self.assertIn(f"`{token}`", Path(plan["agents"][0]["prompt_file"]).read_text())
-        transcript = write_transcript(self.transcripts / "proj" / "s1" / "subagents" / "agent-a1.jsonl", token)
+        transcript = write_transcript(self.transcripts / "proj" / "s1" / "subagents" / "agent-a1.jsonl", token,
+                                      prompt_file=saved["agents"][0]["handle"]["prompt_file"])
 
         said = out + err
         code, out, err = self.main("finish", "--run-dir", str(pair))
@@ -2356,7 +2360,7 @@ class SessionTranscripts(unittest.TestCase):
         self.assertEqual(drivers.carries_token(mine, token, str(prompt_file)), "named")
         self.assertIsNone(drivers.carries_token(mine, token), "without the prompt file there is nothing to name")
         self.assertEqual(drivers.find_transcripts(token, [self.root], 0, str(prompt_file)), [mine])
-        replied = write_transcript(subagents / "agent-replied.jsonl", token, age=100)
+        replied = write_transcript(subagents / "agent-replied.jsonl", token, age=100, prompt_file=prompt_file)
         self.assertEqual(drivers.find_transcripts(token, [self.root], 0, str(prompt_file)), [replied, mine])
         other = write_lines(subagents / "agent-other.jsonl", [
             user_line(f"Your complete task is the file {prompt_file}.old and {prompt_file}x."), reply])
@@ -2389,6 +2393,80 @@ class SessionTranscripts(unittest.TestCase):
         self.assertIsNone(drivers.carries_token(planner, token, str(prompt_file)),
                           "a plan printed by a tool after the first reply names nobody's prompt")
 
+    def test_an_agent_that_miscopied_its_token_is_found_by_the_token_it_read_back(self):
+        """One solo agent of the X-Blossom screen opened its reply with its
+        token short of the run id's suffix, after reading its prompt file,
+        which held the token whole: what it read decides, so it is found by
+        its prompt file. With nothing read back, a token it typed that is
+        not its own still bars the match, and a token another attempt read
+        back bars it whatever was typed."""
+        token = drivers.run_token("solo-2068-f5_f11-ce3b26", "agent1")
+        prompt_file = self.tmp / "logs" / "f5_f11" / "agent1.session-prompt.md"
+        subagents = self.root / "p" / "s" / "subagents"
+        reading = {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": f"cat {prompt_file}"}}]}}
+
+        def read_back(text):
+            return {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": f"# coordbench\nBegin with {text}."}]}}
+
+        def reply(text):
+            return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+
+        def transcript(name, *lines):
+            return write_lines(subagents / f"agent-{name}.jsonl",
+                               [user_line(f"Your complete task is the file {prompt_file}."), *lines])
+
+        typo = "coordbench-run-token solo-2068-f5_f11 agent1"
+        short = transcript("short", reading, read_back(token), reply(f"{typo}\n\nI'll start."))
+        self.assertEqual(drivers.carries_token(short, token, str(prompt_file)), "named")
+        self.assertIsNone(drivers.carries_token(short, token), "the miscopied token is not the token")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, str(prompt_file)), [short])
+        unread = transcript("unread", reply(typo))
+        self.assertIsNone(drivers.carries_token(unread, token, str(prompt_file)), "a typed token alone bars the match")
+        earlier = transcript("earlier", reading, read_back(drivers.run_token("solo-2068-f5_f11-0a1b2c", "agent1")),
+                             read_back(token), reply(typo))
+        self.assertIsNone(drivers.carries_token(earlier, token, str(prompt_file)),
+                          "another attempt's token read back bars the match")
+
+    def test_a_transcript_that_lost_its_prompt_is_found_by_its_reply_last_of_all(self):
+        """A disk that was full as an agent was spawned dropped its
+        transcript's first lines and kept the rest (one relay of the
+        curse-1 jinja 1559 run): with no prompt to read, the transcript is
+        the agent's by the exact token in a reply, but only when no
+        transcript that kept its prompt is, since a relay that echoed the
+        token would match the same way."""
+        token = drivers.run_token("solo-56-f1_f5-47085d", "agent1")
+        prompt_file = "/logs/f1_f5/agent1.session-prompt.md"
+        subagents = self.root / "p" / "s" / "subagents"
+        lines = transcript_lines(token, prompt_file=prompt_file)
+        whole = write_lines(subagents / "agent-whole.jsonl", lines)
+        headless = write_lines(subagents / "agent-headless.jsonl", lines[1:])
+        os.utime(whole, (time.time() - 60, time.time() - 60))
+        self.assertEqual(drivers.carries_token(whole, token, prompt_file), "reply")
+        self.assertEqual(drivers.carries_token(headless, token, prompt_file), "headless")
+        self.assertEqual(drivers.carries_token(headless, token), "headless")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, prompt_file), [whole, headless],
+                         "the transcript that kept its prompt comes first, though older")
+        whole.unlink()
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, prompt_file), [headless])
+        result = {"type": "user", "parentUuid": "9911e9ea", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": f"Begin with {token}."}]}}
+        kept_a_result = write_lines(subagents / "agent-result.jsonl", [result, *lines[1:]])
+        self.assertEqual(drivers.carries_token(kept_a_result, token, prompt_file), "headless",
+                         "a first user line with a parent is a tool result, not the prompt")
+        read_only = write_lines(subagents / "agent-read.jsonl", [result, lines[3]])
+        self.assertIsNone(drivers.carries_token(read_only, token, prompt_file),
+                          "without its prompt, a token only read is no match")
+        for path in (headless, kept_a_result, read_only):
+            path.unlink()
+        named = write_lines(subagents / "agent-named.jsonl", [lines[0], lines[2], lines[3]])
+        os.utime(named, (time.time() - 60, time.time() - 60))
+        headless = write_lines(subagents / "agent-headless.jsonl", lines[1:])
+        self.assertEqual(drivers.carries_token(named, token, prompt_file), "named")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, prompt_file), [named, headless],
+                         "a headless transcript comes after a named one, though newer")
+
     def test_usage_counts_each_api_message_once_with_its_largest_figures(self):
         usage = drivers.transcript_usage("".join(json.dumps(line) + "\n" for line in transcript_lines("t")))
         self.assertEqual(usage["tokens"], TRANSCRIPT_TOKENS)
@@ -2414,7 +2492,8 @@ class SessionTranscripts(unittest.TestCase):
                                log_path=str(self.tmp / "run" / "agent1_stream.jsonl"), workspace=str(workspace))
         driver = drivers.SessionDriver(poll_seconds=0.01, settle_seconds=0, transcript_roots=[self.root])
         handle = driver.start(job)
-        source = write_transcript(self.root / "p" / "s" / "subagents" / "agent-a.jsonl", handle["run_token"])
+        source = write_transcript(self.root / "p" / "s" / "subagents" / "agent-a.jsonl", handle["run_token"],
+                                  prompt_file=handle["prompt_file"])
         (workspace / ".coordbench-done").touch()
         outcome = driver.wait(handle)
         self.assertEqual(set(outcome.measured), {"cost", *drivers.TOKEN_FIELDS})

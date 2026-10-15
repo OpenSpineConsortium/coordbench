@@ -18,7 +18,9 @@ the text leaves open is made in the open and written into the output:
   its Fig 4 Right fills 9 buckets from 5 models, which binary outcomes
   cannot, so it was probably not binary.
 - A pair counts only when it was scored (an eval.json without an error);
-  an unscored attempt says nothing about how hard the pair is.
+  an unscored attempt says nothing about how hard the pair is, and nor
+  does a run whose audit.json (the session route's audit) names a
+  harness error, which the command names as it leaves it out.
 - d(t) uses every model that scored t Solo; a pair missing from some
   model's runs is kept and its models are listed with it.
 - The curves of an arm and model run over the pairs that both the arm
@@ -56,7 +58,7 @@ TABLE_5 = {
 }
 METHOD = {
     "solo_success": "share of the model's scored Solo runs of the pair that passed (binary with one run)",
-    "scored": "eval.json present without an error; unscored attempts are left out",
+    "scored": "eval.json present without an error and no harness error in audit.json; the rest are left out",
     "d": "1 - mean over the models that scored the pair Solo of Solo_m(t)",
     "d_tilde": "min-max rescale of d over the pairs scored here, not the paper's 652",
     "buckets": "10 equal-width buckets over [0, 1], bucket = floor(10 d~), 1.0 in the last",
@@ -226,16 +228,31 @@ def read_json(path):
         return None
 
 
-def scored_runs(logs, run_name):
+def audited_harness_error(pair_dir):
+    """Why the session route's audit (session/audit.py) found the run in
+    pair_dir measured the harness rather than the arm, or None; report.py
+    reads it here too, so the two leave out the same runs."""
+    audited = read_json(Path(pair_dir) / "audit.json")
+    return audited.get("harness_error") if isinstance(audited, dict) else None
+
+
+def scored_runs(logs, run_name, left_out=None):
     """{model: {pair: [passed]}} over a run's scored pairs, the model from
-    result.json, the pair keyed repo/task/pair as report.py keys it."""
+    result.json, the pair keyed repo/task/pair as report.py keys it; a
+    harness error is no trial, as report.py leaves it out, and is added
+    to left_out as "<run>/<pair>: <why>"."""
     found = {}
     for result_file in sorted((Path(logs) / run_name).glob("*/*/*/*/result.json")):
         evaluation = read_json(result_file.parent / "eval.json")
         if not isinstance(evaluation, dict) or evaluation.get("error"):
             continue
-        model = (read_json(result_file) or {}).get("model") or "unknown"
         key = "/".join(result_file.parent.parts[-3:])
+        reason = audited_harness_error(result_file.parent)
+        if reason:
+            if left_out is not None:
+                left_out.append(f"{run_name}/{key}: {reason}")
+            continue
+        model = (read_json(result_file) or {}).get("model") or "unknown"
         found.setdefault(model, {}).setdefault(key, []).append(bool(evaluation.get("both_passed")))
     return found
 
@@ -247,13 +264,13 @@ def merge_trials(into, found):
     return into
 
 
-def read_trials(logs, solo_runs, arm_runs):
+def read_trials(logs, solo_runs, arm_runs, left_out=None):
     solo = {}
     for run_name in solo_runs:
-        merge_trials(solo, scored_runs(logs, run_name))
+        merge_trials(solo, scored_runs(logs, run_name, left_out))
     arms = {}
     for label, run_name in arm_runs:
-        for model, pairs in scored_runs(logs, run_name).items():
+        for model, pairs in scored_runs(logs, run_name, left_out).items():
             target = arms.setdefault((label, model), {})
             for pair, outcomes in pairs.items():
                 target.setdefault(pair, []).extend(outcomes)
@@ -270,11 +287,15 @@ def main(argv=None):
     parser.add_argument("--out", type=Path, default=Path("difficulty.json"))
     args = parser.parse_args(argv)
     arm_runs = [(entry.partition("=")[0], entry.partition("=")[2] or entry) for entry in args.arm]
-    solo, arms = read_trials(args.logs, args.solo, arm_runs)
+    left_out = []
+    solo, arms = read_trials(args.logs, args.solo, arm_runs, left_out)
     found = compute(solo, arms)
+    found["harness_errors_left_out"] = left_out
     args.out.write_text(json.dumps(found, indent=2) + "\n")
     for note in found["notes"]:
         print(note)
+    for run in left_out:
+        print(f"left out as a harness error: {run}")
     print(f"wrote {args.out}")
     return 0
 

@@ -1,0 +1,2 @@
+tree.go: findRoute flags rctx.methodNotAllowed = true at two sites (param nodes and the common leaf check) and FindRoute then returns nil,nil,nil, so a 405 path exposes no endpoints; methods can be probed per method with Mux.Match -- checked by: grep -n "methodNotAllowed = true" tree.go
+tree.go: methodTypString(method) already maps a methodTyp (custom ones from RegisterMethod too) to its name by scanning methodMap -- checked by: grep -n -A6 "func methodTypString" tree.go

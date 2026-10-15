@@ -104,9 +104,8 @@ directory's name, so its logs land under `<tag>-xblossom`:
     python3 queue.py add "$QUEUE" --tag xb1 --arms "solo,team,$ARM" --pairs go_chi_task/56/f1_f5
 
 Keep the path free of spaces and shell metacharacters. Then start the
-lanes as for any arm, with lane.js's `root` set to the checkout that
-holds this arm (its default is /home/user/coordbench), and read the
-results side by side:
+lanes as for any arm, with lane.js's `root`, which it requires, set to
+the checkout that holds this arm, and read the results side by side:
 
     python3 summary.py --logs <log dir> --tag xb1 --arms solo,team,xblossom --bases solo,team
     python3 ../report.py --logs <log dir> --run solo=xb1-solo --run team=xb1-team --run xblossom=xb1-xblossom

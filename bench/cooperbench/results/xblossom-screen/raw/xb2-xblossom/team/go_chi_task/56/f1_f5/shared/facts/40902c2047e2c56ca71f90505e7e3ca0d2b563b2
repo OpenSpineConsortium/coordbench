@@ -1,0 +1,2 @@
+tree.go: methodTypString(m) scans methodMap for a single method type and returns "" for mALL, so it also names methods added by RegisterMethod -- checked by: grep -n -A8 "func methodTypString" tree.go
+tree.go: agent2 added methodNames and GetMethodName after methodTypString (tests in cors_test.go, scratch) -- checked by: export PATH=$PATH:/usr/local/go/bin; go test -run GetMethodName .

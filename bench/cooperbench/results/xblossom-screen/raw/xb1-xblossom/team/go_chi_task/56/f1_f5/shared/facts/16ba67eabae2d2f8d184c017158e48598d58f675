@@ -1,0 +1,2 @@
+tree.go: findRoute flags a 405 at two sites (param branch and the generic branch) and now calls rctx.addMethodsAllowed(xn.endpoints) there; endpoints holds mALL and mSTUB keys for mounts, which addMethodsAllowed skips -- checked by: grep -n "addMethodsAllowed" tree.go
+tree.go: reverseMethodMap and allowOrder sit after methodMap; RegisterMethod keeps reverseMethodMap in step -- checked by: grep -n "reverseMethodMap" tree.go

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "8ee2746c64",
+    "title": "Lead-only: integrate and submit feature 5",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792092437.4013283,
+    "last_note": "integrated agent2.patch (monitor_process) with lock_files; merged tree passes 616 tests; patch.txt written",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "a34ad76608",
+    "title": "Implement feature 11",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792092437.4012823,
+    "last_note": "patch at /workspace/shared/agent2.patch (combined: your lock_files patch + monitor_process); standalone at /workspace/shared/agent2-standalone.patch",
+    "metadata": {
+      "feature_id": 11,
+      "assigned_to": "agent2"
+    }
+  }
+]

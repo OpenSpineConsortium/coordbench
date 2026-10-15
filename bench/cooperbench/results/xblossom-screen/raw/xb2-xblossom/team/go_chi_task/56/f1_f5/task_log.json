@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "create",
+    "task_id": "dc188be735",
+    "by": "bench-runner",
+    "title": "Implement feature 5",
+    "ts": 1792091058.7919579
+  },
+  {
+    "kind": "create",
+    "task_id": "cc46e8ad19",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792091058.792003
+  },
+  {
+    "kind": "claim",
+    "task_id": "cc46e8ad19",
+    "by": "agent1",
+    "ts": 1792091083.916745
+  },
+  {
+    "kind": "claim",
+    "task_id": "dc188be735",
+    "by": "agent2",
+    "ts": 1792091085.8723576
+  },
+  {
+    "kind": "update",
+    "task_id": "dc188be735",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch: /workspace/shared/agent2.patch\n cors.go | 289 +++++++++++++++++++++++++++++++\n tree.go |  24 ++++++\n 2 files changed, 313 insertions(+)\ntest: go test -run \"CORS|GetMethodName\" . -> exit 0 (13 scratch tests, kept at /workspace/shared/agent2-scratch/cors_test.go.txt, not in the patch); go test . -> exit 0",
+    "ts": 1792091633.706578
+  },
+  {
+    "kind": "update",
+    "task_id": "cc46e8ad19",
+    "by": "agent1",
+    "status": "done",
+    "note": "patch: the lead working tree (patch.txt, merged with /workspace/shared/agent2.patch)\n context.go                    |   6 +\n cors.go                       | 289 ++++++++++++++++++++++++++++++++++++++++++\n middleware/allowed_methods.go |  74 +++++++++++\n mux.go                        |  44 ++++++-\n tree.go                       | 101 ++++++++++++++-\n 5 files changed, 506 insertions(+), 8 deletions(-)\ntest: go test ./... -> exit 0",
+    "ts": 1792091708.827365
+  }
+]

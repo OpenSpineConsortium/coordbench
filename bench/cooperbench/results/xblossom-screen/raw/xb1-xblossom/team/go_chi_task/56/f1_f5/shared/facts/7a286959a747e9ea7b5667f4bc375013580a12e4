@@ -1,0 +1,1 @@
+mux.go: MethodNotAllowedHandler takes variadic methodTyp and only the default handler sets Allow; a handler set with MethodNotAllowed is returned as is -- checked by: grep -n "MethodNotAllowedHandler" mux.go

@@ -1,0 +1,54 @@
+[
+  {
+    "kind": "create",
+    "task_id": "d5e13378f7",
+    "by": "bench-runner",
+    "title": "Implement feature 11",
+    "ts": 1792090766.9956987
+  },
+  {
+    "kind": "create",
+    "task_id": "4dc71fc0e2",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 5",
+    "ts": 1792090766.9957428
+  },
+  {
+    "kind": "claim",
+    "task_id": "d5e13378f7",
+    "by": "agent2",
+    "ts": 1792090793.1963236
+  },
+  {
+    "kind": "update",
+    "task_id": "4dc71fc0e2",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing feature 5 (lock_files)",
+    "ts": 1792090804.6646724
+  },
+  {
+    "kind": "update",
+    "task_id": "4dc71fc0e2",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 5 implemented and tested; waiting for agent2 patch to merge",
+    "ts": 1792090872.034883
+  },
+  {
+    "kind": "update",
+    "task_id": "d5e13378f7",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792090885.2953913
+  },
+  {
+    "kind": "update",
+    "task_id": "4dc71fc0e2",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch (feature 11) with feature 5; patch.txt written",
+    "ts": 1792090936.2034454
+  }
+]

@@ -1,31 +1,43 @@
 """One lane of a session-driven run: take the next item, prepare it, and
 later finish it.
 
-    python3 lane.py prepare QUEUE --worker NAME [--log-dir DIR] [--wait-image-min 30]
+    python3 lane.py prepare QUEUE --worker NAME [--log-dir DIR] [--wait-image-min 30] [--min-free-gb 8]
     python3 lane.py finish RUN_DIR --item ITEM_ID --queue QUEUE
-        [--returned agent1 agent2 ...] [--dead agent3 ...]
+        [--returned agent1 agent2 ...] [--dead agent3 ...] [--unfinished agent1 ...]
 
 prepare pops the first pending item of the queue, waits until its task
 image is overlaid (the images are prepared by a separate loop, task by
-task, so a lane never pulls one itself), runs coordbench's run.py prepare
-for it with the session driver, and prints one JSON object: the plan the
-orchestrating session spawns its subagents from, with each agent's prompt
-file and run token, or {"done": true} when the queue is empty. A prepare
-that fails marks the item failed and takes the next.
+task, so a lane never pulls one itself) and until the disk has room for a
+run, runs coordbench's run.py prepare for it with the session driver, and
+prints one JSON object: the plan the orchestrating session spawns its
+subagents from, with each agent's prompt file and run token, or
+{"done": true} when the queue is empty. A prepare that fails marks the
+item failed and takes the next. An item the lane already holds is handed
+out again only when no agent of it ever ran; one that ran, whose finish
+was lost, is finished instead, its agents without a marker counted as
+lost, since spawning agents again on a workspace that holds the first
+agents' work would score both as one run.
 
 finish is run once every subagent of the pair has returned. A subagent
 that returned without creating its marker is given one now, so the run
 ends as it did rather than at the deadline, and the fact is kept in
 harness.json beside the pair; one the harness lost (--dead) has its
-deadline brought forward, so run.py finish records it as an Error at
-once instead of waiting it out. Then run.py finish waits, scores and
-tears down, judge.py's free heuristics run on the pair, and the queue
-item takes the verdict.
+deadline brought forward and is marked lost, so run.py finish records it
+as an Error at once instead of waiting it out, unless it made its marker,
+which says it finished. Then run.py finish waits, scores and tears down,
+its output kept as scoring.log, judge.py's free heuristics run on the
+pair, audit.py records what the session route did to the run, and the
+queue item takes the verdict. A run the audit finds measured the harness
+rather than the arm (an agent lost, a full disk, an agent spawned twice)
+gets the verdict error, its score kept as scored_verdict, so the item is
+failed and requeued like any other error, whatever it scored.
 """
 
 import argparse
+import contextlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -37,6 +49,8 @@ RUN_PY = ROOT / "coordbench" / "run.py"
 JUDGE_PY = ROOT / "coordbench" / "judge.py"
 QUEUE_PY = HERE / "queue.py"
 MARKER = ".coordbench-done"
+sys.path.insert(0, str(HERE))
+import audit  # noqa: E402 - a sibling script, found by its directory
 
 
 def say(text):
@@ -88,11 +102,46 @@ def clean_environment():
     return env
 
 
+def arm_config(arm):
+    """The arm's arm.json, by its directory or a built-in arm's name; empty
+    when there is none to read, which run.py prepare then reports."""
+    for directory in (Path(arm), ROOT / "coordbench" / "arms" / arm):
+        try:
+            return json.loads((directory / "arm.json").read_text())
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+def session_cannot_run(arm):
+    """Why the session route cannot run the arm as its arm.json asks, or
+    None. A subagent of the orchestrating session loads no plugin and no
+    MCP server of the arm's; run.py would record them as the arm's and run
+    the agents without them, so the item fails here instead, by name."""
+    config = arm_config(arm)
+    dropped = []
+    if config.get("plugins"):
+        dropped.append(f"plugins {config['plugins']}")
+    if config.get("mcp_servers"):
+        dropped.append(f"MCP servers {sorted(config['mcp_servers'])}")
+    if not dropped:
+        return None
+    return (f"the session route loads no plugin and no MCP server, and this arm declares "
+            f"{' and '.join(dropped)}: run it with the claude-cli driver")
+
+
 def prepare_item(item, log_dir):
+    refused = session_cannot_run(item["arm"])
+    if refused:
+        return None, refused
     command = [sys.executable, str(RUN_PY), "prepare", "--arm", item["arm"], "--repo", item["repo"],
                "--task", str(item["task"]), "--features", item["features"], "--driver", "session",
                "--model", item["model"], "--timeout-min", str(item["timeout_min"]),
                "--disallowed-tools", "WebFetch,WebSearch", "--name", item["run_name"]]
+    # The run options the queue gave the item (queue.py add --option), as
+    # run.py prepare takes them; JSON keeps a number or a list a number.
+    for key, value in sorted((item.get("options") or {}).items()):
+        command += ["--option", f"{key}={json.dumps(value) if not isinstance(value, str) else value}"]
     if log_dir:
         command += ["--log-dir", log_dir]
     out = subprocess.run(command, capture_output=True, text=True, env=clean_environment(), cwd=str(ROOT))
@@ -109,6 +158,94 @@ def prepare_item(item, log_dir):
 
 
 MAX_IMAGE_WAITS = 6
+# A disk that stays full this many waits in a row fails the item rather
+# than hold the lane; requeue it once there is room.
+MAX_DISK_WAITS = 6
+DISK_POLL_SECONDS = 30
+
+
+def free_gb(path):
+    """Free space in GB on the file system holding the path or its nearest
+    existing parent; None when none can be read."""
+    for candidate in (Path(path), *Path(path).parents):
+        try:
+            return shutil.disk_usage(candidate).free / 1e9
+        except OSError:
+            continue
+    return None
+
+
+def docker_root():
+    out = subprocess.run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else "/var/lib/docker"
+
+
+def disk_places(log_dir):
+    """Where a run writes: the docker root (the containers' layers), the
+    log directory (the run's files, the transcripts' copies) and the
+    temporary directory, where the session keeps its subagents' command
+    output, which a full disk cut short in the step of 8 pairs."""
+    import tempfile
+    return {"docker": docker_root(), "logs": log_dir or str(ROOT), "temporary": tempfile.gettempdir()}
+
+
+def short_of_disk(log_dir, minimum_gb):
+    """"name: N GB free at path" for each place below minimum_gb."""
+    short = []
+    for name, path in disk_places(log_dir).items():
+        free = free_gb(path)
+        if free is not None and free < minimum_gb:
+            short.append(f"{name}: {free:.1f} GB free at {path}")
+    return short
+
+
+def wait_for_disk(log_dir, minimum_gb, minutes):
+    """Wait up to minutes for every place to have minimum_gb free, as a
+    finishing run tears its containers down; what is still short, or
+    an empty list."""
+    deadline = time.time() + minutes * 60
+    short = short_of_disk(log_dir, minimum_gb)
+    while short and time.time() < deadline:
+        time.sleep(DISK_POLL_SECONDS)
+        short = short_of_disk(log_dir, minimum_gb)
+    return short
+
+
+def ran_before(item):
+    """Whether an agent of the item's prepared run ever ran: a marker or a
+    patch.txt in its workspace, or a subagent transcript spawned as it
+    (audit.spawns_of), one that lost its prompt to a full disk included,
+    since finishing a run that may have run is safer than spawning its
+    agents again over their workspace. A plan whose relay was dropped
+    before any agent was spawned has none, and is handed out again."""
+    for agent in read_plan(item["run_dir"]).get("agents") or []:
+        handle = agent.get("handle") or {}
+        workspace = handle.get("workspace")
+        if workspace and ((Path(workspace) / MARKER).exists() or (Path(workspace) / "patch.txt").exists()):
+            return True
+        if any(audit.spawns_of(handle)):
+            return True
+    return False
+
+
+def finish_ran_run(args, item):
+    """Start the finish of a run whose agents ran and whose finish was
+    lost: the agents that made their marker returned, and the rest are
+    lost, since no subagent of the lane outlives the lane's return to
+    prepare. finishing_at is set first, so the next prepare takes another
+    item rather than this one again."""
+    plan = read_plan(item["run_dir"])
+    marked, lost = [], []
+    for agent in plan.get("agents") or []:
+        workspace = (agent.get("handle") or {}).get("workspace")
+        (marked if workspace and (Path(workspace) / MARKER).exists() else lost).append(agent["id"])
+    queue("set", args.queue, item["id"], f"finishing_at={time.time()}",
+          f"note={json.dumps('its agents ran and its finish was lost; finished by a later prepare')}")
+    finish_args = argparse.Namespace(run_dir=item["run_dir"], item=item["id"], queue=args.queue,
+                                     returned=marked, dead=lost, unfinished=[], detach=True)
+    with contextlib.redirect_stdout(sys.stderr):
+        detach(finish_args)
+    say(f"{item['id']} had run; its finish is started, with {lost or 'no agent'} lost")
 
 
 def plan_from_disk(item):
@@ -136,6 +273,16 @@ def announce(plan, item):
 
 
 def command_prepare(args):
+    # One budget for every wait of this call, whichever item it is spent
+    # on, so a call that fails one item at its last wait and takes the
+    # next stays inside the relay's command timeout; a command run past
+    # it is moved to the background, not stopped, and a second prepare
+    # of the same lane would then take the same item.
+    started = time.time()
+
+    def minutes_left():
+        return max(0.0, args.wait_image_min - (time.time() - started) / 60)
+
     for _ in range(5):
         raw = queue("next", args.queue, "--worker", args.worker)
         if raw is None:
@@ -146,9 +293,12 @@ def command_prepare(args):
             print(json.dumps({"done": True}))
             return 0
         if item.get("prepared_at") and item.get("run_dir"):
+            if ran_before(item):
+                finish_ran_run(args, item)
+                continue
             announce(plan_from_disk(item), item)
             return 0
-        if not wait_for_image(item, args.wait_image_min):
+        if not wait_for_image(item, minutes_left()):
             # The item stays the worker's; the next call takes it up again,
             # so a caller with a short command timeout can wait in steps,
             # up to a limit, after which the item fails rather than hold
@@ -156,11 +306,25 @@ def command_prepare(args):
             waits = int(item.get("image_waits") or 0) + 1
             if waits >= MAX_IMAGE_WAITS:
                 queue("set", args.queue, item["id"], "status=failed",
-                      f"error={json.dumps('no task image after ' + str(waits) + ' waits')}")
+                      f"error={json.dumps('no task image after ' + str(waits) + ' waits')}",
+                      f"harness_error={json.dumps('no task image before prepare')}")
                 continue
             queue("set", args.queue, item["id"], f"image_waits={waits}")
             print(json.dumps({"done": False, "waiting": True, "item": item["id"],
                               "image": image_name(item["repo"], item["task"])}))
+            return 0
+        short = wait_for_disk(args.log_dir, args.min_free_gb, minutes_left())
+        if short:
+            # Kept as the image wait is: the item stays the worker's, and a
+            # disk that never frees fails it, to be requeued once it does.
+            waits = int(item.get("disk_waits") or 0) + 1
+            if waits >= MAX_DISK_WAITS:
+                queue("set", args.queue, item["id"], "status=failed",
+                      f"error={json.dumps('the disk stayed short of room: ' + '; '.join(short))}",
+                      f"harness_error={json.dumps('disk short of room before prepare')}")
+                continue
+            queue("set", args.queue, item["id"], f"disk_waits={waits}")
+            print(json.dumps({"done": False, "waiting": True, "item": item["id"], "disk": short}))
             return 0
         plan, error = prepare_item(item, args.log_dir)
         if plan is None:
@@ -185,13 +349,17 @@ def write_plan(run_dir, plan):
     os.chmod(path, 0o600)
 
 
-def place_missing_markers(run_dir, returned, dead):
+def place_missing_markers(run_dir, returned, dead, unfinished=()):
     """Give a returned subagent its marker when it left none, unless its
     deadline has passed, when it overran and is left to expire as the
-    driver expires it; bring a lost one's deadline forward; say what was
-    done in harness.json."""
+    driver expires it; bring a lost one's deadline forward and mark it
+    lost, so the driver says the harness lost it rather than that it ran
+    out of time, unless it made its marker, which says it finished; say
+    what was done in harness.json, with the subagents that returned
+    saying they had not finished."""
     plan = read_plan(run_dir)
-    notes = {"placed_markers": [], "overran": [], "expired": [], "gone_workspaces": [], "at": time.time()}
+    notes = {"placed_markers": [], "overran": [], "expired": [], "gone_workspaces": [],
+             "marked_but_not_returned": [], "unfinished": sorted(unfinished), "at": time.time()}
     changed = False
     for agent in plan["agents"]:
         handle = agent.get("handle") or {}
@@ -210,8 +378,14 @@ def place_missing_markers(run_dir, returned, dead):
             else:
                 marker.touch()
                 notes["placed_markers"].append(agent["id"])
-        if agent["id"] in dead:
+        if agent["id"] in dead and marker.exists():
+            # Its marker says it finished; the call that spawned it came
+            # back empty after (an API error on its last turn, the usage
+            # limit), which is no loss of the agent's work.
+            notes["marked_but_not_returned"].append(agent["id"])
+        elif agent["id"] in dead:
             handle["deadline"] = time.time() - 1
+            handle["lost"] = True
             notes["expired"].append(agent["id"])
             changed = True
     if changed:
@@ -263,6 +437,8 @@ def detach(args):
         command += ["--returned", *args.returned]
     if args.dead:
         command += ["--dead", *args.dead]
+    if getattr(args, "unfinished", None):
+        command += ["--unfinished", *args.unfinished]
     with open(run_dir / "finish.out", "a") as log:
         child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                  start_new_session=True, cwd=str(ROOT))
@@ -295,7 +471,8 @@ def command_wait(args):
 
 
 def finish_pair(args):
-    notes = place_missing_markers(args.run_dir, set(args.returned or ()), set(args.dead or ()))
+    notes = place_missing_markers(args.run_dir, set(args.returned or ()), set(args.dead or ()),
+                                  set(getattr(args, "unfinished", None) or ()))
     if notes["gone_workspaces"] and (Path(args.run_dir) / "result.json").exists():
         # An earlier finish wrote its outputs and tore the run down;
         # run.py finish would find no marker and no patch in the gone
@@ -308,6 +485,9 @@ def finish_pair(args):
                         "its patches and score are left as they are, to be recorded by hand"}
     out = subprocess.run([sys.executable, str(RUN_PY), "finish", "--run-dir", args.run_dir],
                          capture_output=True, text=True, env=clean_environment(), cwd=str(ROOT))
+    # Kept where audit.py reads it: a scoring that ran out of disk says so
+    # here and in eval.json's test output, nowhere an agent wrote.
+    (Path(args.run_dir) / audit.SCORING_LOGS[1]).write_text(out.stdout + out.stderr)
     last = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else ""
     try:
         verdict = json.loads(last)
@@ -319,6 +499,24 @@ def finish_pair(args):
     verdict["harness"] = notes
     verdict["finish_exit"] = out.returncode
     verdict["summary"] = [line for line in out.stderr.splitlines() if "timings:" in line][-1:]
+    return judged_by_audit(verdict, args.run_dir)
+
+
+def judged_by_audit(verdict, run_dir):
+    """The verdict once audit.py has read the run: a run that measured the
+    harness rather than the arm is an error whatever it scored, its score
+    kept as scored_verdict, so a pass and a fail spoiled the same way are
+    run again alike."""
+    try:
+        found = audit.write_audit(run_dir)
+    except Exception as error:  # noqa: BLE001 - the audit must not cost the verdict
+        verdict["audit_error"] = f"{type(error).__name__}: {error}"
+        return verdict
+    if found["harness_error"]:
+        verdict["scored_verdict"] = verdict.get("verdict")
+        verdict["verdict"] = "error"
+        verdict["harness_error"] = found["harness_error"]
+        audit.refresh_summary(run_dir)
     return verdict
 
 
@@ -338,8 +536,10 @@ def command_finish(args):
                    "traceback": traceback.format_exc()[-2000:]}
     if args.queue and args.item:
         status = "done" if verdict.get("verdict") in ("pass", "fail") else "failed"
-        queue("set", args.queue, args.item, f"status={status}", f"verdict={json.dumps(verdict.get('verdict'))}",
-              f"finished_at={time.time()}")
+        fields = [f"status={status}", f"verdict={json.dumps(verdict.get('verdict'))}", f"finished_at={time.time()}"]
+        if verdict.get("harness_error"):
+            fields.append(f"harness_error={json.dumps(verdict['harness_error'])}")
+        queue("set", args.queue, args.item, *fields)
     (Path(args.run_dir) / "finish.verdict.json").write_text(json.dumps(verdict) + "\n")
     print(json.dumps(verdict))
     return 0
@@ -352,7 +552,10 @@ def main(argv=None):
     prep.add_argument("queue")
     prep.add_argument("--worker", required=True)
     prep.add_argument("--log-dir")
-    prep.add_argument("--wait-image-min", type=float, default=30)
+    prep.add_argument("--wait-image-min", type=float, default=30,
+                      help="minutes one prepare waits for the task image and disk room together")
+    prep.add_argument("--min-free-gb", type=float, default=8,
+                      help="the room a run needs on the docker root, the log directory and the temporary directory")
     prep.set_defaults(func=command_prepare)
     fin = sub.add_parser("finish")
     fin.add_argument("run_dir")
@@ -360,6 +563,7 @@ def main(argv=None):
     fin.add_argument("--queue")
     fin.add_argument("--returned", nargs="*")
     fin.add_argument("--dead", nargs="*")
+    fin.add_argument("--unfinished", nargs="*", help="returned agents that said they had not finished")
     fin.add_argument("--detach", action="store_true")
     fin.set_defaults(func=command_finish)
     wait = sub.add_parser("wait")

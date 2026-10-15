@@ -1,0 +1,1 @@
+src/click/_termui_impl.py: merged tree has Editor.__init__(lock_files, monitor_process) and edit_file taking the lock before _ProcessMonitor/Popen and releasing it in a finally -- checked by: python -m pytest /tmp/test_combined_scratch.py -q (5 passed)

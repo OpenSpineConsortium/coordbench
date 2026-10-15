@@ -1,0 +1,1 @@
+src/click/_termui_impl.py: Editor.edit_file wraps c.wait() in "with _ProcessMonitor(...).watch(c)"; monitor thread emits start, suspend/resume (via /proc state T, Linux only), terminate to callback(event_type, pid, editor, time.time()) -- checked by: python -m pytest on 9 scratch tests with sh editors, SIGSTOP/SIGCONT, mocked Popen -> 9 passed

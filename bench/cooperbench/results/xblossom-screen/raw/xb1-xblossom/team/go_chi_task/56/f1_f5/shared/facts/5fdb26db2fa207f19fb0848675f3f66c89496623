@@ -1,0 +1,1 @@
+middleware/allowed_methods.go: SetAllowHeader adds one Allow value per matching standard method in net/http order, only when Match fails for the routed method -- checked by: go test -run Scratch ./middleware -> exit 0

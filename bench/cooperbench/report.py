@@ -15,8 +15,11 @@ output and here:
   the paper's k/n: eval.json both_passed over every attempted pair,
   where a pair with no eval.json or an eval error counts as a failure
   and the agents' status is ignored, as CooperBench's runner scores an
-  errored agent's patch. Beside it are CooperBench's own three rates
-  (summary.json's passed / (passed + failed), the console's and the
+  errored agent's patch; a run whose audit.json (the session route's
+  audit) names a harness error is left out of every rate and figure and
+  listed under "Runs left out as harness errors". Beside it are
+  CooperBench's own three rates (summary.json's passed / (passed +
+  failed), the console's and the
   ablation page's passed / evaluated, the website's passed / attempted)
   and coordbench's rate on the pairs its agents finished, where a pair an
   agent left in Error is set apart rather than failed: a harness error is
@@ -245,6 +248,15 @@ class Pair:
         return pair_agents(self.result)
 
     @property
+    def harness_error(self):
+        """Why the session route's audit (session/audit.py) found the run
+        measured the harness rather than the arm, or None; read once, by
+        difficulty.py's reader, so difficulty.json leaves out these runs."""
+        if "harness_error" not in self.cache:
+            self.cache["harness_error"] = difficulty.audited_harness_error(self.dir)
+        return self.cache["harness_error"]
+
+    @property
     def model(self):
         return self.result.get("model")
 
@@ -335,7 +347,18 @@ def read_pair(pair_dir, label, run):
 
 
 def read_run(logs, run_name, label=None):
-    """Every pair of one run, in key order."""
+    """Every pair of one run, in key order, but the harness errors, which
+    measured the session route rather than the arm and are left out of
+    every figure, as summary.py leaves them out (harness_errors)."""
+    return [pair for pair in every_pair(logs, run_name, label) if not pair.harness_error]
+
+
+def harness_errors(logs, run_name, label=None):
+    """The pairs of one run whose audit.json names a harness error."""
+    return [pair for pair in every_pair(logs, run_name, label) if pair.harness_error]
+
+
+def every_pair(logs, run_name, label=None):
     return [read_pair(path.parent, label or run_name, run_name)
             for path in sorted((Path(logs) / run_name).glob("*/*/*/*/result.json"))]
 
@@ -633,8 +656,10 @@ def rates_section(groups, seed):
     body = table(header, rate_rows(groups, seed)) + [
         "", "The first rate is the paper's k/n: eval.json both_passed over every attempted pair, a pair "
         "without an evaluation or with an eval error failing and the agents' status ignored, as "
-        "CooperBench scores an errored agent's patch. The rate on finished pairs is coordbench's: a pair "
-        "an agent left in Error, or with no usable evaluation, is set apart (Errors) rather than failed. "
+        "CooperBench scores an errored agent's patch; a run the session route's audit found a harness "
+        "error is left out, and listed apart when there is one. The rate on finished pairs is coordbench's: "
+        "a pair an agent left in Error, or with no usable evaluation, is set apart (Errors) rather than "
+        "failed. "
         "The bootstrap resamples task sets.", "", REFERENCES["rates"]]
     return section("Pass rates", body)
 
@@ -2037,10 +2062,11 @@ def rules_section():
                 "rule (naive merge, union, resolver) is counted in the merge cascade's table."]
 
 
-def render(arms, runs=None, dataset=None, published=None, options=None):
+def render(arms, runs=None, dataset=None, published=None, options=None, left_out=None):
     """The report as Markdown. arms is {label: {key: Pair}} (arm_outcomes)
     or {label: [Pair]}; runs, when given, is [(label, run name, [Pair],
-    logs)] for the Runs table."""
+    logs)] for the Runs table; left_out, the harness errors read_run left
+    out, [Pair], each named under the Runs table."""
     options = options or {}
     groups, roles, found = context(arms, options)
     everything = groups + pooled_groups(groups)
@@ -2048,6 +2074,8 @@ def render(arms, runs=None, dataset=None, published=None, options=None):
     lines = ["# Arms side by side"] + rules_section()
     if runs:
         lines += runs_section(runs, dataset)
+    if left_out:
+        lines += left_out_section(left_out)
     lines += rates_section(everything, seed) + cooperbench_rates_section(everything) + cost_section(everything)
     lines += comparisons_section(groups) + gap_section(everything, roles["solo"]) + git_section(groups, roles)
     lines += route_section(everything) + conflict_section(everything) + cascade_section(everything, roles)
@@ -2056,6 +2084,14 @@ def render(arms, runs=None, dataset=None, published=None, options=None):
     lines += dataset_section(everything, dataset)
     lines += published_section(groups, published) + section("Every pair", pair_rows(groups))
     return "\n".join(lines) + "\n"
+
+
+def left_out_section(pairs):
+    rows = [[pair.label, pair.key, pair.harness_error] for pair in pairs]
+    return section("Runs left out as harness errors", table(["Label", "Pair", "Why"], rows) + [
+        "", "The session route's audit (session/audit.py, audit.json) found these runs measured the harness, "
+        "not the arm: an agent lost, a full disk, an agent spawned twice. They are in no figure below; "
+        "`queue.py requeue --harness-only` runs them again."])
 
 
 def default_cooperbench_dir(logs):
@@ -2090,6 +2126,7 @@ def main(argv=None):
     parser.add_argument("--difficulty-out", type=Path, help="also write difficulty.json here")
     args = parser.parse_args(argv)
     runs = [(label, run_name, read_run(args.logs, run_name, label), args.logs) for label, run_name in parse_runs(args)]
+    left_out = [pair for label, run_name in parse_runs(args) for pair in harness_errors(args.logs, run_name, label)]
     arms = {}
     for label, _, pairs, _ in runs:
         arms.setdefault(label, []).extend(pairs)
@@ -2097,7 +2134,7 @@ def main(argv=None):
     published = published_outcomes(args.published) if args.published else None
     options = {"seed": args.seed, **{role: getattr(args, f"{role.replace('-', '_')}_label")
                                      for role in ("solo", "coop", "coop-nocomm", "coop-git")}}
-    print(render(arms, runs, dataset, published, options), end="")
+    print(render(arms, runs, dataset, published, options, left_out), end="")
     found = context(arms, options)[2]
     if args.difficulty_out and found is not None:
         args.difficulty_out.write_text(json.dumps(found, indent=2) + "\n")

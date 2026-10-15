@@ -96,6 +96,24 @@ class CausesTest(unittest.TestCase):
         self.assertEqual([p["pair_dir"] for p in json.loads((again / "labels.json").read_text())["pairs"]],
                          [str(d) for d in drawn])
 
+    def test_a_run_the_audit_found_a_harness_error_is_counted_apart(self):
+        """The session route's audit found a failed pair met a full disk (as
+        every arm's outlines 1655 f6_f7 did in curse-1, the tests never
+        run): it failed for the route, so it is drawn for no cause label and
+        judged for no symptom, and counted with the harness errors."""
+        (self.runs.failed[0] / "audit.json").write_text(json.dumps({"harness_error": "the run met a full disk"}))
+        pair = judge.load_pair(self.runs.failed[0])
+        self.assertEqual(judge.symptom_scope(pair), ([], "harness error: the run met a full disk"))
+        run(["causes", str(self.runs.root), "--out", str(self.out)])
+        labels = json.loads((self.out / "labels.json").read_text())
+        self.assertEqual((labels["population"], labels["harness_errors_excluded"]), (3, 2))
+        self.assertNotIn(str(self.runs.failed[0].resolve()), [p["pair_dir"] for p in labels["pairs"]])
+        # A judge.json from a call before the audit does not bring the run
+        # into the validation's population either.
+        for directory in self.runs.failed[:2]:
+            self.runs.judge_symptoms(directory)
+        self.assertEqual([p.dir for p in annotate.judged_pairs([self.runs.root])], [self.runs.failed[1]])
+
     def test_the_labels_file_carries_table_2_word_for_word(self):
         run(["causes", str(self.runs.root), "--out", str(self.out)])
         labels = json.loads((self.out / "labels.json").read_text())

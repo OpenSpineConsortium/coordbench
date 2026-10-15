@@ -1,0 +1,58 @@
+{
+  "run_name": "xb1-solo",
+  "completed_at": "2026-10-15T22:35:01.617769",
+  "pass_rate": 0.5,
+  "total_tasks": 2,
+  "completed": 2,
+  "skipped": 0,
+  "failed": 0,
+  "total_cost": null,
+  "total_time_seconds": 845.46438,
+  "results": [
+    {
+      "task": "go_chi_task/56/1,5",
+      "status": "done",
+      "cost": null,
+      "eval": "fail"
+    },
+    {
+      "task": "pallets_click_task/2068/5,11",
+      "status": "done",
+      "cost": null,
+      "eval": "pass"
+    }
+  ],
+  "infrastructure_errors": 0,
+  "eval": {
+    "total_evaluated": 2,
+    "passed": 1,
+    "failed": 1,
+    "errors": 0,
+    "skipped": 0,
+    "pass_rate": 0.5
+  },
+  "pass_rate_over_evaluated": 0.5,
+  "run_totals": {
+    "wall_time": 845.46438,
+    "run_time": 803.246005,
+    "total_cost": 0.0,
+    "task_count": 2
+  },
+  "arm": "solo",
+  "driver": "session",
+  "model": "claude-sonnet-5-5",
+  "setting": "solo",
+  "total_time_source": "run_totals wall_time",
+  "claude_code": {
+    "claude_code_versions": [
+      "2.1.300"
+    ],
+    "models": [
+      "claude-sonnet-5-5"
+    ],
+    "tools": [],
+    "mcp_servers": [],
+    "cost_sources": [],
+    "model_mismatches": 0
+  }
+}

@@ -533,6 +533,20 @@ class SymptomsTest(unittest.TestCase):
         self.assertTrue(broken.judged()["skipped"]["symptoms"].startswith("harness error"))
         self.assertEqual(backend.calls, [])
 
+    def test_a_run_the_audit_found_a_harness_error_is_judged_for_nothing(self):
+        """The session route's audit (session/audit.py) found the failed run
+        met a full disk: it failed for the route, so no paid call is spent
+        on its symptoms or its conversation."""
+        audited = PairDir(self, standard_log()[0])
+        audited.write("audit.json", json.dumps({"harness_error": "the run met a full disk"}))
+        backend = FakeBackend()
+        run_command(["symptoms", str(audited.root)], backend)
+        run_command(["commerrors", str(audited.root)], backend)
+        skipped = audited.judged()["skipped"]
+        self.assertEqual(skipped["symptoms"], "harness error: the run met a full disk")
+        self.assertEqual(skipped["commerrors"], "harness error: the run met a full disk")
+        self.assertEqual(backend.calls, [])
+
     def test_a_pair_the_paper_eras_cascade_fails_is_in_scope_under_that_basis(self):
         cascade = {"ran": True, "verdict_paper_era": False, "route": "none",
                    "deciding_artifact": {"verdict_63b9d44": "agent1.patch", "verdict_paper_era": "merge_union.diff"}}

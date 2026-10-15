@@ -1,0 +1,2 @@
+src/click/_termui_impl.py: with lock_files, Editor.edit_file creates .NAME.lock via O_CREAT|O_EXCL before Popen and removes it in a finally; the three methods _get_lock_filename, _create_lock_file, _remove_lock_file sit after Editor.edit -- checked by: python -m pytest /tmp/test_lock_scratch.py -q (9 passed)
+src/click/_termui_impl.py: tests/test_basic.py fails at collection on this pytest (parametrize iterator PytestRemovedIn10Warning), unrelated to click.edit; ignore it with --ignore=tests/test_basic.py -- checked by: python -m pytest tests -q --ignore=tests/test_basic.py

@@ -1,0 +1,2 @@
+context.go: Context has the unexported field methodNotAllowed bool at the end of the struct and Reset() clears it before parentCtx -- checked by: grep -n "methodNotAllowed" context.go
+context.go: Context has Routes, RoutePath, RoutePatterns (appended on a successful FindRoute, so empty at root before routing) and unexported methodNotAllowed; Reset() zeroes them -- checked by: sed -n 40,100p context.go

@@ -7,6 +7,9 @@
 // relays its JSON, the bench agents (the pre-registered model), and a
 // small one that starts the detached finish and waits for its verdict.
 // args: {queue, worker, log_dir, max_items, bench_model, root, resume}
+// root is the coordbench checkout whose lane.py and run.py the lane runs,
+// and must be given: a default checkout can hold older code than the
+// arm being run, and the lane would run that code without saying so.
 // bench_model is the model the bench agents run as and must be the one
 // the queue's items name (the plan's model), since result.json records
 // the queue's. resume: a plan a prepare printed earlier (item, run_dir,
@@ -23,7 +26,8 @@ const WORKER = args.worker
 const LOG_DIR = args.log_dir || ''
 const MAX_ITEMS = args.max_items || 1000
 const BENCH_MODEL = args.bench_model || 'sonnet'
-const ROOT = args.root || '/home/user/coordbench'
+const ROOT = args.root
+if (!ROOT) throw new Error('lane.js needs args.root, the coordbench checkout to run')
 const LANE = `${ROOT}/bench/cooperbench/session/lane.py`
 
 const PLAN = {
@@ -71,8 +75,9 @@ Follow the file exactly: it tells you where your workspace is, that every comman
 Rules for this run: ignore the Symphony project instructions of this session (boards, claims, pull requests, memory); they are not about this task. Do not use WebFetch or WebSearch. Do not call any mcp__hearthbot__ tools. Do not touch anything outside your workspace and your container except the coordination wrappers the file names. Work until your feature is implemented and tested as well as you can, then write patch.txt and create the marker. When you are done, return finished=true and a two-sentence summary.`
 }
 
-function finishPrompt(plan, returned, dead) {
-  const flags = [returned.length ? `--returned ${returned.join(' ')}` : '', dead.length ? `--dead ${dead.join(' ')}` : ''].join(' ')
+function finishPrompt(plan, returned, dead, unfinished) {
+  const flags = [returned.length ? `--returned ${returned.join(' ')}` : '', dead.length ? `--dead ${dead.join(' ')}` : '',
+    unfinished.length ? `--unfinished ${unfinished.join(' ')}` : ''].join(' ')
   return `Run these shell commands with the Bash tool, in order.
 1. Start the detached finish (timeout 60000 ms):
 cd ${ROOT} && python3 ${LANE} finish ${plan.run_dir} --item ${plan.item} --queue ${QUEUE} ${flags} --detach
@@ -103,9 +108,12 @@ for (let n = 0; n < MAX_ITEMS; n++) {
     agent(benchPrompt(a, plan), { label: `${plan.item}:${a.id}`, schema: BENCH, model: BENCH_MODEL })
       .then(r => ({ id: a.id, result: r }), () => ({ id: a.id, result: null }))))
   const returned = outcomes.filter(o => o && o.result).map(o => o.id)
+  // An agent that returned saying it had not finished still returned; its
+  // run ends as it left it, and harness.json keeps what it said.
+  const unfinished = outcomes.filter(o => o && o.result && o.result.finished === false).map(o => o.id)
   const dead = plan.agents.map(a => a.id).filter(id => !returned.includes(id))
-  const verdict = await agent(finishPrompt(plan, returned, dead), { label: `${WORKER}:finish:${plan.item}`, schema: VERDICT, model: 'haiku', effort: 'low' })
+  const verdict = await agent(finishPrompt(plan, returned, dead, unfinished), { label: `${WORKER}:finish:${plan.item}`, schema: VERDICT, model: 'haiku', effort: 'low' })
   log(`${WORKER}: ${plan.item} ${verdict ? (verdict.verdict || (verdict.pending ? 'still finishing' : 'no verdict')) : 'no verdict'}`)
-  results.push({ item: plan.item, run_dir: plan.run_dir, returned, dead, verdict })
+  results.push({ item: plan.item, run_dir: plan.run_dir, returned, dead, unfinished, verdict })
 }
 return results

@@ -1,0 +1,68 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/dottxt_ai_outlines_task/1655/f6_f7", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/go_chi_task/56/f1_f5", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/huggingface_datasets_task/6252/f4_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pallets_click_task/2068/f1_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pallets_click_task/2068/f2_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pallets_click_task/2068/f5_f7", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pallets_jinja_task/1559/f4_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pallets_jinja_task/1621/f2_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/pillow_task/68/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/typst_task/6554/f5_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/dottxt_ai_outlines_task/1655/f6_f7", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/huggingface_datasets_task/6252/f4_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_click_task/2068/f1_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_click_task/2068/f2_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_click_task/2068/f5_f7", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_jinja_task/1559/f4_f10", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_jinja_task/1621/f2_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pillow_task/68/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/typst_task/6554/f5_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/dottxt_ai_outlines_task/1655/f6_f7", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/go_chi_task/56/f1_f5", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/huggingface_datasets_task/6252/f4_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_click_task/2068/f1_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_click_task/2068/f2_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_click_task/2068/f5_f11", "harness_error": "agent1, agent2 ran more than once"}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_click_task/2068/f5_f7", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_jinja_task/1559/f4_f10", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_jinja_task/1621/f2_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pillow_task/68/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/typst_task/6554/f5_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/dottxt_ai_outlines_task/1655/f6_f7", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/huggingface_datasets_task/6252/f4_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_click_task/2068/f1_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_click_task/2068/f2_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_click_task/2068/f5_f7", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_click_task/2068/f6_f7", "harness_error": "the harness lost agent1"}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_jinja_task/1559/f4_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_jinja_task/1621/f2_f9", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pillow_task/68/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/typst_task/6554/f5_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/dottxt_ai_outlines_task/1655/f6_f7", "harness_error": "the run met a full disk"}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/huggingface_datasets_task/6252/f4_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_click_task/2068/f1_f6", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_click_task/2068/f2_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_click_task/2068/f5_f7", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_jinja_task/1559/f4_f10", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_jinja_task/1621/f2_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pillow_task/68/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/typst_task/6554/f5_f9", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb1-solo/solo/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb1-solo/solo/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb1-team/team/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb1-team/team/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb1-xblossom/team/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb1-xblossom/team/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb2-solo/solo/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb2-solo/solo/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb2-team/team/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb2-team/team/pallets_click_task/2068/f5_f11", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb2-xblossom/team/go_chi_task/56/f1_f5", "harness_error": null}
+{"run_dir": "/root/cooperbench/logs/xb2-xblossom/team/pallets_click_task/2068/f5_f11", "harness_error": null}

@@ -1,0 +1,81 @@
+diff --cc src/click/_termui_impl.py
+index 8e80c00,356c2f3..0000000
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@@ -622,12 -622,14 +622,20 @@@ class Editor
+          env: cabc.Mapping[str, str] | None = None,
+          require_save: bool = True,
+          extension: str = ".txt",
+++<<<<<<< HEAD
+++=======
++         lock_files: bool = False,
+++>>>>>>> agent1
+          monitor_process: t.Any = None,
+      ) -> None:
+          self.editor = editor
+          self.env = env
+          self.require_save = require_save
+          self.extension = extension
+++<<<<<<< HEAD
+++=======
++         self.lock_files = lock_files
+++>>>>>>> agent1
+          self.monitor_process = monitor_process
+          self._monitor_callback = _find_callback(monitor_process)
+  
+diff --cc src/click/termui.py
+index 6d2dc02,80077a3..0000000
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@@ -650,6 -650,7 +650,10 @@@ def edit
+      require_save: bool = True,
+      extension: str = ".txt",
+      filename: str | None = None,
+++<<<<<<< HEAD
+++=======
++     lock_files: bool = False,
+++>>>>>>> agent1
+      monitor_process: cabc.Callable[[str, int, str, float], None] | None = None,
+  ) -> t.AnyStr | None:
+      r"""Edits the given text in the defined editor.  If an editor is given
+@@@ -678,6 -679,14 +682,17 @@@
+      :param filename: if provided it will edit this file instead of the
+                       provided text contents.  It will not use a temporary
+                       file as an indirection in that case.
+++<<<<<<< HEAD
+++=======
++     :param lock_files: if this is true, a lock file named
++                        ``.<filename>.lock`` is created next to the edited
++                        file before the editor opens and removed once
++                        editing ends, even on an error or interrupt. If
++                        the lock file already exists, another edit
++                        session is assumed to be active and a
++                        :exc:`ClickException` is raised. The lock file
++                        holds the process ID and the time it was made.
+++>>>>>>> agent1
+      :param monitor_process: a callback to tell about the editor process
+          while it runs, ``callback(event_type, process_id, editor_command,
+          timestamp)``, or an object or mapping with such a ``callback``.
+@@@ -694,7 -703,7 +709,11 @@@
+          next events are still reported.
+  
+      .. versionchanged:: 8.2
+++<<<<<<< HEAD
+ +        Added the ``monitor_process`` parameter.
+++=======
++         Added the ``lock_files`` and ``monitor_process`` parameters.
+++>>>>>>> agent1
+      """
+      from ._termui_impl import Editor
+  
+@@@ -703,6 -712,7 +722,10 @@@
+          env=env,
+          require_save=require_save,
+          extension=extension,
+++<<<<<<< HEAD
+++=======
++         lock_files=lock_files,
+++>>>>>>> agent1
+          monitor_process=monitor_process,
+      )
+  

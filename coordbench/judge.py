@@ -947,6 +947,15 @@ def filter_test_files(patch):
     return text if not text or text.endswith("\n") else text + "\n"
 
 
+def audited_harness_error(pair):
+    """Why the session route's audit (bench/cooperbench/session/audit.py)
+    found the run measured the harness rather than the arm, or None: such
+    a run failed for the route, not the arm, as the report and summary.py
+    count it, whatever its eval.json says."""
+    audited = read_json(pair.dir / "audit.json")
+    return audited.get("harness_error") if isinstance(audited, dict) else None
+
+
 def symptom_scope(pair):
     """(the bases the pair failed under, why it is out of scope): every
     scored multi-agent pair that failed under 63b9d44's verdict or the
@@ -955,6 +964,9 @@ def symptom_scope(pair):
         return [], "a single agent: the symptoms are of multi-agent failures"
     if pair.result.get("error"):
         return [], f"harness error: {pair.result['error']}"
+    audited = audited_harness_error(pair)
+    if audited:
+        return [], f"harness error: {audited}"
     evaluation = pair.evaluation
     if evaluation is None:
         return [], "not scored (no eval.json)"
@@ -2003,6 +2015,9 @@ class Job:
 def conversation_scope(pair, conversation):
     if not is_multi_agent(pair):
         return "a single agent has no conversation"
+    audited = audited_harness_error(pair)
+    if audited:
+        return f"harness error: {audited}"
     if not conversation.recorded:
         return conversation.reason
     if not conversation.messages:

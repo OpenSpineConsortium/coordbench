@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "create",
+    "task_id": "31922256c5",
+    "by": "bench-runner",
+    "title": "Implement feature 5",
+    "ts": 1792091364.1623235
+  },
+  {
+    "kind": "create",
+    "task_id": "83cd58122f",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792091364.1623824
+  },
+  {
+    "kind": "claim",
+    "task_id": "31922256c5",
+    "by": "agent2",
+    "ts": 1792091390.7224545
+  },
+  {
+    "kind": "update",
+    "task_id": "31922256c5",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch (diff vs ORIGINAL base 7f28096; applies cleanly on top of agent1.patch, verified, go vet + all tests pass in the combined tree)",
+    "ts": 1792091970.319145
+  },
+  {
+    "kind": "update",
+    "task_id": "83cd58122f",
+    "by": "agent1",
+    "status": "done",
+    "note": "integrated agent2 patch; merged patch.txt (526 lines) applies to clean base, builds, tests pass",
+    "ts": 1792092032.8147042
+  }
+]
