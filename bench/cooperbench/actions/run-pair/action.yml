@@ -135,6 +135,7 @@ runs:
       shell: bash
       env:
         RUN_DIR: ${{ steps.where.outputs.run_dir }}
+        MODE: ${{ inputs.mode }}
       run: |
         if bash bench/cooperbench/actions/scrub.sh; then
           echo "publish=true" >> "$GITHUB_OUTPUT"

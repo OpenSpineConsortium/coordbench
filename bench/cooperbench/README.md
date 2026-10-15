@@ -123,21 +123,84 @@ transcript and what it told its peer, and a pair's files may be published
 as a workflow's artifact. The run says on stderr when it found one, and a
 pair with a file that holds the token and could not be rewritten is an
 error, not a result. The scrub rewrites the token's exact bytes in plain
-and gzip files only: an archive an agent packed (.tar.gz, .zip), a git
-object under the team arm's shared/ copy or a workspace kept with
---keep, or the token encoded some other way, is outside it, as is the
-log of a hub started elsewhere (--hub), which is that hub's to keep.
+and gzip files only: an archive an agent packed (a tar, a zip or an ar
+archive, by its name or its bytes), a git object under the team arm's shared/
+copy or a workspace kept with --keep, or the token encoded some other
+way (base64, say), is outside it, as is the log of a hub started
+elsewhere (--hub), which is that hub's to keep.
 `run.py scrub --run-dir DIR` runs the scrub once more over a run
 directory, removing first every symlink and special file in it (the
 upload would follow a symlink to a file the scrub never read), and
-reads every file back, the members of an archive named .tar, .tar.gz,
-.tgz or .zip (each read as its bytes) and the git objects where a
-repository keeps them (loose ones and packfiles, inflated, with each
-delta applied to its base) included, and exits 2 when any still holds
-the token or could not be read; the workflow's jobs run it
-before an upload, after stopping any agent container still up, and
-publish nothing it refused. The team arm's shared/ is copied into every
-pair and published with it.
+reads every file back through every layer it is packed in, each opened
+by what its bytes say it is, whatever the file's name or place: gzip,
+xz, lzma (with any properties xz reads) and bzip2 streams, tar members
+(a ustar or v7 header; a member of a type tar does not know, as a
+regular file; past headers that do not read, as GNU tar steps over
+them, each member behind them by its size, or, where the header's
+checksum does not hold, to the first header inside that member whose
+checksum holds, which GNU tar reads, a first header among them when a
+later one carries ustar's magic; past a record tarfile cannot read, a
+sparse map among them; and what follows the tar's end), zip members (a zipapp's too, one that does not read as unzip
+decompresses it, a Deflate64 one as far as deflate reads it, and the
+members a split zip's last part holds whole, a zip64 split's too), ar
+members (a .deb, a BSD archive's, and what follows the last), git's
+loose objects (at whatever compression git wrote them), packfiles
+(with each delta applied to its base) and bundles, an archive inside
+an archive, up to eight layers deep, with one budget for the whole
+directory (1 GiB unpacked, each stream, member or object counting 1
+KiB and a delta the larger of what it makes and 32 bytes an
+instruction). A layer is found where a file, a stream or a member
+starts, or by a zip's end record, one that ends the file and places a
+directory where it says (the record's signature in a member's bytes, a
+library's that reads zips or a note's on them, and the record of a zip
+stored in a tar, which the tar's padding follows, mark no zip of the
+whole), where no format that accounts for all of the bytes opens them
+(a tar whose first header does not read, found
+by ustar's magic or by a later header, is a weak sign too: looked for
+after the end record, and not at all where the zip that record ends
+has its first member in the first block, as a zipapp has after its
+interpreter line, or holds within it the later header the tar was
+found by, a tar stored in the zip, as a zipapp whose interpreter line
+runs past the first block has, since text that happens to put a
+header's fields where a tar has them is a zip first of all; it never
+refuses a file it does not open, and the scrub's pass leaves it whole
+once it opens, as it leaves a tar): a stream that starts partway
+through other bytes (after a line of text, a zip's end, or a zlib or
+lzma stream) is outside it, as base64 is, and so are a zip after a git
+object or a pack, which git refuses with bytes after them, a v7 tar
+whose first header does not read, which has no magic to find the next
+header by, and a path staged and never committed that a git index of
+version 4 (feature.manyFiles) holds as what it does not share with the
+path before it. It exits 2 when a file
+or a layer still holds the token, a path's name does, the budget or the
+depth runs out, or a file does not open: a stream, a tar member or an
+ar member cut short (what it gave is searched first), a zip member that
+does not read, a zip whose directory does not read (a name that is not
+UTF-8 under its UTF-8 flag), a split zip's (zip -s) first part, and its
+last part once the members it holds whole are searched (a middle part,
+which starts partway through a member, is searched as it is, as is a
+last part that holds only the directory, and a zip -s archive that
+fits in one part is an ordinary zip), a format it cannot open (zstd,
+7z, rar, lz4, .Z, lzip, an AIX big archive), an incremental bundle
+whose pack holds a delta on an object it does not carry (its other
+objects are searched first), a SHA-256 repository's pack, or a path it
+cannot reach (one past PATH_MAX). A repository's history is the
+exception: what its objects
+hold (a project's own zstd or cut gzip test fixture) is searched as far
+as it opens and never refused for it, though the same file in a work
+tree is, and a packfile cut short is not opened there at all. Every
+line it writes names a path with the token replaced. A file whose bytes
+only look like a container (a log with a stray zip end record) is
+scrubbed as text, and the scrub's own pass has one budget for the
+directory too, each gzip member counting 1 KiB as in the read-back,
+past which a .gz is left whole for the read-back to refuse; a file
+whose reading makes that pass raise is said and skipped, so the other
+files are still scrubbed, and the read-back then refuses it. The
+workflow's jobs run it before an upload, after stopping any agent
+container still up, and publish nothing it refused; a fake run, which
+has no token, reads its files back for a stand-in, so the rehearsal
+refuses what a real run's read-back would. The team arm's shared/ is
+copied into every pair and published with it.
 
 ## In GitHub Actions
 

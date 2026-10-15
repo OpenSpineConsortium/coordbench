@@ -5,27 +5,32 @@ output the runner reads; the hub is the real one, in this process on an
 ephemeral port; CooperBench's scorer is a fake with the shape of its
 results. Nothing here starts a container or a Claude."""
 
+import bz2
 import contextlib
 import gzip
 import hashlib
 import importlib.util
 import io
 import json
+import lzma
 import os
 import random
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
 import threading
 import time
+import tracemalloc
 import types
 import unittest
 import urllib.error
 import urllib.request
+import zipfile
 import zlib
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -3380,6 +3385,62 @@ class Scrubbing(unittest.TestCase):
         self.assertIn("broken.gz", err.getvalue())
         self.assertEqual((self.tmp / "stream.jsonl").read_text(), runner.SCRUBBED + "\n")
 
+    def test_whatever_a_file_makes_the_scrub_raise_is_said_and_the_other_files_are_still_scrubbed(self):
+        """A tar whose first header is broken and which is cut short inside
+        its next one made the read of its kinds raise struct.error, which
+        ended the pass with the files after it unscrubbed; now such a block
+        is no header, and whatever else a file's bytes make the pass raise
+        is said and skipped, as unscrubbed refuses the file."""
+        cut = bytearray(tar_of({"a.txt": b"hello\n" * 10, "b.txt": b"world\n" * 10}))
+        cut[257] ^= 0x01
+        (self.tmp / "transcript.bin").write_bytes(cut[:1024 + 400])
+        (self.tmp / "zz-log.txt").write_text(f"TOKEN={PLANTED}\n")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            rewritten = runner.scrub_credentials([self.tmp], values=[PLANTED])
+        self.assertEqual(rewritten, [self.tmp / "zz-log.txt"])
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual((self.tmp / "zz-log.txt").read_text(), f"TOKEN={runner.SCRUBBED}\n")
+        (self.tmp / "zz-log.txt").write_text(f"TOKEN={PLANTED}\n")
+        real = runner.packed_kinds
+
+        def raising(data):
+            if data.startswith(b"odd"):
+                raise struct.error("planted: unpack requires a buffer of 512 bytes")
+            return real(data)
+
+        (self.tmp / "odd.bin").write_bytes(b"odd bytes " + PLANTED.encode())
+        with mock.patch.object(runner, "packed_kinds", raising), contextlib.redirect_stderr(io.StringIO()) as err:
+            rewritten = runner.scrub_credentials([self.tmp], values=[PLANTED])
+        self.assertEqual(rewritten, [self.tmp / "zz-log.txt"])
+        self.assertIn("scrubbing", err.getvalue())
+        self.assertIn("odd.bin failed: planted", err.getvalue())
+        self.assertNotIn(PLANTED, err.getvalue())
+        self.assertEqual((self.tmp / "zz-log.txt").read_text(), f"TOKEN={runner.SCRUBBED}\n")
+        self.assertEqual(runner.unscrubbed(self.tmp, [PLANTED]), [f"{self.tmp / 'odd.bin'}: holds the agents' credential"])
+
+    def test_a_tar_whose_first_header_does_not_read_is_left_whole_once_it_opens(self):
+        """A replacement inside a tar moves every header after it off its
+        block, so a tar whose first header does not read is left whole, as
+        a tar is, once it opens to a layer, and the read-back refuses it;
+        text whose blocks only look like such headers is scrubbed as text."""
+        broken = bytearray(tar_of({"notes.txt": f"token {PLANTED}\n".encode() * 20, "secret.gz": gzip.compress(PLANTED.encode() * 10)}))
+        broken[100] ^= 0x01
+        (self.tmp / "backup.bin").write_bytes(broken)
+        periodic = (f"token {PLANTED} ".encode() * 10)[:257] + b"ustar" + b"." * 249 + b"\n"
+        (self.tmp / "rows.txt").write_bytes(periodic * 3)
+        self.assertEqual(runner.packed_kinds(bytes(broken)), [runner.BROKEN_TAR])
+        self.assertEqual(runner.packed_kinds(periodic * 3), [runner.BROKEN_TAR])
+        self.assertEqual(runner.scrub_credentials([self.tmp], values=[PLANTED]), [self.tmp / "rows.txt"])
+        self.assertEqual((self.tmp / "backup.bin").read_bytes(), bytes(broken))
+        self.assertEqual((self.tmp / "rows.txt").read_bytes(), runner.scrub_bytes(periodic * 3, [PLANTED]))
+        self.assertEqual(runner.unscrubbed(self.tmp, [PLANTED]), [f"{self.tmp / 'backup.bin'}: holds the agents' credential"])
+        self.assertTrue(runner.holds_members(runner.BROKEN_TAR, bytes(broken), runner.Budget()))
+        self.assertTrue(runner.holds_members(runner.BROKEN_TAR, bytes(broken), runner.Budget(10)))
+        self.assertFalse(runner.holds_members(runner.BROKEN_TAR, periodic * 3, runner.Budget()))
+        empty = bytearray(tar_of({"a": b"", "b": b""}))
+        empty[100] ^= 0x01
+        self.assertTrue(runner.holds_members(runner.BROKEN_TAR, bytes(empty), runner.Budget()))
+
     def test_a_file_that_cannot_be_rewritten_fails_the_scrub_once_the_rest_is_done(self):
         (self.tmp / "a_stream.jsonl").write_text(PLANTED + "\n")
         (self.tmp / "b_stream.jsonl").write_text(PLANTED + "\n")
@@ -3417,7 +3478,7 @@ class Scrubbing(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
-        self.assertIn("packed.tar.gz: holds the agents' credential inside an archive", err.getvalue())
+        self.assertIn("packed.tar.gz: holds the agents' credential, read through gzip", err.getvalue())
         (run_dir / "coop" / "packed.tar.gz").unlink()
         (run_dir / "coop" / "broken.gz").write_bytes(b"\x1f\x8b\x08\x00 not gzip")
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
@@ -3434,14 +3495,14 @@ class Scrubbing(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
-        self.assertIn(f"{loose}: holds the agents' credential inside a git object", err.getvalue())
+        self.assertIn(f"{loose}: holds the agents' credential, read through zlib", err.getvalue())
         loose.write_bytes(zlib.compress(b"blob 5\0hello"))
         pack = objects / "pack" / "pack-1.pack"
         pack.write_bytes(packfile(b"a" * 300, b"export TOKEN=" + PLANTED.encode() + b"\n", b"tail"))
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(runner.main(["scrub", "--run-dir", str(run_dir)]), 2)
-        self.assertIn(f"{pack}: holds the agents' credential inside a git object", err.getvalue())
+        self.assertIn(f"{pack}: holds the agents' credential, read through git packfile", err.getvalue())
         pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail")[:-40])
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
@@ -3449,10 +3510,6 @@ class Scrubbing(unittest.TestCase):
         self.assertIn(f"{pack}: could not be read", err.getvalue())
         pack.write_bytes(packfile(b"a" * 300, b"nothing", b"tail"))
         (objects / "pack" / "pack-1.idx").write_bytes(b"\xfftOc" + bytes(40))
-        self.assertEqual(runner.git_object_kind(pack), "pack")
-        self.assertEqual(runner.git_object_kind(loose), "loose")
-        self.assertIsNone(runner.git_object_kind(objects / "pack" / "pack-1.idx"))
-        self.assertIsNone(runner.git_object_kind(run_dir / "coop" / "clean.txt"))
         # A clean archive passes, no credential in the environment is nothing to find, and no directory is 2.
         with tarfile.open(run_dir / "coop" / "packed.tar", "w") as packed:
             info = tarfile.TarInfo("note.txt")
@@ -3526,6 +3583,1801 @@ class Scrubbing(unittest.TestCase):
                 runner.scrub_hub(hub)
             self.assertEqual((hub / "hub.log").read_text(), runner.SCRUBBED + "\n")
             self.assertEqual((hub / "other" / "events.jsonl").read_text(), PLANTED + "\n")
+
+
+def tar_of(members, compression=""):
+    """A tar's bytes: each member a name and its bytes, or a name and
+    ("link", target) for a symlink."""
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode=f"w:{compression}") as packed:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name)
+            if isinstance(content, tuple):
+                info.type, info.linkname = tarfile.SYMTYPE, content[1]
+                packed.addfile(info)
+            else:
+                info.size = len(content)
+                packed.addfile(info, io.BytesIO(content))
+    return out.getvalue()
+
+
+def tar_headers(data):
+    """Where each member's header starts in an uncompressed tar."""
+    starts, offset = [], 0
+    while offset + 512 <= len(data) and data[offset]:
+        starts.append(offset)
+        size = int(data[offset + 124:offset + 136].strip(b" \0") or b"0", 8)
+        offset += 512 + -(-size // 512) * 512
+    return starts
+
+
+def with_checksum(header):
+    """A tar header with its checksum computed as tar computes it."""
+    header = bytearray(header)
+    header[148:156] = b" " * 8
+    header[148:156] = b"%06o\0 " % sum(header)
+    return bytes(header)
+
+
+def header_of(name, size, *fields):
+    """A ustar header for a member of size bytes, with (offset, bytes)
+    overrides written before its checksum is computed, so that it holds
+    whatever the fields say: a header GNU tar reads and tarfile refuses."""
+    info = tarfile.TarInfo(name)
+    info.size = size
+    header = bytearray(info.tobuf(tarfile.USTAR_FORMAT))
+    for at, value in fields:
+        header[at:at + len(value)] = value
+    return with_checksum(header)
+
+
+def as_v7(data):
+    """The tar with every header's ustar fields blanked, as a v7 tar has none."""
+    out = bytearray(data)
+    for start in tar_headers(data):
+        out[start + 257:start + 500] = bytes(243)
+        out[start:start + 512] = with_checksum(out[start:start + 512])
+    return bytes(out)
+
+
+def zip_of(members, comment=b"", method=zipfile.ZIP_DEFLATED):
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", method) as packed:
+        packed.comment = comment
+        for name, content in members.items():
+            packed.writestr(name, content)
+    return out.getvalue()
+
+
+def zipapp_of(main_text, members):
+    """A zipapp as python -m zipapp writes one: the interpreter line, then
+    a stored zip of __main__.py and the members, the text of __main__.py
+    starting at byte 64 of the file."""
+    out = io.BytesIO()
+    out.write(b"#!/usr/bin/env python3\n")
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as packed:
+        packed.writestr("__main__.py", main_text)
+        for name, content in members.items():
+            packed.writestr(name, content)
+    return out.getvalue()
+
+
+def zip64_split(part, disk=1, disks=2):
+    """The last part of a split zip (last_part_of) as zip -fz writes one: a
+    zip64 end record after the directory and its locator before the
+    classic record, each saying which disk the part is of how many, and
+    the classic record's directory offset left to the zip64 record, as
+    zip -fz leaves it; with disk 0 of 1, a whole zip64 archive."""
+    end = part.rindex(b"PK\x05\x06")
+    record = bytearray(part[end:end + 22])
+    entries, size, offset = (int.from_bytes(record[at:at + width], "little") for at, width in ((10, 2), (12, 4), (16, 4)))
+    record[16:20] = b"\xff\xff\xff\xff"
+    zip64 = struct.pack("<4sQHHIIQQQQ", b"PK\x06\x06", 44, 45, 45, disk, disk, entries, entries, size, offset)
+    locator = struct.pack("<4sIQI", b"PK\x06\x07", disk, end, disks)
+    return part[:end] + zip64 + locator + bytes(record) + part[end + 22:]
+
+
+def spanned_zip_of(members):
+    """A zip as zip -s writes one that fits in one part: the spanning
+    marker, then the zip, its offsets counting the marker."""
+    out = io.BytesIO()
+    out.write(b"PK\x07\x08")
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as packed:
+        for name, content in members.items():
+            packed.writestr(name, content)
+    return out.getvalue()
+
+
+def last_part_of(elsewhere, here, lead=b""):
+    """The last part, disk 1, of a zip split across two files as zip -s
+    writes one: lead (the end of a member whose start the part before
+    holds), here's members whole, then the directory, which places
+    elsewhere's members on disk 0 and here's on disk 1, by offsets from
+    the part's start."""
+    whole = zip_of({**elsewhere, **here})
+    with zipfile.ZipFile(io.BytesIO(whole)) as packed:
+        infos = packed.infolist()
+    end = whole.rindex(b"PK\x05\x06")
+    directory_at = int.from_bytes(whole[end + 16:end + 20], "little")
+    here_at = infos[len(elsewhere)].header_offset if here else directory_at
+    shift = len(lead) - here_at
+    directory = bytearray(whole[directory_at:end])
+    for index, start in list(enumerate(central_entries(whole)))[len(elsewhere):]:
+        at = start - directory_at
+        directory[at + 34:at + 36] = (1).to_bytes(2, "little")
+        directory[at + 42:at + 46] = (infos[index].header_offset + shift).to_bytes(4, "little")
+    record = bytearray(whole[end:end + 22])
+    record[4:8] = (1).to_bytes(2, "little") * 2
+    record[16:20] = (directory_at + shift).to_bytes(4, "little")
+    return lead + whole[here_at:directory_at] + bytes(directory) + bytes(record)
+
+
+def central_entries(data):
+    """Where each entry of a zip's central directory starts."""
+    end = data.rindex(b"PK\x05\x06")
+    offset = int.from_bytes(data[end + 16:end + 20], "little")
+    starts = []
+    for _ in range(int.from_bytes(data[end + 10:end + 12], "little")):
+        starts.append(offset)
+        offset += 46 + sum(int.from_bytes(data[offset + at:offset + at + 2], "little") for at in (28, 30, 32))
+    return starts
+
+
+def zip_patched(data, index, field, value=None):
+    """The zip with one field of its index-th member, in its local header
+    and in the central directory, set to value: "flags", "method", "crc",
+    which with no value is made wrong, as a damaged copy has it, or "size",
+    the member's compressed size."""
+    local_at, central_at, size = {"flags": (6, 8, 2), "method": (8, 10, 2), "crc": (14, 16, 4),
+                                  "size": (18, 20, 4)}[field]
+    with zipfile.ZipFile(io.BytesIO(data)) as packed:
+        info = packed.infolist()[index]
+    value = info.CRC ^ 0xFFFFFFFF if value is None else value
+    out = bytearray(data)
+    for start in (info.header_offset + local_at, central_entries(data)[index] + central_at):
+        out[start:start + size] = value.to_bytes(size, "little")
+    return bytes(out)
+
+
+def ar_of(members):
+    """An ar archive, as a .deb is one: each member's 60-byte header, its
+    bytes, and a newline after an odd one."""
+    out = bytearray(b"!<arch>\n")
+    for name, content in members.items():
+        out += (name.encode().ljust(16) + b"0".ljust(12) + b"0".ljust(6) + b"0".ljust(6) + b"100644".ljust(8)
+                + str(len(content)).encode().ljust(10) + b"`\n")
+        out += content + b"\n" * (len(content) % 2)
+    return bytes(out)
+
+
+def bsd_ar_of(members, padded=True):
+    """An ar archive as macOS's ar and llvm-ar --format=bsd write one: each
+    member named #1/<length>, its name, padded with zeros to 8 bytes as
+    llvm-ar pads it or as it is, standing first in the member and counted
+    in its size, which an odd name makes odd."""
+    out = bytearray(b"!<arch>\n")
+    for name, content in members.items():
+        stored = name.encode().ljust(-(-len(name) // 8) * 8 if padded else len(name), b"\0")
+        out += (f"#1/{len(stored)}".encode().ljust(16) + b"0".ljust(12) + b"0".ljust(6) + b"0".ljust(6)
+                + b"100644".ljust(8) + str(len(stored) + len(content)).encode().ljust(10) + b"`\n")
+        out += stored + content + b"\n" * ((len(stored) + len(content)) % 2)
+    return bytes(out)
+
+
+def gzipped(data, times=1, name=""):
+    for _ in range(times):
+        out = io.BytesIO()
+        with gzip.GzipFile(filename=name, mode="wb", fileobj=out, mtime=0) as packed:
+            packed.write(data)
+        data = out.getvalue()
+    return data
+
+
+def counting(decompressor, fed):
+    """A stand-in for a decompressor's class that records how many bytes
+    each call hands it."""
+    class Counting:
+        def __init__(self, *arguments):
+            self.inner = decompressor(*arguments)
+
+        def decompress(self, data, *limit):
+            fed.append(len(data))
+            return self.inner.decompress(data, *limit)
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+    return Counting
+
+
+class ReadingBack(unittest.TestCase):
+    """unscrubbed, the read-back before an upload: every layer a file is
+    packed in is opened by what its bytes say it is, whatever its name or
+    place, with the plain search at every layer, so a header's names are
+    searched too; a path's name is searched; what cannot be opened is
+    refused, but for a weak sign or a repository's own content; one budget
+    bounds the directory; and nothing it says quotes the credential."""
+
+    # No user's or system's git configuration takes part, and git's
+    # detached maintenance never races the cleanup (symphony-template#63).
+    GIT_SETTINGS = {"gc.auto": "0", "gc.autoDetach": "false", "maintenance.auto": "false",
+                    "maintenance.autoDetach": "false", "receive.autogc": "false"}
+    PLANTED_LINES = f"export TOKEN={PLANTED}\n".encode() * 40
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="coordbench-read-back-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.run_dir = self.tmp / "run"
+        self.run_dir.mkdir()
+
+    def said(self, name, data):
+        """What the read-back says of one file, alone in the run directory."""
+        path = self.run_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        try:
+            return runner.unscrubbed(self.run_dir, [PLANTED])
+        finally:
+            path.unlink()
+
+    def assertHeld(self, name, data, *layers):
+        through = f", read through {', '.join(layers)}" if layers else ""
+        self.assertEqual(self.said(name, data),
+                         [f"{self.run_dir / name}: holds the agents' credential{through}"])
+
+    def assertRefused(self, name, data, why):
+        said = self.said(name, data)
+        self.assertEqual(len(said), 1, said)
+        self.assertRegex(said[0], rf"^{re.escape(str(self.run_dir / name))}: could not be read \(.*{why}")
+
+    def git(self, *arguments):
+        environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                       "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_COUNT": str(len(self.GIT_SETTINGS))}
+        for index, (key, value) in enumerate(self.GIT_SETTINGS.items()):
+            environment[f"GIT_CONFIG_KEY_{index}"] = key
+            environment[f"GIT_CONFIG_VALUE_{index}"] = value
+        done = subprocess.run(["git", *arguments], env=environment, check=True, capture_output=True, timeout=120)
+        if arguments[0] == "init":
+            for key, value in self.GIT_SETTINGS.items():
+                subprocess.run(["git", "-C", arguments[-1], "config", key, value], check=True, timeout=60)
+        return done.stdout
+
+    def commit(self, repo, files, message):
+        for name, content in files.items():
+            (repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name).write_bytes(content)
+        self.git("-C", str(repo), "add", "-A")
+        self.git("-C", str(repo), "commit", "-q", "-m", message)
+
+    def repository_tarball(self, repo, compression=""):
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode=f"w:{compression}") as packed:
+            packed.add(repo, arcname="repo")
+        return out.getvalue()
+
+    def test_a_tarball_of_a_repository_shows_a_token_committed_and_removed_from_its_history(self):
+        repo = self.tmp / "repo"
+        self.git("init", "-q", str(repo))
+        self.commit(repo, {"README": b"a clean repository\n"}, "first")
+        self.assertEqual(self.said("repo.tar.xz", self.repository_tarball(repo, "xz")), [])
+        self.commit(repo, {"env.txt": f"CLAUDE_CODE_OAUTH_TOKEN={PLANTED}\n".encode()}, "oops")
+        self.git("-C", str(repo), "rm", "-q", "env.txt")
+        self.git("-C", str(repo), "commit", "-q", "-m", "removed")
+        self.assertHeld("repo.tar.xz", self.repository_tarball(repo, "xz"), "xz", "tar", "zlib")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertFalse(list((repo / ".git" / "objects").glob("??/*")), "gc left loose objects")
+        self.assertHeld("repo.tar.bz2", self.repository_tarball(repo, "bz2"), "bzip2", "tar", "git packfile")
+        self.git("-C", str(repo), "bundle", "create", str(self.tmp / "repo.bundle"), "--all")
+        self.assertHeld("history", (self.tmp / "repo.bundle").read_bytes(), "git bundle", "git packfile")
+
+    def test_a_repository_s_own_fixtures_that_do_not_open_never_refuse_it(self):
+        """A repository's history holds what the project committed, a
+        compression library's zstd sample or a cut gzip among them: its
+        objects' content is searched as far as it opens, and a committed
+        archive that does open is searched all the same. The same files
+        as files of their own, a work tree's among them, are refused."""
+        repo = self.tmp / "repo"
+        self.git("init", "-q", str(repo))
+        fixtures = {"tests/sample.zst": b"\x28\xb5\x2f\xfd" + bytes(64), "tests/cut.gz": gzipped(b"".join(b"line %d\n" % n for n in range(2000)))[:-30],
+                    "tests/sample.7z": b"7z\xbc\xaf\x27\x1c" + bytes(64), "tests/odd.zip": b"PK\x03\x04 not a zip"}
+        self.commit(repo, fixtures, "fixtures")
+        self.git("-C", str(repo), "rm", "-q", "-r", "tests")
+        self.git("-C", str(repo), "commit", "-q", "-m", "fixtures gone from the tree, kept in history")
+        self.assertEqual(self.said("repo.tar", self.repository_tarball(repo)), [])
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertEqual(self.said("repo.tar", self.repository_tarball(repo)), [])
+        self.commit(repo, {"tests/env.tgz": tar_of({"env.txt": self.PLANTED_LINES}, "gz")}, "an archive")
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "gzip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "gzip")
+        # Outside a repository the same files are refused.
+        for name, why in (("sample.zst", "zstd, a format the scrub cannot open"), ("cut.gz", "a truncated stream"),
+                          ("sample.7z", "7z, a format the scrub cannot open"), ("odd.zip", "zip")):
+            with self.subTest(name=name):
+                self.assertRefused(name, fixtures[f"tests/{name}"], why)
+
+    def committed_then_removed(self, repo, files, *settings):
+        """A repository whose history alone holds the files: committed, then
+        removed in a second commit."""
+        self.git("init", "-q", str(repo))
+        for key, value in settings:
+            self.git("-C", str(repo), "config", key, value)
+        self.commit(repo, files, "add")
+        self.git("-C", str(repo), "rm", "-q", *files)
+        self.git("-C", str(repo), "commit", "-q", "-m", "removed")
+
+    def test_a_repository_s_objects_are_read_however_git_compressed_them(self):
+        """git writes an object at compression level 0, or one of bytes that
+        do not compress, as stored blocks that show what it holds, a zip's
+        end record among them: the object is read as the object it is, so
+        what it packs is opened and a zip it holds refuses nothing."""
+        lines, noise = self.PLANTED_LINES, random.Random(5)
+        release = tar_of({"release/build.log.gz": gzipped(lines),
+                          "release/pkg-1.0-py3-none-any.whl": zip_of({"pkg/__init__.py": b"VERSION = '1.0'\n"})})
+        jar = zip_of({"META-INF/app.properties": lines,
+                      **{f"com/example/C{n}.class": noise.randbytes(200) for n in range(300)}})
+        self.assertGreater(len(jar), 1 << 16)
+        for name, blob, layers in (("release.tar", release, ("tar", "gzip")), ("app.jar", jar, ("zip",))):
+            with self.subTest(name=name):
+                repo = self.tmp / f"level-0-{name}"
+                self.committed_then_removed(repo, {name: blob}, ("core.compression", "0"))
+                object_id = self.git("-C", str(repo), "rev-parse", f"HEAD~1:{name}").decode().strip()
+                stored = (repo / ".git" / "objects" / object_id[:2] / object_id[2:]).read_bytes()
+                self.assertTrue(zipfile.is_zipfile(io.BytesIO(stored[-runner.ZIP_TAIL:])))
+                self.assertEqual(runner.packed_kinds(stored), ["zlib"])
+                self.assertHeld(name, self.repository_tarball(repo), "tar", "zlib", *layers)
+        # A zip of bytes that do not compress, committed as git commits it, is read and refuses nothing.
+        repo = self.tmp / "incompressible"
+        self.committed_then_removed(repo, {"fixture.zip": zip_of({"data.bin": noise.randbytes(150 << 10)},
+                                                                 method=zipfile.ZIP_STORED)})
+        self.assertEqual(self.said("loose.tar", self.repository_tarball(repo)), [])
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertEqual(self.said("packed.tar", self.repository_tarball(repo)), [])
+
+    def test_a_repository_s_history_is_searched_as_far_as_it_opens(self):
+        """A tar member cut short, and the objects of a thin bundle that did
+        resolve, are searched in a repository's history as a cut stream
+        is, as tar -xO and git unpack-objects show them before their error;
+        the same files of their own refuse what does not open, once
+        searched."""
+        content = self.PLANTED_LINES + b"".join(b"line %d\n" % n for n in range(20000))
+        whole = tar_of({"a.txt": b"a" * 600, "run/build.log.gz": gzipped(content)})
+        member = tar_headers(whole)[1] + 512
+        cut = whole[:member + len(gzipped(content)) * 6 // 10]
+        self.assertNotIn(PLANTED.encode(), cut)
+        self.assertHeld("cut.tar", cut, "tar", "gzip")
+        budget = runner.Budget(1 << 30)
+        with self.assertRaises(runner.StoppedShort):
+            list(runner.tar_members(cut, budget))
+        self.assertGreaterEqual((1 << 30) - budget.left, len(cut) - member)
+        repo = self.tmp / "cut"
+        self.committed_then_removed(repo, {"partial.tar": cut})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "tar", "gzip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "tar", "gzip")
+        # A thin bundle: the new file is whole, the changed one a delta on a base the bundle does not carry.
+        source = self.tmp / "source"
+        self.git("init", "-q", str(source))
+        long_text = b"".join(b"line %d of a long file\n" % n for n in range(4000))
+        self.commit(source, {"long.txt": long_text}, "first")
+        self.commit(source, {"long.txt": long_text + b"one more line\n", "env.txt": self.PLANTED_LINES}, "second")
+        self.git("-C", str(source), "bundle", "create", str(self.tmp / "thin.bundle"), "HEAD~1..HEAD")
+        thin = (self.tmp / "thin.bundle").read_bytes()
+        self.assertHeld("thin.bundle", thin, "git bundle", "git packfile")
+        repo = self.tmp / "kept"
+        self.committed_then_removed(repo, {"thin.bundle": thin})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "git bundle", "git packfile")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "git bundle",
+                        "git packfile")
+        # The token in a delta on an object the thin bundle carries: the delta resolves and is searched too.
+        source = self.tmp / "deltas"
+        self.git("init", "-q", str(source))
+        body = b"".join(b"setting_%d = value %d\n" % (n, n) for n in range(3000))
+        self.commit(source, {"long.txt": long_text}, "first")
+        self.commit(source, {"long.txt": long_text + b"one more line\n",
+                             "other.txt": body + f"TOKEN={PLANTED}\n".encode() + body}, "second")
+        self.commit(source, {"other.txt": body + b"TOKEN=a longer line that holds no credential at all\n" + body},
+                    "third")
+        self.git("-C", str(source), "bundle", "create", str(self.tmp / "deltas.bundle"), "HEAD~2..HEAD")
+        deltas = (self.tmp / "deltas.bundle").read_bytes()
+        pack = deltas[deltas.index(b"\n\nPACK") + 2:]
+        objects = runner.packed_objects(pack)
+        self.assertTrue(any(packed.kind == runner.REF_DELTA for packed in objects))
+        self.assertTrue(any(packed.kind == runner.OFS_DELTA and PLANTED.encode() in packed.data for packed in objects))
+        self.assertHeld("deltas.bundle", deltas, "git bundle", "git packfile")
+        repo = self.tmp / "kept-deltas"
+        self.committed_then_removed(repo, {"deltas.bundle": deltas})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "git bundle", "git packfile")
+
+    def test_a_zip_after_bytes_a_sure_sign_does_not_cover_is_found_by_its_end_record(self):
+        """What follows an ar archive's members is opened, as what follows a
+        stream is; after a format the scrub cannot open, the zip is still
+        found by its end record, which a repository's history, where that
+        format refuses nothing, reads; and git refuses bytes after an
+        object, so a zip after one is not looked for."""
+        zipped = zip_of({"env.txt": self.PLANTED_LINES})
+        after_ar, after_zstd = ar_of({"a": b"abcd"}) + zipped, b"\x28\xb5\x2f\xfd" + bytes(16) + zipped
+        self.assertEqual(runner.packed_kinds(after_ar), ["ar"])
+        self.assertEqual(runner.packed_kinds(after_zstd), ["zstd", "prefixed zip"])
+        self.assertHeld("lib.a", after_ar, "what follows the ar members", "zip")
+        self.assertRefused("data.zst", after_zstd, "zstd, a format the scrub cannot open")
+        repo = self.tmp / "repo"
+        self.committed_then_removed(repo, {"lib.a": after_ar})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "what follows the ar members", "zip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile",
+                        "what follows the ar members", "zip")
+        repo = self.tmp / "zstd"
+        self.committed_then_removed(repo, {"data.zst": after_zstd})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+        self.assertEqual(runner.packed_kinds(zlib.compress(b"blob 5\0notes") + zipped), ["zlib"])
+
+    def test_layers_are_opened_by_their_bytes_whatever_the_file_is_named_or_where_it_is(self):
+        lines = self.PLANTED_LINES
+        self.assertHeld("dist/pkg-1.0-py3-none-any.whl", zip_of({"pkg/env.py": lines}), "zip")
+        self.assertHeld("tool.pyz", b"#!/usr/bin/env python3\n" + zip_of({"__main__.py": lines}), "zip")
+        # A zip's end record is looked for at the file's end, however long what stands before the zip.
+        long_prefix = b"#!/usr/bin/env python3\n" + b"# a long header\n" * 5000
+        self.assertGreater(len(long_prefix), runner.ZIP_TAIL)
+        self.assertHeld("long.pyz", long_prefix + zip_of({"__main__.py": lines}), "zip")
+        self.assertHeld("work.tar.bz2", tar_of({"env.txt": lines}, "bz2"), "bzip2")
+        self.assertHeld("work.bin", gzipped(lines), "gzip")
+        self.assertHeld("data.lzma", lzma.compress(lines, format=lzma.FORMAT_ALONE), "lzma")
+        # Any properties xz reads, pb=0 as xz's manual suggests for text among them, lc + lp at most 4.
+        for lc, lp, pb in ((3, 0, 0), (0, 0, 2), (1, 3, 0), (0, 4, 4)):
+            with self.subTest(lc=lc, lp=lp, pb=pb):
+                stream = lzma.compress(lines, format=lzma.FORMAT_ALONE,
+                                       filters=[{"id": lzma.FILTER_LZMA1, "preset": 6, "lc": lc, "lp": lp, "pb": pb}])
+                self.assertEqual(stream[0], (pb * 5 + lp) * 9 + lc)
+                self.assertHeld("notes.lzma", stream, "lzma")
+                self.assertHeld("notes.lzma.gz", gzipped(stream), "gzip", "lzma")
+        for byte in ((0 * 5 + 2) * 9 + 3, 9 * 5 * 5):
+            with self.subTest(properties=byte):
+                self.assertEqual(runner.packed_kinds(bytes([byte]) + b"\x00\x00\x80\x00" + b"\xff" * 8 + b"notes"), [])
+        self.assertHeld("pkg.deb", ar_of({"debian-binary": b"2.0\n", "control.tar.gz": tar_of({"control": b"x"}, "gz"),
+                                          "data.tar.xz": tar_of({"env.txt": lines}, "xz")}), "ar", "xz")
+        # A BSD archive's member starts with its name, which ar p leaves out.
+        for name in ("p.txt.gz", "a-member-name-of-thirty-six-chars.gz", "with spaces.gz"):
+            with self.subTest(name=name):
+                self.assertHeld("lib.a", bsd_ar_of({"clean.txt": b"clean\n", name: gzipped(lines)}), "ar", "gzip")
+        self.assertHeld("lib.a", bsd_ar_of({"env.tar.xz": tar_of({"env.txt": lines}, "xz")}), "ar", "xz")
+        self.assertHeld("lib.a", bsd_ar_of({"odd.txt": b"even", "p.txt.gz": gzipped(lines)}, padded=False), "ar", "gzip")
+        self.assertRefused("odd.a", b"!<arch>\n" + b"#1/99".ljust(16) + b"0".ljust(32) + b"5".ljust(10) + b"`\nhello\n",
+                           "an ar member whose name runs past it")
+        self.assertHeld("old.tar", as_v7(tar_of({"inner.gz": gzipped(lines)})), "tar", "gzip")
+        # A v7 header whose checksum sums its bytes signed, as some old tars did: a name past ASCII makes the
+        # two sums differ.
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode="w", format=tarfile.USTAR_FORMAT, encoding="utf-8") as packed:
+            member, body = tarfile.TarInfo("\u00e9t\u00e9.gz"), gzipped(lines)
+            member.size = len(body)
+            packed.addfile(member, io.BytesIO(body))
+        signed = bytearray(out.getvalue())
+        signed[257:500] = bytes(243)
+        signed[148:156] = b" " * 8
+        self.assertNotEqual(sum(signed[:512]), sum(struct.unpack("512b", signed[:512])))
+        signed[148:156] = b"%06o\0 " % sum(struct.unpack("512b", signed[:512]))
+        self.assertHeld("signed.tar", bytes(signed), "tar", "gzip")
+        self.assertHeld("shared/.git/objects/incoming-x1/tmp_obj_ab12", zlib.compress(b"blob 9\0" + lines), "zlib")
+        # Bytes that carry several weak signs are tried for each in turn: text that starts like a zlib stream,
+        # then a zip.
+        self.assertEqual(runner.packed_kinds(b"x^2 + y^2\n" + zip_of({"env.txt": lines})), ["zlib", "prefixed zip"])
+        self.assertHeld("notes.pyz", b"x^2 + y^2\n" + zip_of({"env.txt": lines}), "zip")
+        # Only a zlib stream that inflates to git's header, its type, its size and a zero byte, is a git object;
+        # any other is a weak sign, and so is an lzma stream, and each is tried in turn.
+        for head in (b"notes", b"blob notes", b"blob 12 notes"):
+            with self.subTest(head=head):
+                self.assertEqual(runner.packed_kinds(zlib.compress(head) + zip_of({"env.txt": lines})),
+                                 ["zlib", "prefixed zip"])
+                self.assertHeld("data.bin", zlib.compress(head) + zip_of({"env.txt": lines}), "zip")
+        lzma_like = b"]\x00\x00\x80\x00" + b"\xff" * 8 + b"plain notes\n" + zip_of({"env.txt": lines})
+        self.assertEqual(runner.packed_kinds(lzma_like), ["lzma", "prefixed zip"])
+        self.assertHeld("notes.bin", lzma_like, "zip")
+        # A committed archive's object is opened as the archive would be.
+        self.assertHeld("loose", zlib.compress(b"blob 99\0" + gzipped(lines)), "zlib", "gzip")
+        # A gzip file's members are one content, as zcat gives it, and what follows the last is opened too.
+        half = len(PLANTED) // 2
+        self.assertHeld("split.gz", gzipped(b"a " + PLANTED[:half].encode()) + gzipped(PLANTED[half:].encode()),
+                        "gzip")
+        self.assertHeld("then.gz", gzipped(b"clean") + zip_of({"env.txt": lines}), "what follows the gzip", "zip")
+        streams = lzma.compress(b"clean") + bytes(4) + lzma.compress(lines)
+        self.assertHeld("two.xz", streams, "xz")
+        self.assertHeld("two.bz2", bz2.compress(b"clean") + bz2.compress(lines), "bzip2")
+        self.assertHeld("deep.tgz", tar_of({"inner.zip": zip_of({"env.txt": lines})}, "gz"), "gzip", "tar", "zip")
+        self.assertEqual(self.said("clean.tgz", tar_of({"inner.zip": zip_of({"note.txt": b"hello" * 99, "dir/": b""}),
+                                                         "elsewhere": ("link", "/nowhere")}, "gz")), [])
+
+    def test_a_zip_member_that_does_not_read_is_searched_as_unzip_inflates_it(self):
+        """A member whose CRC is wrong, or that says it is encrypted when it
+        is not, still inflates, as unzip inflates it; the members after it
+        are read; and once a zip has opened, a zipapp's included, a member
+        that does not read refuses it, but in a repository's history."""
+        lines, prefix = self.PLANTED_LINES, b"#!/usr/bin/env python3\n"
+        harmless_first = zip_of({"a.txt": b"harmless " * 50, "env.txt": lines})
+        for name, data in (("bad.zip", zip_patched(zip_of({"env.txt": lines}), 0, "crc")),
+                           ("bad.pyz", prefix + zip_patched(zip_of({"env.txt": lines}), 0, "crc")),
+                           ("first.pyz", prefix + zip_patched(harmless_first, 0, "crc")),
+                           ("locked.pyz", prefix + zip_patched(harmless_first, 0, "flags", 0x01))):
+            with self.subTest(name=name):
+                self.assertHeld(name, data, "zip")
+        self.assertHeld("loose", zlib.compress(b"blob 9\0" + zip_patched(harmless_first, 0, "crc")), "zlib", "zip")
+        # A stored member is given as it is stored, so what it packs is opened too.
+        stored = zip_of({"env.gz": gzipped(lines)}, method=zipfile.ZIP_STORED)
+        self.assertHeld("stored.zip", zip_patched(stored, 0, "crc"), "zip", "gzip")
+        unknown = zip_patched(zip_of({"a.txt": b"harmless"}, method=zipfile.ZIP_STORED), 0, "method", 93)
+        self.assertRefused("odd.pyz", prefix + unknown, "a zip member that does not read .*compression method")
+        self.assertEqual(self.said("loose", zlib.compress(b"blob 9\0" + unknown)), [])
+        # bzip2 and lzma members decompress past a wrong CRC as deflate ones inflate.
+        for method in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+            with self.subTest(method=method):
+                bad = zip_patched(zip_of({"env.txt": lines}, method=method), 0, "crc")
+                self.assertHeld("bad.zip", bad, "zip")
+                self.assertHeld("loose", zlib.compress(b"blob 9\0" + bad), "zlib", "zip")
+        # A member is read past its local header's extra field, which Info-ZIP's zip writes on every member.
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as packed:
+            info = zipfile.ZipInfo("env.txt", (2026, 10, 14, 12, 0, 0))
+            info.compress_type, info.extra = zipfile.ZIP_DEFLATED, b"UT\x05\x00\x01" + bytes(4)
+            packed.writestr(info, lines)
+        self.assertHeld("extra.zip", zip_patched(out.getvalue(), 0, "crc"), "zip")
+        # A member whose deflate stream is broken hides none after it.
+        broken = bytearray(harmless_first)
+        with zipfile.ZipFile(io.BytesIO(harmless_first)) as packed:
+            first = packed.infolist()[0]
+        broken[first.header_offset + 30 + len(first.filename)] |= 0x06
+        self.assertHeld("broken.zip", bytes(broken), "zip")
+        self.assertHeld("loose", zlib.compress(b"blob 9\0" + bytes(broken)), "zlib", "zip")
+        # An lzma member whose properties do not read hides none after it either.
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as packed:
+            packed.writestr("a.txt", b"harmless " * 50, compress_type=zipfile.ZIP_LZMA)
+            packed.writestr("env.txt", lines)
+        with zipfile.ZipFile(io.BytesIO(out.getvalue())) as packed:
+            first = packed.infolist()[0]
+        # The properties' size, and lc + lp past 4, which liblzma refuses to build a decoder for.
+        for at, value in ((2, 9), (4, 5), (4, (0 * 5 + 2) * 9 + 3)):
+            with self.subTest(properties_at=at, value=value):
+                odd = bytearray(out.getvalue())
+                odd[first.header_offset + 30 + len(first.filename) + at] = value
+                self.assertHeld("odd.zip", bytes(odd), "zip")
+                self.assertHeld("loose", zlib.compress(b"blob 9\0" + bytes(odd)), "zlib", "zip")
+        # A Deflate64 member, which zipfile does not read, is read as far as deflate reads it.
+        deflate64 = zip_patched(zip_of({"env.txt": lines}), 0, "method", runner.ZIP_DEFLATE64)
+        self.assertHeld("old.zip", deflate64, "zip")
+        self.assertHeld("loose", zlib.compress(b"blob 9\0" + deflate64), "zlib", "zip")
+        clean64 = zip_patched(zip_of({"notes.txt": b"notes\n" * 40}), 0, "method", runner.ZIP_DEFLATE64)
+        self.assertRefused("clean.zip", clean64, "a zip member that does not read .*compression method")
+        # A member read from its local header is charged its bytes as they lie and what they inflate to.
+        bad = zip_patched(zip_of({"env.txt": lines}), 0, "crc")
+        with zipfile.ZipFile(io.BytesIO(bad)) as packed:
+            info = packed.infolist()[0]
+        budget = runner.Budget(1 << 30)
+        self.assertEqual(runner.raw_member(bad, info, budget), lines)
+        self.assertEqual((1 << 30) - budget.left, info.compress_size + len(lines))
+        # A bzip2 or lzma member cut short gives what it decompressed before the cut (bzip2 a block at a time,
+        # 100 kB at level 1); an lzma member is read by its own properties as far as liblzma reads them, and by
+        # its own dictionary, so a match farther back than a small one reads too.
+        content = self.PLANTED_LINES + b"".join(b"line %d\n" % n for n in range(60000))
+        for method in (zipfile.ZIP_DEFLATED, zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA):
+            with self.subTest(method=method, cut=True):
+                out = io.BytesIO()
+                with zipfile.ZipFile(out, "w", method, compresslevel=1) as packed:
+                    packed.writestr("env.txt", content)
+                whole = out.getvalue()
+                with zipfile.ZipFile(io.BytesIO(whole)) as packed:
+                    size = packed.infolist()[0].compress_size
+                cut = zip_patched(whole, 0, "size", size * 6 // 10)
+                self.assertHeld("cut.zip", cut, "zip")
+                self.assertHeld("loose", zlib.compress(b"blob 9\0" + cut), "zlib", "zip")
+                with zipfile.ZipFile(io.BytesIO(cut)) as packed:
+                    info = packed.infolist()[0]
+                budget = runner.Budget(1 << 30)
+                partial = runner.raw_member(cut, info, budget)
+                self.assertTrue(content.startswith(partial) and len(partial) < len(content))
+                self.assertEqual((1 << 30) - budget.left, size * 6 // 10 + len(partial))
+        noise = random.Random(4).randbytes(64 << 10)
+        far = zip_patched(zip_of({"env.txt": noise + noise + lines}, method=zipfile.ZIP_LZMA), 0, "crc")
+        self.assertHeld("far.zip", far, "zip")
+        self.assertHeld("loose", zlib.compress(b"blob 9\0" + far), "zlib", "zip")
+
+        def other_properties(compressor):
+            properties = {"id": lzma.FILTER_LZMA1, "lc": 0, "lp": 2, "pb": 0, "dict_size": 1 << 16}
+            compressor._comp = lzma.LZMACompressor(lzma.FORMAT_RAW, filters=[properties])
+            return struct.pack("<BBH", 9, 4, 5) + bytes([(0 * 5 + 2) * 9 + 0]) + (1 << 16).to_bytes(4, "little")
+
+        with mock.patch.object(zipfile.LZMACompressor, "_init", other_properties):
+            unusual = zip_of({"env.txt": lines}, method=zipfile.ZIP_LZMA)
+        with zipfile.ZipFile(io.BytesIO(unusual)) as packed:
+            self.assertEqual(packed.read("env.txt"), lines)
+        self.assertHeld("unusual.zip", zip_patched(unusual, 0, "crc"), "zip")
+
+    def test_a_zip_whose_members_lie_elsewhere_is_read_for_what_it_holds(self):
+        """zip -s numbers each part of a split zip a disk. The last part's
+        members on its own disk are read, and the part is then refused for
+        the members the other parts hold, but in a repository's history; a
+        last part that holds only the directory is searched as it is, as
+        any file is; the first part is refused by name; and a zip -s
+        archive that fits in one part is a whole zip. Entries that overlap
+        are charged their bytes each time."""
+        lines, noise = self.PLANTED_LINES, random.Random(7).randbytes(4000)
+        directory_only = last_part_of({"env.txt": lines}, {})
+        self.assertEqual(runner.packed_kinds(directory_only), ["prefixed zip"])
+        self.assertEqual(self.said("parts.zip", directory_only), [])
+        # The last part holds env.txt whole, after the end of a member whose start the part before holds.
+        for lead, kinds in ((b"", ["zip"]), (noise[-300:], ["prefixed zip"])):
+            with self.subTest(lead=len(lead)):
+                part = last_part_of({"a.bin": noise}, {"env.txt": lines}, lead)
+                clean = last_part_of({"a.bin": noise}, {"notes.txt": b"notes\n" * 40}, lead)
+                self.assertNotIn(PLANTED.encode(), part)
+                self.assertEqual(runner.packed_kinds(part), kinds)
+                self.assertHeld("parts.zip", part, "zip")
+                self.assertRefused("parts.zip", clean, r"a part of a zip split across files \(zip -s\), 1 of whose")
+                repo = self.tmp / f"parts-{len(lead)}"
+                self.committed_then_removed(repo, {"parts.zip": part, "clean.zip": clean})
+                self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+                self.git("-C", str(repo), "gc", "-q")
+                self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip")
+        whole = zip_of({"env.txt": lines})
+        end = whole.rindex(b"PK\x05\x06")
+        directory_at = int.from_bytes(whole[end + 16:end + 20], "little")
+        self.assertRefused("work.z01", b"PK\x07\x08" + whole[:directory_at], "a split zip's first part")
+        starting = whole[:end + 4] + (1).to_bytes(2, "little") * 2 + whole[end + 8:]
+        self.assertRefused("work.zip", starting, "a zip split across files")
+        # A zip -s archive that fits in one part starts with the first part's marker and is a whole zip.
+        one = spanned_zip_of({"env.txt": lines})
+        self.assertEqual(runner.packed_kinds(one), ["zip"])
+        self.assertHeld("one.zip", one, "zip")
+        self.assertEqual(self.said("clean.zip", spanned_zip_of({"notes.txt": b"notes\n" * 40})), [])
+        repo = self.tmp / "one"
+        self.committed_then_removed(repo, {"one.zip": one})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip")
+        # 40 entries over one stored member of 64 KiB cost 40 times its bytes.
+        member = random.Random(7).randbytes(64 << 10)
+        single = zip_of({"a.bin": member}, method=zipfile.ZIP_STORED)
+        entry = central_entries(single)[0]
+        end = single.rindex(b"PK\x05\x06")
+        record = bytearray(single[end:])
+        record[8:12] = (40).to_bytes(2, "little") * 2
+        record[12:16] = ((end - entry) * 40).to_bytes(4, "little")
+        overlapped = single[:entry] + single[entry:end] * 40 + bytes(record)
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 1 << 20):
+            self.assertRefused("overlapped.zip", overlapped, "more to unpack than the scrub reads")
+            self.assertRefused("loose", zlib.compress(b"blob 9\0" + overlapped), "more to unpack than the scrub reads")
+
+    @unittest.skipUnless(shutil.which("zip"), "Info-ZIP's zip is not installed")
+    def test_what_info_zip_splits_is_read_as_far_as_its_parts_hold(self):
+        """The same with zip -s itself: its last part holds the members that
+        fit, its first part is refused by name, and an archive that fits in
+        one part reads as a zip, alone and in a repository's history."""
+        work = self.tmp / "split"
+        work.mkdir()
+        (work / "a-rand.bin").write_bytes(random.Random(9).randbytes(150000))
+        (work / "z-text.txt").write_bytes(self.PLANTED_LINES * 8)
+        for arguments in (("-s", "64k", "p.zip", "a-rand.bin", "z-text.txt"), ("-s", "1m", "one.zip", "z-text.txt")):
+            subprocess.run(["zip", "-q", *arguments], cwd=work, check=True, capture_output=True, timeout=60)
+        parts = {name: (work / name).read_bytes() for name in ("p.z01", "p.z02", "p.zip", "one.zip")}
+        self.assertTrue(parts["one.zip"].startswith(b"PK\x07\x08PK\x03\x04"))
+        self.assertNotIn(PLANTED.encode(), b"".join(parts.values()))
+        self.assertHeld("p.zip", parts["p.zip"], "zip")
+        self.assertHeld("one.zip", parts["one.zip"], "zip")
+        self.assertRefused("p.z01", parts["p.z01"], "a split zip's first part")
+        repo = self.tmp / "parts"
+        self.committed_then_removed(repo, parts)
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip")
+        # A first part that ends with a zip among the members, which zip stores as it is, is still a first part,
+        # though the stored zip's end record lies where a whole zip's would; a one-part archive holding one is a
+        # whole zip.
+        (work / "inner.zip").write_bytes(zip_of({"data.bin": random.Random(10).randbytes(20000)}))
+        (work / "c-rand.bin").write_bytes(random.Random(11).randbytes(100000))
+        for arguments in (("-s", "64k", "s.zip", "z-text.txt", "inner.zip", "c-rand.bin"),
+                          ("-s", "1m", "w.zip", "z-text.txt", "inner.zip")):
+            subprocess.run(["zip", "-q", *arguments], cwd=work, check=True, capture_output=True, timeout=60)
+        stored = {name: (work / name).read_bytes() for name in ("s.z01", "s.zip", "w.zip")}
+        self.assertIn(b"PK\x05\x06", stored["s.z01"][-runner.ZIP_TAIL:])
+        self.assertEqual(runner.packed_kinds(stored["s.z01"]), ["a split zip's first part (zip -s)", "prefixed zip"])
+        self.assertRefused("s.z01", stored["s.z01"], "a split zip's first part")
+        self.assertEqual(runner.packed_kinds(stored["w.zip"]), ["zip"])
+        self.assertHeld("w.zip", stored["w.zip"], "zip")
+        # A zip64 archive that fits in one part (zip -fz) is a whole zip too, small or past the end record's window.
+        (work / "big.bin").write_bytes(random.Random(16).randbytes(1500000))
+        for arguments in (("-s", "1m", "-fz", "one-fz.zip", "z-text.txt"), ("-s", "4m", "-fz", "big-fz.zip", "big.bin", "z-text.txt")):
+            subprocess.run(["zip", "-q", *arguments], cwd=work, check=True, capture_output=True, timeout=60)
+        for name in ("one-fz.zip", "big-fz.zip"):
+            with self.subTest(name=name):
+                whole = (work / name).read_bytes()
+                self.assertTrue(whole.startswith(b"PK\x07\x08PK\x03\x04"))
+                self.assertEqual(runner.packed_kinds(whole), ["zip"])
+                self.assertHeld(name, whole, "zip")
+        # A zip64 split's last part past the end record's window gives its members too, alone and in history.
+        subprocess.run(["zip", "-q", "-s", "1m", "-fz", "wide.zip", "big.bin", "z-text.txt"], cwd=work, check=True,
+                       capture_output=True, timeout=60)
+        wide = {name: (work / name).read_bytes() for name in ("wide.z01", "wide.zip")}
+        self.assertGreater(len(wide["wide.zip"]), runner.ZIP_TAIL)
+        self.assertHeld("wide.zip", wide["wide.zip"], "zip")
+        self.assertRefused("wide.z01", wide["wide.z01"], "a split zip's first part")
+        repo = self.tmp / "wide"
+        self.committed_then_removed(repo, wide)
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip")
+        # A zip64 split archive (zip -fz, or a member read from stdin, whose size zip did not know): its last part's
+        # members are read as a classic split's are, alone and in a repository's history.
+        with open(work / "z-text.txt", "rb") as stdin:
+            subprocess.run(["zip", "-q", "-s", "64k", "st.zip", "a-rand.bin", "-"], cwd=work, stdin=stdin, check=True,
+                           capture_output=True, timeout=60)
+        subprocess.run(["zip", "-q", "-fz", "-s", "64k", "fz.zip", "a-rand.bin", "z-text.txt"], cwd=work, check=True,
+                       capture_output=True, timeout=60)
+        zip64 = {name: (work / name).read_bytes() for name in ("st.z01", "st.z02", "st.zip", "fz.z01", "fz.z02", "fz.zip")}
+        for name in ("st.zip", "fz.zip"):
+            with self.subTest(name=name):
+                self.assertIn(b"PK\x06\x07", zip64[name][-runner.ZIP_TAIL:])
+                self.assertFalse(zipfile.is_zipfile(io.BytesIO(zip64[name])))
+                self.assertHeld(name, zip64[name], "zip")
+        self.assertRefused("st.z01", zip64["st.z01"], "a split zip's first part")
+        repo = self.tmp / "zip64"
+        self.committed_then_removed(repo, zip64)
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip")
+
+    def test_a_split_zip_s_first_part_that_ends_with_a_stored_zip_is_still_its_first_part(self):
+        """zip stores a .zip among the members as it is, so a first part may
+        end with the stored zip's own end record where a whole archive's
+        stands, and may even end exactly where that zip ends; neither makes
+        it the one-part archive it is read as only when its own record ends
+        it, says disk 0 and places the first member after the marker."""
+        lines, inner = self.PLANTED_LINES, zip_of({"data.bin": random.Random(12).randbytes(20000)})
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as packed:
+            packed.writestr("a-notes.txt", lines * 8, compress_type=zipfile.ZIP_DEFLATED)
+            packed.writestr("b-inner.zip", inner, compress_type=zipfile.ZIP_STORED)
+            packed.writestr("c-rand.bin", random.Random(13).randbytes(30000), compress_type=zipfile.ZIP_STORED)
+        whole = out.getvalue()
+        self.assertNotIn(PLANTED.encode(), whole)
+        with zipfile.ZipFile(io.BytesIO(whole)) as packed:
+            infos = packed.infolist()
+        directory_at = int.from_bytes(whole[whole.rindex(b"PK\x05\x06") + 16:][:4], "little")
+        inner_end = infos[2].header_offset
+        for name, part in (("ends-later.z01", b"PK\x07\x08" + whole[:directory_at]),
+                           ("ends-with-it.z01", b"PK\x07\x08" + whole[:inner_end])):
+            with self.subTest(name=name):
+                self.assertTrue(zipfile.is_zipfile(io.BytesIO(part[-runner.ZIP_TAIL:])))
+                self.assertFalse(runner.is_one_part(part))
+                self.assertEqual(runner.packed_kinds(part), ["a split zip's first part (zip -s)", "prefixed zip"])
+                self.assertRefused(name, part, "a split zip's first part")
+        one = spanned_zip_of({"a-notes.txt": lines, "b-inner.zip": inner})
+        self.assertTrue(runner.is_one_part(one))
+        self.assertHeld("one.zip", one, "zip")
+        # The record must say disk 0 and name a directory whose first entry is the member after the marker.
+        end = one.rindex(b"PK\x05\x06")
+        self.assertFalse(runner.is_one_part(one[:end + 4] + (1).to_bytes(2, "little") * 2 + one[end + 8:]))
+        self.assertFalse(runner.is_one_part(one[:end + 16] + (len(one) - 22).to_bytes(4, "little") + one[end + 20:]))
+        entry = int.from_bytes(one[end + 16:end + 20], "little")
+        self.assertEqual(one[entry + 42:entry + 46], (4).to_bytes(4, "little"))
+        self.assertFalse(runner.is_one_part(one[:entry + 42] + bytes(4) + one[entry + 46:]))
+        self.assertFalse(runner.is_one_part(one + b"\n"))
+        self.assertFalse(runner.is_one_part(b"PK\x07\x08PK\x03\x04"))
+        # A zip64 one-part archive (zip -fz) leaves the directory's place to the zip64 record.
+        one64 = zip64_split(one, disk=0, disks=1)
+        self.assertEqual(one64[one64.rindex(b"PK\x05\x06") + 16:][:4], b"\xff\xff\xff\xff")
+        self.assertTrue(runner.is_one_part(one64))
+        self.assertEqual(runner.packed_kinds(one64), ["zip"])
+        self.assertHeld("one64.zip", one64, "zip")
+        self.assertFalse(runner.is_one_part(one64.replace(b"PK\x06\x06", b"PK\x06\x05")))
+        self.assertFalse(runner.is_one_part(one64.replace(b"PK\x06\x07", b"PK\x06\x08")))
+
+    def test_a_zip64_split_archive_s_last_part_gives_the_members_it_holds_whole(self):
+        """zipfile refuses a zip64 split part by its locator's disk fields
+        alone, which zip_reader reads as the first of one disk; the members
+        on the part's own disk are then read and the part refused for the
+        rest, as for a classic split, alone and in a repository's history. A
+        one-disk archive's bytes are read as they are."""
+        lines, noise = self.PLANTED_LINES, random.Random(14).randbytes(4000)
+        part = zip64_split(last_part_of({"a.bin": noise}, {"env.txt": lines}))
+        clean = zip64_split(last_part_of({"a.bin": noise}, {"notes.txt": b"notes\n" * 40}))
+        self.assertNotIn(PLANTED.encode(), part)
+        self.assertFalse(zipfile.is_zipfile(io.BytesIO(part)))
+        with self.assertRaisesRegex(zipfile.BadZipFile, "span multiple disks"):
+            zipfile.ZipFile(io.BytesIO(part))
+        self.assertEqual(runner.packed_kinds(part), ["zip"])
+        self.assertHeld("parts.zip", part, "zip")
+        self.assertRefused("parts.zip", clean, r"a part of a zip split across files \(zip -s\), 1 of whose")
+        self.assertEqual(runner.packed_kinds(b"notes\n" * 50 + part), ["prefixed zip"])
+        self.assertHeld("prefixed.zip", b"notes\n" * 50 + part, "zip")
+        # A classic record that leaves the disk to the zip64 record, as one of 65535 or more parts has it, names
+        # the part's disk there.
+        end = part.rindex(b"PK\x05\x06")
+        deferred = part[:end + 4] + b"\xff\xff" * 2 + part[end + 8:]
+        self.assertEqual(runner.split_part(deferred), 1)
+        self.assertHeld("deferred.zip", b"notes\n" * 50 + deferred, "zip")
+        self.assertEqual(runner.split_part(part[:end + 4] + b"\xff\xff" * 2 + part[end + 8:end + 22]), 1)
+        self.assertEqual(runner.split_part(zip_of({"a": b"b"})[:-18] + b"\xff\xff" * 2 + bytes(14)), 0xFFFF)
+        repo = self.tmp / "zip64"
+        self.committed_then_removed(repo, {"parts.zip": part, "clean.zip": clean})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip")
+        one = zip64_split(zip_of({"env.txt": lines}), disk=0, disks=1)
+        self.assertTrue(zipfile.is_zipfile(io.BytesIO(one)))
+        self.assertEqual(runner.zip_reader(one).patches, {})
+        self.assertEqual(runner.zip_reader(b"no zip at all").patches, {})
+        self.assertEqual(sorted(runner.zip_reader(part).patches), [len(part) - 42 + 4, len(part) - 42 + 16])
+        self.assertHeld("one.zip", one, "zip")
+        # The reader gives the patched bytes however the reads fall across them.
+        patched = bytearray(part)
+        patched[len(part) - 42 + 4:len(part) - 42 + 8] = bytes(4)
+        patched[len(part) - 42 + 16:len(part) - 42 + 20] = (1).to_bytes(4, "little")
+        for size in (1, 3, 7, 16, 100, len(part)):
+            with self.subTest(size=size), runner.zip_reader(part) as source:
+                self.assertEqual(b"".join(iter(lambda: source.read(size), b"")), bytes(patched))
+        # The scrub's own pass leaves such a part whole, as it leaves a zip found by its end record that opens.
+        self.assertTrue(runner.holds_members("prefixed zip", b"notes\n" * 50 + part, runner.Budget()))
+        self.assertFalse(runner.holds_members("prefixed zip", b"notes\n" * 50 + part[:-100], runner.Budget()))
+        # Only the locator before the end record is read otherwise: a stored member that holds the locator's
+        # signature, as a library or a bytecode file does, is read as it is and its CRC holds.
+        stray = b"binary blob " * 100 + struct.pack("<4sIQI", b"PK\x06\x07", 1, 1000, 3) + b" tail of the blob\n" * 20
+        for method in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            with self.subTest(method=method):
+                data = zip_of({"b-blob.bin": stray, "a-notes.txt": b"notes\n" * 40}, method=method)
+                self.assertEqual(runner.zip_reader(data).patches, {})
+                self.assertEqual(self.said("stray.zip", data), [])
+                self.assertEqual(runner.packed_kinds(b"#!python\n" + data), ["prefixed zip"])
+                self.assertEqual(self.said("stray.pyz", b"#!python\n" + data), [])
+                planted = zip_of({"b-blob.bin": stray, "a-notes.txt": lines}, method=method)
+                self.assertHeld("stray.zip", planted, *(["zip"] if method == zipfile.ZIP_DEFLATED else []))
+        # zipfile reads the end record in the last 64 KiB and the locator's offsets against the whole file, so a
+        # part larger than that is read as a smaller one is, and so is a zip64 archive with something before it.
+        big = random.Random(15).randbytes(100000)
+        wide = zip64_split(last_part_of({"a.bin": noise}, {"big.bin": big, "env.txt": lines}))
+        self.assertGreater(len(wide), runner.ZIP_TAIL)
+        self.assertEqual(runner.packed_kinds(wide), ["zip"])
+        self.assertHeld("wide.zip", wide, "zip")
+        self.assertHeld("prefixed-wide.zip", b"notes\n" * 50 + wide, "zip")
+        shebang = b"#!/usr/bin/env python3\n" + zip64_split(zip_of({"big.bin": big, "env.txt": lines}), disk=0, disks=1)
+        self.assertEqual(runner.packed_kinds(shebang), ["prefixed zip"])
+        self.assertEqual(runner.zip_extent(shebang), (23, len(shebang) - 98))
+        self.assertHeld("big.pyz", shebang, "zip")
+
+    def test_a_zip_whose_text_reads_as_a_tar_header_is_a_zip_first(self):
+        """A zipapp's first block is its interpreter line and the start of
+        its __main__.py, whose text may put an octal field where a header's
+        checksum is, before a stored tar on a block boundary, or ustar's
+        magic at 257. GNU tar reads such a file as a broken tar, and so does
+        the read-back, but as a zip first, by its end record, so the members
+        are read, in a work tree and in a repository's history."""
+        lines = self.PLANTED_LINES
+        inner = tar_of({"readme.txt": b"just a readme\n"})
+        head = "import sys\n# the installer sets the data files to these modes, in octal:\n#"
+        text = head + " " * (84 - len(head)) + " 644    for each file, as the tarball says\n"
+
+        def octal_app(log):
+            """The zipapp, its __main__.py padded so that data.tar's bytes start on a 512-byte boundary."""
+            padding = -(147 + len(text) + len(log) + 2) % 512
+            app = zipapp_of(text + "#" * padding + "\n\n", {"a_secret.log.gz": log, "data.tar": inner})
+            self.assertEqual(app[148:156], b" 644    ")
+            with zipfile.ZipFile(io.BytesIO(app)) as packed:
+                info = packed.getinfo("data.tar")
+                self.assertEqual((info.header_offset + 30 + len(info.filename) + len(info.extra)) % 512, 0)
+            self.assertTrue(runner.is_broken_tar(app))
+            return app
+
+        octal = octal_app(gzipped(lines))
+        lead = ('"""Pack the run\'s logs into a tarball.\n\nThe archive is written in the POSIX format; tarfile.PAX_FORMAT\n'
+                'is what GNU tar calls posix, and the older formats are\n# ')
+        magic = zipapp_of(lead + " " * (257 - 64 - len(lead)) + 'ustar and gnu, which we do not use.\n"""\n',
+                          {"a_secret.log.gz": gzipped(lines)})
+        self.assertEqual(magic[257:262], b"ustar")
+        self.assertTrue(runner.is_tar(magic))
+        octal_clean = octal_app(gzipped(b"clean\n" * 40))
+        for name, app in (("octal.pyz", octal), ("magic.pyz", magic)):
+            with self.subTest(name=name):
+                self.assertNotIn(PLANTED.encode(), app)
+                self.assertTrue(runner.is_tar(app) or runner.is_broken_tar(app))
+                self.assertEqual(runner.packed_kinds(app), ["prefixed zip"])
+                self.assertHeld(name, app, "zip", "gzip")
+                repo = self.tmp / name
+                self.committed_then_removed(repo, {name: app})
+                self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "zip", "gzip")
+                self.git("-C", str(repo), "gc", "-q")
+                self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "zip", "gzip")
+        # The same zipapp with nothing planted passes: a zip whose first local header lies in the first block is
+        # read whole as a zip and not as the tar it also reads as, whose steps over would be slices of the zip,
+        # which read as no layer and would refuse the file. The marker in a gzip inside the stored tar is reached
+        # through the zip. A zip whose first header lies past the first block is a member of the tar (below).
+        self.assertEqual(runner.packed_kinds(octal_clean), ["prefixed zip"])
+        self.assertEqual(self.said("octal.pyz", octal_clean), [])
+        nested = octal_app(gzipped(b"clean\n" * 40)).replace(inner, tar_of({"notes.gz": gzipped(lines)}))
+        self.assertHeld("nested.pyz", nested, "zip", "tar", "gzip")
+        # The same with an interpreter line longer than a block, so that the zip starts past the first block: the
+        # zip still covers the stored tar whose header the tar sign was found by.
+        for length in (400, 540):
+            with self.subTest(length=length):
+                line = (("#!/usr/bin/env -S python3 " + "-W ignore " * 60)[:148] + " 644    " + "#" * length)[:length - 1] + "\n"
+                for name, log in (("long-clean.pyz", gzipped(b"clean\n" * 40)), ("long.pyz", gzipped(lines))):
+                    # zipfile counts a prefixed zip's offsets from the file's start, as zipapp writes them; a zip
+                    # written on its own and prefixed afterwards counts them from its own start, as zip -A leaves them.
+                    for prefixed in (False, True):
+                        out = io.BytesIO()
+                        if not prefixed:
+                            out.write(line.encode())
+                        with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as packed:
+                            packed.writestr("__main__.py", "#" * (-(len(line) + 124 + len(log)) % 512))
+                            packed.writestr("a_secret.log.gz", log)
+                            packed.writestr("data.tar", inner)
+                        app = (line.encode() if prefixed else b"") + out.getvalue()
+                        self.assertEqual(app[148:156], b" 644    ")
+                        self.assertEqual(runner.zip_extent(app)[0], len(line) if prefixed else 0)
+                        self.assertTrue(runner.is_broken_tar(app))
+                        self.assertEqual(runner.packed_kinds(app), ["prefixed zip"])
+                        self.assertEqual(self.said(name, app), [] if name == "long-clean.pyz" else
+                                         [f"{self.run_dir / name}: holds the agents' credential, read through zip, gzip"])
+        # A tar whose first header does not read, and whose first member's name or link target starts as a zip's
+        # header does, is a tar still when a zip among its members puts an end record at its end, since that zip
+        # lies past the header the tar was found by; with no zip, a name that starts as a zip's header is a zip
+        # that does not open, refused as before.
+        for first, members in (("PK\x03\x04-notes.txt", {"PK\x03\x04-notes.txt": b"clean\n" * 40}),
+                               ("link", {"link": ("link", "PK\x03\x04-target")})):
+            for zipped in (False, True):
+                with self.subTest(first=first, zipped=zipped):
+                    members = {**members, "b.gz": gzipped(lines), **({"z.zip": zip_of({"c.txt": b"clean\n" * 40})} if zipped else {})}
+                    broken = bytearray(tar_of(members))
+                    broken[100] ^= 0x01
+                    self.assertEqual(bytes(broken[:4]) if first.startswith("PK") else bytes(broken[157:161]), b"PK\x03\x04")
+                    kinds = runner.packed_kinds(bytes(broken))
+                    self.assertEqual(kinds[-1], runner.BROKEN_TAR)
+                    if first.startswith("PK"):
+                        self.assertEqual(kinds[0], "zip")
+                    else:
+                        self.assertEqual(kinds[0], "prefixed zip" if zipped else runner.BROKEN_TAR)
+                    if first.startswith("PK") and not zipped:
+                        self.assertRefused("pk.bin", bytes(broken), "not a zip file")
+                        continue
+                    self.assertHeld("pk.bin", bytes(broken), "tar", "gzip")
+                    repo = self.tmp / f"pk-{len(first)}-{zipped}"
+                    self.committed_then_removed(repo, {"pk.bin": bytes(broken)})
+                    self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "tar", "gzip")
+        # A real tar whose first header does not read is read though a weak sign before it opens: a member whose
+        # name starts like a zlib header, or a zip among its members, found by its end record, say nothing of the
+        # tar's own bytes, so the member behind them is found, alone and in a repository's history.
+        for name, first in (("zlib-named.bin", "x^notes.txt"), ("zip-member.bin", "a.zip")):
+            with self.subTest(name=name):
+                members = {first: zip_of({"clean.txt": b"clean\n" * 40}) if first == "a.zip" else b"clean\n" * 40,
+                           "b.gz": gzipped(lines)}
+                broken = bytearray(tar_of(members))
+                broken[100] ^= 0x01
+                self.assertEqual(runner.packed_kinds(bytes(broken)),
+                                 ["zlib" if first.startswith("x") else "prefixed zip", runner.BROKEN_TAR])
+                self.assertHeld(name, bytes(broken), "tar", "gzip")
+                repo = self.tmp / name
+                self.committed_then_removed(repo, {name: bytes(broken)})
+                self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "tar", "gzip")
+        # A plain zip of the same shape is a sure zip, which covers its bytes, so it is not read as a tar at all.
+        for name, log in (("plain.zip", gzipped(b"clean\n" * 40)), ("plain-planted.zip", gzipped(lines))):
+            with self.subTest(name=name):
+                lead = ("notes " * 20)[:148 - 39] + " 644    "
+                notes = lead + "#" * (-(122 + len(lead) + 1 + len(log)) % 512) + "\n"
+                out = io.BytesIO()
+                with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as packed:
+                    for member, content in (("notes.txt", notes.encode()), ("a_secret.log.gz", log), ("data.tar", inner)):
+                        packed.writestr(member, content)
+                plain = out.getvalue()
+                self.assertEqual(plain[:4] + plain[148:156], b"PK\x03\x04 644    ")
+                self.assertTrue(runner.is_broken_tar(plain))
+                self.assertEqual(runner.packed_kinds(plain), ["zip"])
+                self.assertEqual(self.said(name, plain), [] if name == "plain.zip" else
+                                 [f"{self.run_dir / name}: holds the agents' credential, read through zip, gzip"])
+        # A tar whose first header reads is a sure sign still, and covers a zip's end record after it.
+        sure = tar_of({"a.txt": b"hello"}) + zip_of({"env.txt": lines})
+        self.assertEqual(runner.packed_kinds(sure), ["tar"])
+        self.assertEqual(runner.packed_kinds(sure[:-30] + gzipped(lines)), ["tar"])
+        # A sure sign that opens covers its bytes, so a tar found behind it by a later header is not looked for: an
+        # ar archive whose first member puts an octal field at 148 before a stored tar on a block boundary.
+        lead = ("notes " * 20)[:148 - 68] + " 644    "
+        notes = (lead + "#" * (-(68 + len(lead) + 1 + 60) % 512) + "\n").encode()
+        archive = ar_of({"notes.txt": notes, "data.tar": tar_of({"notes.gz": gzipped(lines)})})
+        self.assertEqual(archive[148:156], b" 644    ")
+        self.assertTrue(runner.is_broken_tar(archive))
+        self.assertEqual(runner.packed_kinds(archive), ["ar"])
+        self.assertHeld("notes.a", archive, "ar", "tar", "gzip")
+
+    def test_a_stream_cut_short_is_searched_as_far_as_it_inflates(self):
+        """What a cut stream gave before it stopped is searched, as zcat
+        prints it before it reports the error, whether the stream is a
+        file of its own, follows a whole one, or is a repository's object."""
+        clean = b"".join(b"line %d\n" % n for n in range(20000))
+        content = f"export TOKEN={PLANTED}\n".encode() + clean
+        cut_gzip, cut_xz = gzipped(content)[:-200], lzma.compress(content)[:-200]
+        half = len(PLANTED) // 2
+        cut_lzma = lzma.compress(content, format=lzma.FORMAT_ALONE)[:-200]
+        for name, data, kind in (("cut.gz", cut_gzip, "gzip"), ("cut.xz", cut_xz, "xz"), ("cut.lzma", cut_lzma, "lzma"),
+                                 ("then.gz", gzipped(b"clean") + cut_gzip, "gzip"),
+                                 ("whole-then-cut.gz", gzipped(self.PLANTED_LINES) + gzipped(clean)[:-200], "gzip"),
+                                 ("split-then-cut.gz", gzipped(b"a " + PLANTED[:half].encode())
+                                  + gzipped(PLANTED[half:].encode() + clean)[:-200], "gzip")):
+            with self.subTest(name=name):
+                self.assertNotIn(PLANTED.encode(), data)
+                self.assertHeld(name, data, kind)
+                self.assertHeld("loose", zlib.compress(b"blob 9\0" + data), "zlib", kind)
+        # A stream broken at its end, by a wrong check or a broken footer, is searched as far as it gave.
+        wrong_check = bytearray(gzipped(content))
+        wrong_check[-8] ^= 0x01
+        broken_xz = bytearray(lzma.compress(content))
+        broken_xz[-1] ^= 0x01
+        for name, data, kind in (("check.gz", bytes(wrong_check), "gzip"), ("footer.xz", bytes(broken_xz), "xz")):
+            with self.subTest(name=name):
+                self.assertHeld(name, data, kind)
+                self.assertHeld("loose", zlib.compress(b"blob 9\0" + data), "zlib", kind)
+        # An ar member cut short gives the bytes it holds, as ar p prints them.
+        cut_ar = ar_of({"debian-binary": b"2.0\n", "data.gz": gzipped(content)})[:-200]
+        self.assertHeld("cut.deb", cut_ar, "ar", "gzip")
+        self.assertHeld("loose", zlib.compress(b"blob 9\0" + cut_ar), "zlib", "ar", "gzip")
+        repo = self.tmp / "repo"
+        self.git("init", "-q", str(repo))
+        self.commit(repo, {"debug/env.gz": cut_gzip}, "a log cut short")
+        self.git("-C", str(repo), "rm", "-q", "-r", "debug")
+        self.git("-C", str(repo), "commit", "-q", "-m", "gone from the tree, kept in history")
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "gzip")
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertHeld("packed.tar", self.repository_tarball(repo), "tar", "git packfile", "gzip")
+
+    def test_a_tar_header_that_does_not_read_is_stepped_over_as_gnu_tar_steps_over_it(self):
+        """A member after a header that does not read is read, and what
+        the header stood before is opened too, as is what follows a tar's
+        end; a tar after zero blocks or an empty tar, as GNU tar's -i reads
+        it, or whose first member has no name, is a tar all the same."""
+        lines = self.PLANTED_LINES
+        data = bytearray(tar_of({"a.txt": b"a" * 600, "b.txt": b"b" * 10, "env.gz": gzipped(lines)}))
+        headers = tar_headers(bytes(data))
+        data[headers[1] + 148] ^= 0x01
+        self.assertHeld("broken.tar", bytes(data), "tar", "gzip")
+        data[headers[1] + 148] ^= 0x01
+        data[headers[2] + 148] ^= 0x01
+        self.assertHeld("behind.tar", bytes(data), "what a tar stepped over", "gzip")
+        between = bytearray(tar_of({"a.txt": b"a" * 600, "env.gz": gzipped(lines), "c.txt": b"c" * 10}))
+        between[tar_headers(bytes(between))[1] + 148] ^= 0x01
+        self.assertHeld("between.tar", bytes(between), "what a tar stepped over", "gzip")
+        self.assertHeld("after.tar", tar_of({"a.txt": b"hello"}) + gzipped(lines), "what a tar stepped over", "gzip")
+        self.assertHeld("both.bin", tar_of({"a.txt": b"hello"}) + zip_of({"env.txt": lines}),
+                        "what a tar stepped over", "zip")
+        self.assertHeld("zeros.tar", bytes(1024) + tar_of({"env.gz": gzipped(lines)}), "tar", "gzip")
+        self.assertHeld("empty-first.tar", tar_of({}) + tar_of({"env.gz": gzipped(lines)}), "tar", "gzip")
+        # A header broken past reading, its magic or a v7 header's name, still stands a block before its member.
+        for name, base, at in (("magic.tar", tar_of({"a.txt": b"hello", "env.gz": gzipped(lines)}), 257),
+                               ("v7.tar", as_v7(tar_of({"a.txt": b"hello", "env.gz": gzipped(lines)})), 0)):
+            with self.subTest(name=name):
+                broken = bytearray(base)
+                broken[tar_headers(base)[1] + at] ^= 0x01
+                self.assertHeld(name, bytes(broken), "what a tar stepped over", "gzip")
+        # A first header broken past reading, its magic flipped, a pax header's included: GNU tar skips to the
+        # next header, which carries ustar's magic, and so does the read-back, alone and in a repository's history.
+        for format in (tarfile.GNU_FORMAT, tarfile.USTAR_FORMAT, tarfile.PAX_FORMAT):
+            with self.subTest(format=format):
+                out, first = io.BytesIO(), "clean-" + "n" * (120 if format == tarfile.PAX_FORMAT else 10) + ".txt"
+                with tarfile.open(fileobj=out, mode="w", format=format) as packed:
+                    for name, content in ((first, b"clean\n" * 200), ("p.txt.gz", gzipped(lines))):
+                        member = tarfile.TarInfo(name)
+                        member.size = len(content)
+                        packed.addfile(member, io.BytesIO(content))
+                flipped = bytearray(out.getvalue())
+                self.assertEqual(flipped[156:157], b"x" if format == tarfile.PAX_FORMAT else b"0")
+                flipped[257] ^= 0x20
+                self.assertFalse(runner.is_tar(bytes(flipped)))
+                self.assertHeld("first.tar", bytes(flipped), "tar", "gzip")
+                repo = self.tmp / f"first-{format}"
+                self.committed_then_removed(repo, {"first.tar": bytes(flipped)})
+                self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "tar", "gzip")
+        # A first header broken past reading and cut short inside the next is no header at all: the file is searched
+        # as it is, and the scrub's pass runs to its end.
+        cut = bytearray(tar_of({"a.txt": b"hello\n" * 10, "b.txt": b"world\n" * 10}))
+        cut[257] ^= 0x01
+        self.assertFalse(runner.is_broken_tar(bytes(cut[:1024 + 400])))
+        self.assertEqual(runner.packed_kinds(bytes(cut[:1024 + 400])), [])
+        self.assertEqual(self.said("cut.bin", bytes(cut[:1024 + 400])), [])
+        for length in range(len(cut)):
+            runner.packed_kinds(bytes(cut[:length]))
+        self.assertFalse(runner.checksum_holds(cut[:400]))
+        # A first block with ustar's magic whose checksum and size do not read hides nothing after it: what follows
+        # the first block is opened, as GNU tar skips to the next header.
+        odd_first = bytearray(tar_of({"notes.gz": gzipped(lines)}))
+        odd_first[124], odd_first[148] = ord("x"), ord("x")
+        self.assertEqual(runner.packed_kinds(bytes(odd_first)), [runner.BROKEN_TAR])
+        self.assertHeld("odd-first.tar", bytes(odd_first), "what a tar stepped over", "gzip")
+        # Text whose every line is a block with ustar's magic at 257 reads as such a tar, and as GNU tar skips
+        # its blocks, so does the read-back, without opening the text a block shorter again and again to the
+        # depth's end, alone and in a repository's history.
+        periodic = (b"row " * 70)[:257] + b"ustar" + b"." * 249 + b"\n"
+        for count in (2, 9, 20):
+            with self.subTest(count=count):
+                self.assertEqual(runner.packed_kinds(periodic * count), [runner.BROKEN_TAR])
+                self.assertEqual(self.said("rows.txt", periodic * count + b"end\n"), [])
+        # What follows such blocks is opened once, past them, as what follows a first block that reads as no header
+        # is: a stream behind them is found, and such text is a weak sign, so at the last layer it refuses nothing.
+        self.assertHeld("rows.txt", periodic * 9 + gzipped(lines), "what a tar stepped over", "gzip")
+        self.assertHeld("rows.txt", periodic + gzipped(lines), "what a tar stepped over", "gzip")
+        self.assertEqual(self.said("rows.gz", gzipped(periodic * 3, runner.DEEPEST_NESTING)), [])
+        # The opening starts past the blocks the walk reads or steps over itself: a header that tarfile refused for
+        # its size, or whose checksum holds by chance, with or without ustar's magic, two of them in a row, and a
+        # header whose size reads, whose member the walk gives.
+        sized = bytearray(tar_of({"notes.gz": gzipped(lines)}))
+        sized[124:136] = b"x" * 12
+        sized[0:512] = with_checksum(sized[0:512])
+        shaped = (b"notes " * 30)[:148] + b"0000644\0" + b"." * 356
+        self.assertEqual(shaped[148:156], b"0000644\0")
+        self.assertHeld("sized.bin", shaped + bytes(sized), "what a tar stepped over", "gzip")
+        chance = bytearray(shaped)
+        chance[257:262] = b"....."
+        chance[0:512] = with_checksum(chance[0:512])
+        self.assertHeld("chance.bin", bytes(sized[:512]) + bytes(chance) + gzipped(lines) + bytes(1024),
+                        "what a tar stepped over", "gzip")
+        damaged = bytearray(tar_of({"a": b"", "b": b""})[:1024])
+        damaged[124], damaged[512 + 124] = ord("x"), ord("x")
+        self.assertEqual(runner.packed_kinds(bytes(damaged) + gzipped(lines) + bytes(1024)), [runner.BROKEN_TAR])
+        self.assertHeld("damaged.bin", bytes(damaged) + gzipped(lines) + bytes(1024), "what a tar stepped over", "gzip")
+        self.assertEqual(runner.past_unread_blocks(bytes(damaged) + gzipped(lines) + bytes(1024), 512, 1024 + 2000), 1024)
+        self.assertEqual(runner.past_unread_blocks(periodic * 3, 0, 1536), 1536)
+        self.assertEqual(runner.past_unread_blocks(tar_of({"a.txt": b"a" * 600}) + b"x" * 10, 0, 1546), 1536)
+        self.assertEqual(runner.past_unread_blocks(bytes(1024) + b"x" * 10, 0, 1034), 1024)
+        # A member cut short behind a first member of no bytes still refuses the file: what stopped short opened.
+        cut = bytearray(tar_of({"empty": b"", "a.txt": b"a" * 3000, "notes.gz": gzipped(lines)}))
+        cut[100] ^= 0x01
+        self.assertRefused("cut.bin", bytes(cut[:2000]), "a tar member cut short")
+        self.assertRefused("cut.gz", gzipped(bytes(cut[:2000])), "a tar member cut short")
+        # A member cut to no bytes, its header read, refuses the file too; a repository's own such fixture does not.
+        self.assertRefused("cut.bin", bytes(cut[:1024]), "a tar member cut short")
+        self.assertRefused("cut.gz", gzipped(bytes(cut[:1024])), "a tar member cut short")
+        repo = self.tmp / "cut"
+        self.committed_then_removed(repo, {"cut.bin": bytes(cut[:1024])})
+        self.assertEqual(self.said("loose.tar", self.repository_tarball(repo)), [])
+        self.assertRefused("cut-deep.gz", gzipped(bytes(cut[:1024]), runner.DEEPEST_NESTING), "nested deeper")
+        repo = self.tmp / "periodic"
+        self.committed_then_removed(repo, {"rows.txt": periodic * 9 + b"end\n"})
+        self.assertEqual(self.said("loose.tar", self.repository_tarball(repo)), [])
+        self.git("-C", str(repo), "gc", "-q")
+        self.assertEqual(self.said("packed.tar", self.repository_tarball(repo)), [])
+        shaped_text = (b"notes " * 30)[:148] + b"0000644\0" + b" ustar notes" * 200
+        self.assertEqual(runner.packed_kinds(shaped_text), [])
+        # A header that is not where a block starts is no tar's, as GNU tar never reads one there.
+        self.assertEqual(runner.packed_kinds(shaped_text[:612] + tar_of({"a.txt": b"hello"})), [])
+        # A pax or a long-name header followed by one that does not read stops tarfile; GNU tar reads on.
+        for format in (tarfile.PAX_FORMAT, tarfile.GNU_FORMAT):
+            with self.subTest(format=format, then="broken"):
+                out = io.BytesIO()
+                with tarfile.open(fileobj=out, mode="w", format=format) as packed:
+                    for name, content in (("d/" + "n" * 120 + ".gz", gzipped(b"clean\n")), ("p.txt.gz", gzipped(lines))):
+                        member = tarfile.TarInfo(name)
+                        member.size = len(content)
+                        packed.addfile(member, io.BytesIO(content))
+                then = bytearray(out.getvalue())
+                following = 512 + -(-int(then[124:135], 8) // 512) * 512
+                then[following + 148:following + 156] = b"0000000\0"
+                self.assertHeld("then.tar", bytes(then), "what a tar stepped over", "gzip")
+                repo = self.tmp / f"then-{format}"
+                self.committed_then_removed(repo, {"then.tar": bytes(then)})
+                self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "what a tar stepped over", "gzip")
+        # A block that is no header, then a header tarfile refuses: GNU tar skips the one and reads the other.
+        garbage = bytes((n * 37 + 11) % 251 + 1 for n in range(512))
+        body = gzipped(lines)
+        refused_header = bytearray(tar_of({"p.gz": body})[:512])
+        refused_header[136:148] = b"zzzzzzzzzzz\0"
+        skipped = (tar_of({"plain.txt": b"p" * 60})[:1024] + garbage + with_checksum(refused_header)
+                   + body.ljust(-(-len(body) // 512) * 512, b"\0") + bytes(1024))
+        self.assertHeld("skipped.tar", skipped, "what a tar stepped over", "gzip")
+        # A header whose size does not read (base-256, negative) gives nothing, and is never opened again and
+        # again to the depth's end.
+        odd_size = bytearray(tarfile.TarInfo("b.txt").tobuf(tarfile.USTAR_FORMAT))
+        odd_size[124:136] = b"\xff" * 11 + b"\0"
+        odd = tar_of({"a.txt": b"abcdef"})[:1024] + with_checksum(odd_size) + bytes(1024)
+        self.assertEqual(self.said("odd.tar", odd), [])
+        self.assertEqual(self.said("loose", zlib.compress(b"blob 9\0" + odd)), [])
+        # Where a stream starts at a block whose checksum field happens to read as a number, it is opened from that
+        # block as well as from the next.
+        name = "x" * 138 + "1234567 " + "log.txt"
+        stream = gzipped(lines + random.Random(6).randbytes(2000), name=name)
+        self.assertEqual(stream[148:156], b"1234567 ")
+        self.assertHeld("named.tar", tar_of({"a.txt": b"hello"}) + stream, "what a tar stepped over", "gzip")
+        # Headers GNU tar reads and tarfile refuses (a devmajor or an mtime that is no number), one after another,
+        # each give their member, as long as its size, in octal, says, a v7 header's too.
+        for field, ustar in ((slice(329, 337), True), (slice(136, 148), True), (slice(136, 148), False)):
+            for count, after in ((2, b""), (3, b""), (2, b"c" * 10)):
+                with self.subTest(field=field.start, ustar=ustar, count=count, after=bool(after)):
+                    members = {f"m{n}.txt": (b"plain %d\n" % n).ljust((1024, 600)[n], b"p") for n in range(count - 1)}
+                    members["env.gz"] = gzipped(lines)
+                    if after:
+                        members["c.txt"] = after
+                    base = tar_of(members) if ustar else as_v7(tar_of(members))
+                    refused = bytearray(base)
+                    for start in tar_headers(base)[:count]:
+                        refused[field.start + start:field.stop + start] = b"zz".ljust(field.stop - field.start, b"\0")
+                        refused[start:start + 512] = with_checksum(refused[start:start + 512])
+                    self.assertHeld("refused.tar", bytes(refused), "what a tar stepped over", "gzip")
+        # A member of a type tarfile does not know is extracted by tar as a regular file.
+        for kind in (b"N", b"E"):
+            with self.subTest(kind=kind):
+                out, body = io.BytesIO(), gzipped(lines)
+                with tarfile.open(fileobj=out, mode="w", format=tarfile.USTAR_FORMAT) as packed:
+                    member = tarfile.TarInfo("build.log.gz")
+                    member.type, member.size = kind, len(body)
+                    packed.addfile(member, io.BytesIO(body))
+                self.assertHeld("typed.tar", out.getvalue(), "tar", "gzip")
+        unnamed = bytearray(tar_of({"x": gzipped(lines)}))
+        unnamed[0:100] = bytes(100)
+        unnamed[0:512] = with_checksum(unnamed[0:512])
+        self.assertHeld("unnamed.tar", bytes(unnamed), "tar", "gzip")
+        self.assertEqual(self.said("clean.tar", tar_of({"a.txt": b"hello"}) + bytes(10240)), [])
+
+    def test_a_damaged_tar_is_read_past_what_only_looks_like_a_zip_or_a_header(self):
+        """A tar whose first header does not read is read as GNU tar reads
+        it: past a member that holds a zip end record's signature, and a
+        zip stored in the tar, which are no zip of the whole file; past
+        the block that is no header where the walk's first gap lands;
+        past the member a header GNU tar refuses gives by its size, from
+        the header inside it GNU tar reads; and past a pax record tarfile
+        cannot read. A member cut to no bytes refuses the file."""
+        lines = self.PLANTED_LINES
+        # A member that holds the record's signature, a library that reads zips or a note on them, followed by
+        # whatever the member holds, read as the record's counts: the directory it places lies before the file,
+        # or is no directory. zipfile reads such a record as a zip's; the tar is read past it, alone and in a
+        # repository's history.
+        for name, stray in (("libzip.so", b"\x7fELF" + bytes(range(1, 200)) * 3 + b"PK\x05\x06" + bytes(range(1, 60))),
+                            ("notes.txt", b"the end record starts with PK\x05\x06, then the counts and the comment\n"),
+                            ("unpacked.txt", b"the record, as zipfile unpacks it: " + b"PK\x05\x06"
+                             + struct.pack("<HHHHIIH", 0, 0, 1, 1, 46, 400, 0) + b"\n")):
+            with self.subTest(name=name):
+                broken = bytearray(tar_of({name: stray, "env.gz": gzipped(lines)}))
+                broken[100] ^= 0x01
+                self.assertIsNone(runner.zip_extent(bytes(broken)))
+                self.assertEqual(runner.packed_kinds(bytes(broken))[-1], runner.BROKEN_TAR)
+                self.assertHeld(name, bytes(broken), "tar", "gzip")
+                repo = self.tmp / name
+                self.committed_then_removed(repo, {name: bytes(broken)})
+                self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "tar", "gzip")
+        # A zip stored in such a tar, with a tar of its own among its members on a block boundary, where the tar's
+        # later header is found: its record is followed by the tar's padding and end, so it is no zip of the whole
+        # and does not cover the tar, which is read. What the tar's reader stepped over to the header inside the
+        # zip starts as a zip and opens as none, so the file is refused, as it was before the record was read, and
+        # in a repository's history, where a slice that does not open refuses nothing, the member after the zip is
+        # found.
+        inner = tar_of({"readme.txt": b"just a readme\n"})
+
+        def stored_zip(padding):
+            return zip_of({"notes.txt": b"notes\n" * 10 + b"#" * padding, "data.tar": inner}, method=zipfile.ZIP_STORED)
+
+        with zipfile.ZipFile(io.BytesIO(stored_zip(0))) as packed:
+            info = packed.getinfo("data.tar")
+            at = 512 + info.header_offset + 30 + len(info.filename) + len(info.extra)
+        stored = bytearray(tar_of({"data.zip": stored_zip(-at % 512), "b_secret.log.gz": gzipped(lines)}))
+        self.assertEqual(bytes(stored[1024:1536]), inner[:512])
+        stored[100] ^= 0x01
+        self.assertEqual(runner.broken_tar_header(bytes(stored)), 1024)
+        self.assertIsNone(runner.zip_extent(bytes(stored)))
+        self.assertEqual(runner.packed_kinds(bytes(stored)), ["prefixed zip", runner.BROKEN_TAR])
+        self.assertRefused("stored.tar", bytes(stored), "not a zip file")
+        repo = self.tmp / "stored"
+        self.committed_then_removed(repo, {"stored.tar": bytes(stored)})
+        self.assertHeld("loose.tar", self.repository_tarball(repo), "tar", "zlib", "tar", "gzip")
+        # The end record is the last one in the tail, not the first: a zip stored in a zipapp has one of its own,
+        # and a zip64 archive's extent is read from its zip64 record.
+        lead = '"""Pack the run\'s logs.\n\nThe archive is written in the POSIX format, which GNU tar calls posix, where\n# '
+        lead = lead + " " * (257 - 64 - len(lead)) + 'ustar and gnu are the older ones.\n"""\n'
+        for log, held in ((gzipped(b"clean\n" * 40), False), (gzipped(lines), True)):
+            with self.subTest(held=held):
+                app = zipapp_of(lead, {"vendor/wheel.zip": zip_of({"w.txt": b"wheel\n"}), "a.log.gz": log})
+                self.assertEqual((app[257:262], app.count(b"PK\x05\x06")), (b"ustar", 2))
+                self.assertEqual(runner.zip_extent(app)[0], 0)
+                self.assertEqual(runner.packed_kinds(app), ["prefixed zip"])
+                self.assertEqual(self.said("app.pyz", app), [f"{self.run_dir / 'app.pyz'}: holds the agents' credential, "
+                                                              "read through zip, gzip"] if held else [])
+        line = b"#!/usr/bin/env python3\n"
+        app64 = line + zip64_split(zip_of({"notes.txt": b"clean\n"}, method=zipfile.ZIP_STORED), disk=0, disks=1)
+        self.assertEqual(runner.zip_extent(app64), (len(line), len(app64) - 98))
+        # Zero blocks before a tar whose first header's magic is broken are stepped over to its later header.
+        zeros = bytearray(bytes(1024) + tar_of({"a.txt": b"hello", "env.gz": gzipped(lines)}))
+        zeros[1024 + 257] ^= 0x01
+        self.assertEqual(runner.broken_tar_header(bytes(zeros)), 2048)
+        self.assertHeld("zeros.tar", bytes(zeros), "tar", "gzip")
+        # The walk's first gap, a block that reads as no header, opens what follows from past the headers the walk
+        # reads or steps over; the block it lands on, when it is shaped like a header, opens the next block too,
+        # since GNU tar skips to the header there: here a stream behind a block whose checksum field is a number.
+        text = (b"notes " * 100)[:512]
+        shaped = (b"notes " * 30)[:148] + b"1234567 " + b"." * 356
+        body = gzipped(lines)
+        padded = body.ljust(-(-len(body) // 512) * 512, b"\0")
+        landing = (header_of("a.txt", 0, (124, b"x" * 12)) + header_of("b.txt", 512, (136, b"zz".ljust(12, b"\0")))
+                   + text + shaped + padded + bytes(1024))
+        self.assertEqual(runner.packed_kinds(landing), ["tar"])
+        self.assertEqual(runner.past_unread_blocks(landing, 512, len(landing)), 1536)
+        self.assertHeld("landing.tar", landing, "what a tar stepped over", "gzip")
+        # A header whose checksum does not hold, which GNU tar skips a block at a time, gives its member by its size
+        # as a header by ustar's magic does, and the walk goes on from the first header inside that member whose
+        # checksum holds, which GNU tar reads, not past it: here one tarfile refuses for its mtime.
+        size = 1024 + len(padded)
+        covering = bytearray(header_of("big.bin", size))
+        covering[148:156] = b"0000001\0"
+        self.assertFalse(runner.checksum_holds(bytes(covering)))
+        self.assertEqual(runner.header_size(bytes(covering)), size)
+        skipped = (tar_of({"a.txt": b"hello"})[:1024] + bytes(covering) + text
+                   + header_of("env.gz", len(body), (136, b"zz".ljust(12, b"\0"))) + padded + bytes(1024))
+        self.assertEqual(runner.past_member(skipped, 1024, size, len(skipped), skipped[1024:1536]), 2048)
+        self.assertEqual(runner.past_member(skipped, 2048, len(body), len(skipped), skipped[2048:2560]),
+                         2560 + len(padded))
+        self.assertHeld("skipped.tar", skipped, "what a tar stepped over", "gzip")
+        # A pax record tarfile cannot read, a sparse map that is no numbers, stops it with an error of its own:
+        # what follows is stepped over all the same, as past a header it refuses, and the tar is refused only
+        # where nothing is found, whether its first header reads or not.
+        def sparse_tar(log, damaged):
+            out = io.BytesIO()
+            with tarfile.open(fileobj=out, mode="w", format=tarfile.PAX_FORMAT) as packed:
+                for name, content in (("first.txt", b"clean\n" * 100), ("holes.bin", bytes(600)), ("notes.gz", log)):
+                    member = tarfile.TarInfo(name)
+                    member.size = len(content)
+                    if name == "holes.bin":
+                        member.pax_headers = {"GNU.sparse.map": "abc"}
+                    packed.addfile(member, io.BytesIO(content))
+            sparse = bytearray(out.getvalue())
+            if damaged:
+                sparse[100] ^= 0x01
+            with self.assertRaises(ValueError):
+                with tarfile.open(fileobj=io.BytesIO(bytes(sparse)), ignore_zeros=True) as packed:
+                    packed.getmembers()
+            return bytes(sparse)
+
+        for damaged in (False, True):
+            with self.subTest(damaged=damaged):
+                sparse = sparse_tar(gzipped(lines), damaged)
+                self.assertEqual(runner.packed_kinds(sparse), [runner.BROKEN_TAR if damaged else "tar"])
+                self.assertHeld("sparse.tar", sparse, "what a tar stepped over", "gzip")
+                self.assertRefused("sparse.tar", sparse_tar(gzipped(b"clean\n" * 40), damaged), "invalid literal")
+        # A limit met inside such a tar is the limit: nothing more is walked on what is left of the budget.
+        with mock.patch.object(runner, "stepped_over", side_effect=AssertionError("walked past the limit")):
+            with self.assertRaises(runner.LimitReached):
+                list(runner.tar_members(sparse_tar(gzipped(lines), False), runner.Budget(100)))
+
+    def test_headers_are_searched_as_they_are_and_the_scrub_leaves_a_container_whole(self):
+        self.assertHeld("notes.zip", zip_of({"note.txt": b"hello"}, comment=PLANTED.encode()))
+        self.assertHeld("named.zip", zip_of({f"{PLANTED}.txt": b"hello"}))
+        self.assertHeld("named.gz", gzipped(b"hello", name=f"{PLANTED}.txt"))
+        self.assertHeld("linked.tgz", tar_of({"env": ("link", f"/run/{PLANTED}")}, "gz"), "gzip")
+        # A container named as anything, a zipapp's #! line before it or not, is left whole by the scrub
+        # and refused by the read-back.
+        for name, data in (("notes.dat", zip_of({"env.txt": PLANTED.encode()}, method=zipfile.ZIP_STORED)),
+                           ("tool.pyz", b"#!/usr/bin/env python3\n"
+                            + zip_of({"env.txt": PLANTED.encode()}, method=zipfile.ZIP_STORED)),
+                           ("work.bin", tar_of({"env.txt": PLANTED.encode()})),
+                           ("old.bin", bytes(1024) + as_v7(tar_of({"env.txt": PLANTED.encode()})))):
+            with self.subTest(name=name):
+                container = self.run_dir / name
+                container.write_bytes(data)
+                self.assertEqual(runner.scrub_credentials([self.run_dir], [PLANTED]), [])
+                self.assertEqual(container.read_bytes(), data)
+                self.assertEqual(runner.unscrubbed(self.run_dir, [PLANTED]),
+                                 [f"{container}: holds the agents' credential"])
+                container.unlink()
+
+    def test_a_name_that_holds_the_credential_is_refused_and_never_quoted(self):
+        (self.run_dir / f"{PLANTED}.txt").write_text("clean\n")
+        (self.run_dir / f"dir-{PLANTED}").mkdir()
+        (self.run_dir / f"dir-{PLANTED}" / "note.txt").write_text("clean\n")
+        (self.run_dir / f"link-{PLANTED}").symlink_to(self.run_dir / f"{PLANTED}.txt")
+        scrubbed = runner.SCRUBBED
+        self.assertEqual(runner.unscrubbed(self.run_dir, [PLANTED]), [
+            f"{self.run_dir / (scrubbed + '.txt')}: its name holds the agents' credential",
+            f"{self.run_dir / ('dir-' + scrubbed)}: its name holds the agents' credential",
+            f"{self.run_dir / ('link-' + scrubbed)}: its name holds the agents' credential",
+            f"{self.run_dir / ('link-' + scrubbed)}: is a symlink, which the upload would follow to what the "
+            "scrub never read"])
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED}, clear=False), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(self.run_dir)]), 2)
+        self.assertIn(f"removed 1 symlinks and special files, which the upload would follow: link-{scrubbed}",
+                      err.getvalue())
+        self.assertIn("its name holds the agents' credential", err.getvalue())
+        self.assertNotIn(PLANTED, err.getvalue())
+
+    def test_what_the_read_back_cannot_open_is_refused(self):
+        for name, data, why in (
+                ("archive.tar.zst", b"\x28\xb5\x2f\xfd" + bytes(20), r"zstd, a format the scrub cannot open"),
+                ("archive.7z", b"7z\xbc\xaf\x27\x1c" + bytes(20), r"7z, a format"),
+                ("archive.rar", b"Rar!\x1a\x07\x00" + bytes(20), r"rar, a format"),
+                ("archive.lz4", b"\x04\x22\x4d\x18" + bytes(20), r"lz4, a format"),
+                ("archive.tar.Z", b"\x1f\x9d\x90" + bytes(20), r"compress \(\.Z\), a format"),
+                ("archive.lz", b"LZIP\x01" + bytes(20), r"lzip, a format"),
+                ("llvm-big.a", b"<bigaf>\n" + bytes(120), r"AIX big archive, a format"),
+                ("cut.gz", gzipped(b"hello " * 1000)[:-30], r"a truncated stream"),
+                ("cut.xz", lzma.compress(b"hello " * 1000)[:-30], r"a truncated stream"),
+                ("cut.bz2", bz2.compress(b"hello " * 1000)[:-30], r"a truncated stream"),
+                ("cut.bundle", b"# v2 git bundle\nabc refs/heads/main\n", r"no packfile"),
+                ("odd.bundle", b"# v3 git bundle\nabc refs/heads/main\n\nnot a pack", r"no packfile"),
+                ("cut.tar", tar_of({"env.txt": b"hello " * 1000})[:3000], r"unexpected end of data"),
+                ("cut.deb", ar_of({"data.tar": b"x" * 100})[:90], r"an ar member that runs past"),
+                ("odd.deb", b"!<arch>\nnot a header at all" + bytes(60), r"an ar member header that does not read"),
+                ("unended.a", ar_of({"env.txt": b"hello"})[:66] + b"XX" + ar_of({"env.txt": b"hello"})[68:],
+                 r"an ar member header that does not read")):
+            with self.subTest(name=name):
+                self.assertRefused(name, data, why)
+        stored = bytearray(zip_of({"env.txt": b"hello"}, method=zipfile.ZIP_STORED))
+        stored[8:10] = (93).to_bytes(2, "little")
+        directory = stored.find(b"PK\x01\x02")
+        stored[directory + 10:directory + 12] = (93).to_bytes(2, "little")
+        self.assertRefused("odd.zip", bytes(stored), "compression method")
+        broken = bytearray(zip_of({"env.txt": b"hello " * 50}))
+        broken[40] ^= 0xFF
+        self.assertRefused("broken.whl", bytes(broken), "Bad CRC-32")
+
+    def test_whatever_a_file_makes_the_read_back_raise_refuses_the_file_and_never_ends_it(self):
+        # A long-name member whose size, in base-256, is 2^80: tarfile overflows reading it.
+        header = bytearray(tarfile.TarInfo("big").tobuf())
+        header[124:136] = b"\x80" + (1 << 80).to_bytes(11, "big")
+        header[156:157] = b"L"
+        self.assertRefused("overflow.tar", with_checksum(header) + bytes(1024), "")
+        self.assertNotIn("Traceback", "\n".join(self.said("overflow.tar", with_checksum(header) + bytes(1024))))
+
+        def overflowing(data, budget):
+            yield from ()
+            raise OverflowError("planted overflow")
+
+        def bare(data, budget):
+            yield from ()
+            raise EOFError
+
+        with mock.patch.dict(runner.UNPACKERS, {"zip": overflowing}):
+            self.assertRefused("odd.zip", zip_of({"a": b"b"}), "planted overflow")
+            self.assertEqual(self.said("clean.txt", b"clean"), [])
+        with mock.patch.dict(runner.UNPACKERS, {"zip": bare}):
+            self.assertRefused("bare.zip", zip_of({"a": b"b"}), r"EOFError\)$")
+
+    def test_layers_open_eight_deep_and_no_deeper(self):
+        self.assertHeld("deep.gz", gzipped(PLANTED.encode(), runner.DEEPEST_NESTING), *["gzip"] * runner.DEEPEST_NESTING)
+        self.assertRefused("deeper.gz", gzipped(b"clean", runner.DEEPEST_NESTING + 1), "nested deeper")
+        # At the last layer, text that only starts like a zlib stream is text, and a stream that holds anything
+        # refuses the file.
+        for text in (b"x = 1\n", b"x^2 + y^2\n", b"x}{\n", b"xylophone notes\n",
+                     b"]\x00\x00\x80\x00" + b"\xff" * 8 + b"plain notes, not lzma at all\n",
+                     b"notes\n" * 50 + b"PK\x05\x06" + struct.pack("<HHHHIIH", 0, 0, 1, 1, 46, 0, 0)):
+            with self.subTest(text=text):
+                self.assertEqual(self.said("text.gz", gzipped(text, runner.DEEPEST_NESTING)), [])
+        self.assertRefused("hidden.gz", gzipped(zlib.compress(b"clean"), runner.DEEPEST_NESTING),
+                           "nested deeper than the scrub reads, the last zlib")
+        cut_lzma = lzma.compress(random.Random(3).randbytes(20000), format=lzma.FORMAT_ALONE)[:-200]
+        self.assertRefused("cut-hidden.gz", gzipped(cut_lzma, runner.DEEPEST_NESTING),
+                           "nested deeper than the scrub reads, the last lzma")
+        # A zip found by its end record that opens with a member that does not read holds something too.
+        unknown = zip_patched(zip_of({"a.txt": b"harmless"}, method=zipfile.ZIP_STORED), 0, "method", 93)
+        self.assertRefused("unread.gz", gzipped(b"#!/usr/bin/env python3\n" + unknown, runner.DEEPEST_NESTING),
+                           "nested deeper than the scrub reads, the last prefixed zip")
+
+    def test_one_budget_bounds_the_directory_charged_a_step_at_a_time(self):
+        big, noise = b"a" * (2 << 20), random.Random(3).randbytes(300 << 10)
+        taken = []
+        real_take = runner.Budget.take
+
+        def recording(budget, size):
+            taken.append(size)
+            return real_take(budget, size)
+
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 1 << 20), mock.patch.object(runner.Budget, "take", recording):
+            for name, data in (("big.gz", gzipped(big)), ("big.xz", lzma.compress(big)), ("big.bz2", bz2.compress(big)),
+                               ("big.zip", zip_of({"a": big})), ("big.tar", tar_of({"a": big})),
+                               ("big.pack", packfile(big)), ("big.zlib", zlib.compress(big)),
+                               ("big.lzma", lzma.compress(big, format=lzma.FORMAT_ALONE)),
+                               # A delta's target is charged, and so is each of its instructions: 300,000
+                               # one-byte inserts make little but turn the loop once a byte.
+                               ("deltas.pack", packfile(noise, *[("ofs", 0, delta_on(noise, ("copy", 0, len(noise))))] * 3)),
+                               ("inserts.pack", packfile(b"x", ("ofs", 0, size_bytes(1) + size_bytes(300_000)
+                                                                + b"\x01A" * 300_000)))):
+                with self.subTest(name=name):
+                    taken.clear()
+                    self.assertRefused(name, data, "more to unpack than the scrub reads")
+                    if name != "big.pack":
+                        self.assertLessEqual(max(taken), runner.EXPANSION_STEP)
+            self.assertEqual(self.said("small.gz", gzipped(b"a" * (1 << 19))), [])
+            # Zeros a tar's reader stepped over cost nothing, behind a header that does not read as anywhere.
+            padded = bytearray(tar_of({"a.txt": b"hello", "b.txt": b""}))
+            padded[tar_headers(bytes(padded))[1] + 148] ^= 0x01
+            self.assertEqual(self.said("padded.tar", bytes(padded) + bytes(2 << 20)), [])
+            # Each stream, member or object costs ITEM_COST, so many empty ones are as dear as one that inflates.
+            for name, data in (("many.gz", gzipped(b"") * 2000), ("many.tar", tar_of({str(n): b"" for n in range(2000)})),
+                               ("many.pack", packfile(*[b"%d" % n for n in range(2000)])),
+                               ("many.a", ar_of({str(n): b"" for n in range(2000)}))):
+                with self.subTest(name=name):
+                    self.assertRefused(name, data, "more to unpack than the scrub reads")
+            # A zip's every entry is charged before zipfile reads its directory, which it reads whole.
+            many = zip_of({str(n): b"" for n in range(2000)})
+            with mock.patch.object(runner.zipfile, "ZipFile", side_effect=AssertionError("zipfile read the directory")):
+                self.assertRefused("many.zip", many, "more to unpack than the scrub reads")
+            for unpack, data in ((runner.zlib_content, zlib.compress(b"")),
+                                 (runner.lzma_content, lzma.compress(b"", format=lzma.FORMAT_ALONE))):
+                with self.subTest(unpack=unpack.__name__), self.assertRaises(runner.LimitReached):
+                    list(unpack(data, runner.Budget(runner.ITEM_COST - 1)))
+            # Fewer instructions than a step are charged all the same: 4,000 one-byte inserts make 4,000 bytes
+            # and cost 128,000.
+            few = packfile(b"x", ("ofs", 0, size_bytes(1) + size_bytes(4000) + b"\x01A" * 4000))
+            with mock.patch.object(runner, "LARGEST_EXPANSION", 64 << 10):
+                self.assertRefused("few.pack", few, "more to unpack than the scrub reads")
+            # A delta costs the larger of what it makes and 32 bytes an instruction, never both, past a step's
+            # instructions too: 8,192 copies of 64 bytes make 524,288 bytes, and 8,192 inserts cost 262,144.
+            copies = size_bytes(64) + size_bytes(8192 * 64) + b"\x90\x40" * 8192
+            for base, delta, cost in ((noise, delta_on(noise, ("copy", 0, len(noise))), len(noise)),
+                                      (b"x", size_bytes(1) + size_bytes(4000) + b"\x01A" * 4000,
+                                       4000 * runner.INSTRUCTION_COST),
+                                      (noise[:64], copies, 8192 * 64),
+                                      (b"x", size_bytes(1) + size_bytes(8192) + b"\x01A" * 8192,
+                                       8192 * runner.INSTRUCTION_COST)):
+                with self.subTest(cost=cost):
+                    budget = runner.Budget(1 << 30)
+                    runner.apply_delta(base, delta, budget)
+                    self.assertEqual((1 << 30) - budget.left, cost)
+            # What a tar's reader steps over is charged as it is opened: each header, each member, and what
+            # follows the tar's end once.
+            self.assertRefused("noisy.tar", tar_of({"a.txt": b"hello"}) + noise * 4, "more to unpack than the scrub reads")
+            self.assertEqual(self.said("appended.tar", tar_of({"a.txt": b"hello"}) + noise * 2), [])
+            for name, members in (("headers.tar", {str(n): b"" for n in range(1100)}), ("member.tar", {"a": noise * 4}),
+                                  ("fits.tar", {str(n): b"" for n in range(1000)})):
+                with self.subTest(name=name):
+                    refused = bytearray(tar_of(members))
+                    for start in tar_headers(bytes(refused)):
+                        refused[start + 329:start + 337] = b"zz".ljust(8, b"\0")
+                        refused[start:start + 512] = with_checksum(refused[start:start + 512])
+                    if name == "fits.tar":
+                        # 1,000 headers at ITEM_COST each fit a budget of 1 MiB, just.
+                        self.assertEqual(self.said(name, bytes(refused)), [])
+                    else:
+                        self.assertRefused(name, bytes(refused), "more to unpack than the scrub reads")
+            exact = runner.Budget(1024)
+            exact.take(1024)
+            with self.assertRaises(runner.LimitReached):
+                runner.Budget(1024).take(1025)
+            # The budget is the directory's: two files that fit it alone do not fit it together.
+            for name in ("one.gz", "two.gz"):
+                (self.run_dir / name).write_bytes(gzipped(b"a" * (600 << 10)))
+            kept = runner.unscrubbed(self.run_dir, [PLANTED])
+            self.assertEqual(kept, [f"{self.run_dir / 'two.gz'}: could not be read (more to unpack than the scrub reads)"])
+
+    def test_a_file_holds_about_once_what_it_unpacks_and_short_streams_are_read_where_they_start(self):
+        member = bytes(int(15.6 * (1 << 20)))
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 16 << 20):
+            for name, data in (("zeros.gz", gzipped(bytes(32 << 20))), ("zeros.bz2", bz2.compress(bytes(32 << 20))),
+                               ("tar.gz", gzipped(tar_of({"a": member}))),
+                               ("zip.gz", gzipped(zip_of({"a": member}, method=zipfile.ZIP_STORED)))):
+                with self.subTest(name=name):
+                    tracemalloc.start()
+                    try:
+                        self.assertRefused(name, data, "more to unpack than the scrub reads")
+                        peak = tracemalloc.get_traced_memory()[1]
+                    finally:
+                        tracemalloc.stop()
+                    self.assertLess(peak, 1.5 * (16 << 20) + runner.EXPANSION_STEP)
+        for module, name, compress, kind in ((runner.zlib, "decompressobj", gzipped, "gzip"),
+                                             (runner.lzma, "LZMADecompressor", lzma.compress, "xz"),
+                                             (runner.bz2, "BZ2Decompressor", bz2.compress, "bzip2")):
+            fed = []
+            data = compress(b"") * 3000 + compress(self.PLANTED_LINES)
+            with self.subTest(kind=kind), mock.patch.object(module, name, counting(getattr(module, name), fed)):
+                self.assertHeld(f"many.{kind}", data, kind)
+                self.assertLessEqual(sum(fed), 3001 * runner.FIRST_CHUNK + len(data))
+
+    def test_a_fake_run_reads_its_files_back_for_a_stand_in_and_a_real_run_for_its_token(self):
+        scrub = (ROOT / "bench" / "cooperbench" / "actions" / "scrub.sh").read_text(encoding="utf-8")
+        action = (ROOT / "bench" / "cooperbench" / "actions" / "run-pair" / "action.yml").read_text(encoding="utf-8")
+        self.assertIn('if [ "${MODE:-}" = fake ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}${COORDBENCH_CLAUDE_TOKEN:-}" ]',
+                      scrub)
+        stand_in = re.search(r"export COORDBENCH_CLAUDE_TOKEN=(\S+)", scrub).group(1)
+        scrub_step = action[action.index("id: scrub"):action.index("id: done")]
+        self.assertIn("MODE: ${{ inputs.mode }}", scrub_step)
+        self.assertNotIn("COORDBENCH_CLAUDE_TOKEN", scrub_step)
+        self.assertEqual(runner.credential_values({"COORDBENCH_CLAUDE_TOKEN": stand_in}), [stand_in])
+        (self.run_dir / "coop").mkdir()
+        (self.run_dir / "coop" / "stream.jsonl").write_text("{}\n")
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "", "COORDBENCH_CLAUDE_TOKEN": stand_in}), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(runner.main(["scrub", "--run-dir", str(self.run_dir)]), 0)
+        self.assertIn("no file holds the agents' credential", err.getvalue())
+
+    def test_bytes_that_only_look_packed_are_searched_never_refused(self):
+        # c, d and e open to nothing; f and g carry a weak sign that does not open at all.
+        for name, text in (("a.txt", b"x^2 + y^2 = r^2\n"), ("b.txt", b"x  marks the spot\n"),
+                           ("c.txt", b"x\x9c not a stream at all\n"), ("d.txt", b"]\x00\x00\x80\x00" + bytes(20)),
+                           ("e.txt", b"notes\n" * 50 + b"PK\x05\x06" + bytes(18)),
+                           ("f.txt", b"]\x00\x00\x80\x00" + b"\xff" * 8 + b"plain notes, not lzma at all\n" * 3),
+                           ("g.txt", b"notes\n" * 50 + b"PK\x05\x06" + struct.pack("<HHHHIIH", 0, 0, 1, 1, 46, 0, 0))):
+            with self.subTest(name=name):
+                self.assertEqual(self.said(name, text), [])
+        self.assertEqual(runner.packed_kinds(b"]\x00\x00\x80\x00" + b"\xff" * 8 + b"plain notes"), ["lzma"])
+        self.assertEqual(runner.packed_kinds(b"notes\n" + b"PK\x05\x06" + struct.pack("<HHHHIIH", 0, 0, 1, 1, 46, 0, 0)),
+                         ["prefixed zip"])
+        # Neither is a sign: a first two bytes that are no zlib header, nor an lzma dictionary under 4 KiB.
+        self.assertEqual(runner.packed_kinds(b"xylophone notes\n"), [])
+        self.assertEqual(runner.packed_kinds(b"]\x00\x02\x00\x00" + bytes(8) + b"tail"), [])
+        # A loose object cut short is searched as far as it inflates.
+        content = b"blob 99999\0" + f"TOKEN={PLANTED}\n".encode() + b"".join(b"line %d\n" % n for n in range(9000))
+        cut = zlib.compress(content)[:-100]
+        self.assertNotIn(PLANTED.encode(), cut)
+        self.assertHeld("cut-object", cut, "zlib")
+
+    def scrubbed_main(self):
+        """run.py scrub over the run directory with the stand-in as the
+        token, and what it wrote to the job's log."""
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": PLANTED, "COORDBENCH_CLAUDE_TOKEN": ""}), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            code = runner.main(["scrub", "--run-dir", str(self.run_dir)])
+        return code, err.getvalue()
+
+    def test_the_scrub_s_own_lines_never_quote_the_credential(self):
+        """A file the scrub cannot read, or cannot rewrite, is named in the
+        job's public log with the credential replaced."""
+        broken = self.run_dir / f"{PLANTED}.gz"
+        broken.write_bytes(b"\x1f\x8b\x08\x00 not gzip")
+        code, log = self.scrubbed_main()
+        self.assertEqual(code, 2)
+        self.assertIn("scrubbing", log)
+        self.assertIn("failed", log)
+        self.assertNotIn(PLANTED, log)
+        broken.unlink()
+        kept = self.run_dir / f"env-{PLANTED}.txt"
+        kept.write_text(PLANTED + "\n")
+        refused = PermissionError(13, "Permission denied", str(kept))
+        with mock.patch.object(runner, "write_scrubbed", side_effect=refused):
+            code, log = self.scrubbed_main()
+        self.assertEqual(code, 2)
+        self.assertIn("could not be rewritten", log)
+        self.assertNotIn(PLANTED, log)
+
+    def test_a_path_past_path_max_is_refused_with_its_name_scrubbed(self):
+        """A path too long to stat refuses the directory with a line that
+        names it scrubbed, never with a traceback that quotes it."""
+        here = os.open(self.run_dir, os.O_RDONLY)
+        try:
+            for name in (f"dir-{PLANTED}", *["d" * 220] * 20):
+                os.mkdir(name, dir_fd=here)
+                inner = os.open(name, os.O_RDONLY, dir_fd=here)
+                os.close(here)
+                here = inner
+            with open(os.open("env.txt", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=here), "w") as handle:
+                handle.write(PLANTED + "\n")
+        finally:
+            os.close(here)
+        said = runner.unscrubbed(self.run_dir, [PLANTED])
+        self.assertTrue(any(": could not be read (" in line and "too long" in line for line in said), said)
+        self.assertNotIn(PLANTED, "\n".join(said))
+        code, log = self.scrubbed_main()
+        self.assertEqual(code, 2)
+        self.assertIn("could not be walked", log)
+        self.assertNotIn(PLANTED, log)
+        self.assertNotIn("Traceback", log)
+        # The run's own scrub, which reaches the path by rglob, says it scrubbed too.
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            runner.scrub_credentials([self.run_dir], [PLANTED])
+        self.assertIn("failed", err.getvalue())
+        self.assertNotIn(PLANTED, err.getvalue())
+
+    def test_the_scrub_reads_a_gz_a_step_at_a_time_up_to_its_bound(self):
+        """The scrub's own gunzip stops at LARGEST_EXPANSION and leaves the
+        file whole for the read-back, holding about the bound; a small .gz
+        sets nothing aside for the bound before it reads."""
+        zeros = self.run_dir / "zeros.gz"
+        zeros.write_bytes(gzipped(bytes(32 << 20) + PLANTED.encode()))
+        before = zeros.read_bytes()
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 4 << 20), contextlib.redirect_stderr(io.StringIO()) as err:
+            tracemalloc.start()
+            try:
+                self.assertEqual(runner.scrub_credentials([self.run_dir], [PLANTED]), [])
+                peak = tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+            self.assertEqual(runner.unscrubbed(self.run_dir, [PLANTED]),
+                             [f"{zeros}: could not be read (more to unpack than the scrub reads)"])
+        self.assertIn("zeros.gz failed: more to unpack than the scrub reads", err.getvalue())
+        self.assertEqual(zeros.read_bytes(), before)
+        self.assertLess(peak, 2 * (4 << 20) + runner.EXPANSION_STEP)
+        zeros.unlink()
+        # Each member costs ITEM_COST, as the read-back charges it, so a file of many empty members stops at the
+        # budget too; zeros after a member are skipped, as gzip skips them, and other bytes refused.
+        many = self.run_dir / "many.gz"
+        many.write_bytes(gzipped(b"") * 2000)
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 64 << 10), self.assertRaises(runner.LimitReached):
+            runner.read_for_scrub(many, runner.Budget())
+        self.assertEqual(runner.read_for_scrub(many, runner.Budget()), b"")
+        many.unlink()
+        padded = self.run_dir / "padded.gz"
+        padded.write_bytes(gzipped(b"a") + gzipped(b"b") + bytes(5000))
+        budget = runner.Budget(1 << 30)
+        self.assertEqual(runner.read_for_scrub(padded, budget), b"ab")
+        self.assertEqual((1 << 30) - budget.left, 2 * runner.ITEM_COST + 2)
+        padded.write_bytes(gzipped(b"a") + b"not gzip")
+        with self.assertRaises(ValueError):
+            runner.read_for_scrub(padded, runner.Budget())
+        padded.unlink()
+        small = self.run_dir / "small.gz"
+        small.write_bytes(gzipped(PLANTED.encode() + b"\n"))
+        tracemalloc.start()
+        try:
+            self.assertEqual(runner.scrub_credentials([self.run_dir], [PLANTED]), [small])
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 4 * runner.EXPANSION_STEP)
+
+    def test_the_scrub_s_own_pass_has_one_budget_for_the_directory(self):
+        """What the .gz files inflate to is charged to one budget for the
+        pass: past it a file is left whole, and said, for the read-back to
+        refuse, and the files after it are still rewritten."""
+        (self.run_dir / "log.txt").write_text(PLANTED + "\n")
+        for name in ("one.gz", "two.gz", "zz.txt"):
+            data = PLANTED.encode() + b"\n" + b"a" * (600 << 10)
+            (self.run_dir / name).write_bytes(gzipped(data) if name.endswith(".gz") else data)
+        before = (self.run_dir / "two.gz").read_bytes()
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 1 << 20), contextlib.redirect_stderr(io.StringIO()) as err:
+            rewritten = runner.scrub_credentials([self.run_dir], [PLANTED])
+        self.assertEqual(rewritten, [self.run_dir / "log.txt", self.run_dir / "one.gz", self.run_dir / "zz.txt"])
+        self.assertEqual((self.run_dir / "two.gz").read_bytes(), before)
+        self.assertIn("two.gz failed: more to unpack than the scrub reads", err.getvalue())
+        for path in self.run_dir.iterdir():
+            path.unlink()
+        # A zip's directory is charged to the same budget: past what the .gz before it left, a log with stray
+        # directory entries is left whole without zipfile reading it, for the read-back to find.
+        (self.run_dir / "a.gz").write_bytes(gzipped(b"a" * (900 << 10)))
+        stray = PLANTED.encode() + b"\n" + b"PK\x01\x02" * 200 + b"PK\x05\x06" + bytes(18)
+        (self.run_dir / "b.log").write_bytes(stray)
+        with mock.patch.object(runner, "LARGEST_EXPANSION", 1 << 20), \
+                mock.patch.object(runner.zipfile, "ZipFile", side_effect=AssertionError("zipfile read the directory")):
+            self.assertEqual(runner.scrub_credentials([self.run_dir], [PLANTED]), [])
+        self.assertEqual((self.run_dir / "b.log").read_bytes(), stray)
+
+    def test_a_log_that_only_looks_like_a_container_is_scrubbed_as_text(self):
+        """A stray zip end record, or text whose bytes happen to sum as a
+        tar header's checksum, marks no container: the scrub rewrites the
+        file as text, where a zip or a tar that opens is left whole."""
+        line = f'{{"type":"assistant","text":"export TOKEN={PLANTED}"}}\n'.encode()
+        stray = line + b"tool output: " + b"PK\x05\x06" + bytes(18) + b"\n"
+        summed = bytearray((line * 20)[:600])
+        summed[148:156] = b" " * 8
+        summed[148:156] = b"%07o " % sum(summed[:512])
+        self.assertEqual(runner.packed_kinds(stray), ["prefixed zip"])
+        self.assertEqual(runner.packed_kinds(bytes(summed)), ["tar"])
+        self.assertTrue(runner.is_tar(tarfile.TarInfo("a.txt").tobuf(tarfile.USTAR_FORMAT)))
+        # A directory past what is left of the scrub's budget is left whole without zipfile reading it.
+        many = b"notes\n" + b"PK\x01\x02" * 11 + b"PK\x05\x06" + bytes(18)
+        with mock.patch.object(runner.zipfile, "ZipFile", side_effect=AssertionError("zipfile read the directory")):
+            self.assertTrue(runner.holds_members("prefixed zip", many, runner.Budget(10 * runner.ITEM_COST)))
+        budget = runner.Budget(100 * runner.ITEM_COST)
+        self.assertTrue(runner.holds_members("prefixed zip", b"#!/bin/sh\n" + zip_of({str(n): b"" for n in range(5)}),
+                                             budget))
+        self.assertEqual(budget.left, 95 * runner.ITEM_COST)
+        # A directory that just fits what is left is read, and one zipfile refuses is charged all the same.
+        exact = runner.Budget(5 * runner.ITEM_COST)
+        self.assertTrue(runner.holds_members("prefixed zip", b"#!/bin/sh\n" + zip_of({str(n): b"" for n in range(5)}),
+                                             exact))
+        self.assertEqual(exact.left, 0)
+        refused = runner.Budget(100 * runner.ITEM_COST)
+        self.assertFalse(runner.holds_members("prefixed zip", b"notes\n" + b"PK\x01\x02" * 5 + b"PK\x05\x06"
+                                              + struct.pack("<HHHHIIH", 0, 0, 1, 1, 46, 0, 0), refused))
+        self.assertEqual(refused.left, 95 * runner.ITEM_COST)
+        for name, data in (("agent_debug.log", stray), ("events.log", bytes(summed)),
+                           ("transcript.jsonl.gz", gzipped(stray))):
+            with self.subTest(name=name):
+                path = self.run_dir / name
+                path.write_bytes(data)
+                self.assertEqual(runner.scrub_credentials([self.run_dir], [PLANTED]), [path])
+                self.assertEqual(runner.unscrubbed(self.run_dir, [PLANTED]), [])
+                path.unlink()
+
+    def test_an_incremental_bundle_is_read_unless_a_delta_needs_what_it_does_not_carry(self):
+        repo = self.tmp / "repo"
+        self.git("init", "-q", str(repo))
+        long_text = b"".join(b"line %d of a long file\n" % n for n in range(2000))
+        self.commit(repo, {"long.txt": long_text}, "first")
+        self.commit(repo, {"other.txt": b"a new file\n"}, "second")
+        self.git("-C", str(repo), "bundle", "create", str(self.tmp / "whole.bundle"), "HEAD~1..HEAD")
+        self.assertEqual(self.said("whole.bundle", (self.tmp / "whole.bundle").read_bytes()), [])
+        self.commit(repo, {"long.txt": long_text.replace(b"line 1000 ", b"line one thousand ")}, "third")
+        self.git("-C", str(repo), "bundle", "create", str(self.tmp / "thin.bundle"), "HEAD~1..HEAD")
+        self.assertRefused("thin.bundle", (self.tmp / "thin.bundle").read_bytes(),
+                           "a delta whose base is not in the packfile")
+        self.assertEqual(self.said("loose", zlib.compress(b"blob 9\0" + (self.tmp / "thin.bundle").read_bytes())), [])
 
 
 if __name__ == "__main__":
