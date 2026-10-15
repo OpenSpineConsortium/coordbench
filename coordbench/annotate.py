@@ -156,10 +156,14 @@ def failed_pairs(paths):
 
 def judged_pairs(paths):
     """Pairs whose judge.json holds symptoms a judge made (not App G's
-    rule over a silent pair), the population of the validation."""
+    rule over a silent pair), the population of the validation; a run
+    the session route's audit later found a harness error is left out,
+    whatever an earlier judge call left in its judge.json."""
     found = []
     for pair in judge.loaded_pairs(paths):
         symptoms = (judge.read_json(pair.dir / judge.JUDGE_FILE) or {}).get("symptoms")
+        if judge.audited_harness_error(pair):
+            continue
         if isinstance(symptoms, dict) and symptoms.get("decided_by") == "judge":
             found.append(pair)
     return sorted(found, key=lambda p: str(p.dir))

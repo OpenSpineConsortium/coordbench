@@ -95,9 +95,11 @@ much of the benchmark a run takes, and the readers of what came out.
   error; report.py, summary.py, subset.py, difficulty.py and judge.py
   (with annotate.py's cause review) leave it out and name it.
   `python3 audit.py RUN_DIR ...` audits runs finished before it, while
-  the session's transcripts are still on disk, and rebuilds the
-  summary.json of each arm it audited; run again, its audit.json is
-  what every reader, `requeue --harness-only` included, goes by.
+  the session's transcripts are still on disk, and then rebuilds the
+  summary.json of each arm it audited, of a copy (subset.py's) as the
+  copy; run again, its audit.json is what every reader, `requeue
+  --harness-only` included, goes by, and an agent whose transcripts are
+  gone from the session keeps its earlier count of spawns.
 - lane.js: the lane as a Claude Code Workflow script: prepare, spawn the
   bench agents in parallel, finish, until the queue is empty. `args.root`
   is the checkout whose lane.py runs, and is required: a default checkout

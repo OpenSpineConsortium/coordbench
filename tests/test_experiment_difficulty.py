@@ -5,6 +5,8 @@ d(t) with one and two models and with repeated runs, the paired curves,
 the area's limits, the pooling by summed counts, the degeneracy notes,
 and the reading of runs from result.json and eval.json alone."""
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -150,8 +152,16 @@ class ReadRunsTest(unittest.TestCase):
         audited = self.logs / "solo" / "coop" / "r" / "1" / "f1_f3"
         self.assertTrue((audited / "result.json").is_file(), "write_pair's layout")
         (audited / "audit.json").write_text(json.dumps({"harness_error": "the run met a full disk"}))
-        self.assertEqual(difficulty.scored_runs(self.logs, "solo"), {"m1": {"r/1/f1_f2": [True]}})
+        left_out = []
+        self.assertEqual(difficulty.scored_runs(self.logs, "solo", left_out), {"m1": {"r/1/f1_f2": [True]}})
+        self.assertEqual(left_out, ["solo/r/1/f1_f3: the run met a full disk"])
         self.assertEqual(difficulty.audited_harness_error(audited), "the run met a full disk")
+        out = self.logs / "difficulty.json"
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            difficulty.main(["--logs", str(self.logs), "--solo", "solo", "--out", str(out)])
+        self.assertIn("left out as a harness error: solo/r/1/f1_f3: the run met a full disk", printed.getvalue())
+        self.assertEqual(json.loads(out.read_text())["harness_errors_left_out"],
+                         ["solo/r/1/f1_f3: the run met a full disk"])
 
     def test_the_command_writes_difficulty_json(self):
         write_pair(self.logs, "solo", "r/1/f1_f2", "m1", passed=True)

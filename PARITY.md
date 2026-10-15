@@ -393,7 +393,8 @@ Status: different.
 - coordbench: bench/cooperbench/report.py rates_section and rate_rows: the
   first rate is eval.json both_passed over every attempted pair, a pair
   with no eval.json or an eval error failing and the agents' status
-  ignored, with a Wilson interval and a bootstrap over task sets;
+  ignored, but for a run whose audit.json (the session route's audit)
+  names a harness error, left out of every rate and listed apart, with a Wilson interval and a bootstrap over task sets;
   cooperbench_rates_section prints CooperBench's three rates apart; the
   finished-pairs rate beside them is coordbench's, labelled, which sets a
   pair an agent left in Error apart, since a harness error is not a
@@ -847,7 +848,8 @@ Unresponsiveness, Hallucination).** Status: equivalent.
   conversation, at least two exact quotes. No code at any commit.
 - coordbench: coordbench/judge.py commerrors: App F's text word for word as
   the system prompt (prompts/commerrors-appF-7.txt), one call per
-  conversation with a message (a broadcast is one message), commerrors_section
+  conversation with a message (a broadcast is one message; a run whose
+  audit.json names a harness error has none), commerrors_section
   accepts a label only when its code is in the variant and two quotes
   verify (verify_quotes: inside one message's content, whitespace and
   curly quotes folded), else keeps it as rejected with the reason;
@@ -1186,9 +1188,10 @@ Status: same.
   never in a tool call's input, and a transcript that names another agent's
   token of the same run is an orchestrator's and nobody's; a transcript
   whose reply carries the token is preferred over a newer one whose prompt
-  alone does. Every match needs a prompt that names the agent's own prompt
-  file (its run directory and name, shared by every attempt of the pair),
-  which keeps out a review agent whose prompt quoted the token. Next comes
+  alone does. Every match but the last needs a prompt that names the
+  agent's own prompt file (its run directory and name, shared by every
+  attempt of the pair), which keeps out a review agent whose prompt quoted
+  the token. Next comes
   a transcript whose prompt names that file and which carries no other run
   token in its prompt or in a tool result, for an agent that opened the
   file with a tool call and never wrote the token in a text reply (six of
@@ -1201,7 +1204,9 @@ Status: same.
   relay of the curse-1 jinja 1559 run), by the exact token in a reply.
   The audit (bench/cooperbench/session/audit.py) counts a run whose
   agent's transcript was not found, or lost its first lines, as a harness
-  error, since its tokens and tool results are then not all read.
+  error, since its tokens and tool results are then not all read, as it
+  does a run where another transcript that lost its prompt carries the
+  agent's token, which may be a second spawn.
 
 **101. Solo result.json shape and file names.** Status: same.
 - CooperBench: solo.py (119-129): one "agent" block, agent_id "solo", so
@@ -2088,10 +2093,10 @@ judge's model-judged sections, a cause draft and the resolver call a model.
 | Difficulty alone | `python3 bench/cooperbench/difficulty.py --solo RUN [--solo RUN2] --arm coop=RUN ... --out difficulty.json` | none |
 | Dataset composition, complexity, gold conflicts, version, audit, gradeability | `python3 bench/cooperbench/dataset_stats.py [--cooperbench-dir DIR] [--json out.json]`; gradeability reports from `bash bench/cooperbench/survey.sh` or `prepare_task.sh` | none (Docker compute for gradeability) |
 | Free cross-checks (heuristics, git-setting detectors, App D checks) | `python3 coordbench/judge.py heuristics RUN_DIR` | none |
-| Communication errors (Fig 6) | `python3 coordbench/judge.py commerrors RUN_DIR [--variant appF-8] [--model M]`, or with `--backend openai-compatible --model gpt-5` and COORDBENCH_JUDGE_URL and COORDBENCH_JUDGE_KEY set, for the paper's annotator model | one per conversation with a message, two when a reply is not JSON |
-| Symptoms (Table 1) | `python3 coordbench/judge.py symptoms RUN_DIR [--variant symptoms-r1-tree]` | one per failed multi-agent pair, two at most |
-| Speech acts (Fig 5c) | `python3 coordbench/judge.py speechacts RUN_DIR` | one per conversation with a message, two when a reply is not JSON |
-| Emergent tags, blame and sagas | `python3 coordbench/judge.py emergent RUN_DIR` | one per conversation with a message, two when a reply is not JSON |
+| Communication errors (Fig 6) | `python3 coordbench/judge.py commerrors RUN_DIR [--variant appF-8] [--model M]`, or with `--backend openai-compatible --model gpt-5` and COORDBENCH_JUDGE_URL and COORDBENCH_JUDGE_KEY set, for the paper's annotator model | one per conversation with a message, two when a reply is not JSON; none for a run whose audit.json names a harness error |
+| Symptoms (Table 1) | `python3 coordbench/judge.py symptoms RUN_DIR [--variant symptoms-r1-tree]` | one per failed multi-agent pair, two at most; none for a run whose audit.json names a harness error |
+| Speech acts (Fig 5c) | `python3 coordbench/judge.py speechacts RUN_DIR` | one per conversation with a message, two when a reply is not JSON; none for a run whose audit.json names a harness error |
+| Emergent tags, blame and sagas | `python3 coordbench/judge.py emergent RUN_DIR` | one per conversation with a message, two when a reply is not JSON; none for a run whose audit.json names a harness error |
 | What a judge would be sent | add `--dry-run` to any of the four, or `judge.py render SECTION PAIR_DIR` | none |
 | Causes (Table 2) | `python3 coordbench/annotate.py causes RUN_DIR --out DIR --sample 50 --seed N`, a person fills DIR/labels.json, then `annotate.py tally DIR/labels.json --apply` | none; `--draft` calls one per drawn pair, two when a reply is not JSON |
 | The symptom judge against people (App G) | `python3 coordbench/annotate.py validate RUN_DIR --out DIR`, a person fills DIR/sheet.json, then `annotate.py agreement DIR/sheet.json [OTHER/sheet.json]` | none |

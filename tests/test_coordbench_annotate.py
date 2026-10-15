@@ -108,6 +108,11 @@ class CausesTest(unittest.TestCase):
         labels = json.loads((self.out / "labels.json").read_text())
         self.assertEqual((labels["population"], labels["harness_errors_excluded"]), (3, 2))
         self.assertNotIn(str(self.runs.failed[0].resolve()), [p["pair_dir"] for p in labels["pairs"]])
+        # A judge.json from a call before the audit does not bring the run
+        # into the validation's population either.
+        for directory in self.runs.failed[:2]:
+            self.runs.judge_symptoms(directory)
+        self.assertEqual([p.dir for p in annotate.judged_pairs([self.runs.root])], [self.runs.failed[1]])
 
     def test_the_labels_file_carries_table_2_word_for_word(self):
         run(["causes", str(self.runs.root), "--out", str(self.out)])

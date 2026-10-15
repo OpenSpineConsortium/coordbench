@@ -2458,6 +2458,14 @@ class SessionTranscripts(unittest.TestCase):
         read_only = write_lines(subagents / "agent-read.jsonl", [result, lines[3]])
         self.assertIsNone(drivers.carries_token(read_only, token, prompt_file),
                           "without its prompt, a token only read is no match")
+        for path in (headless, kept_a_result, read_only):
+            path.unlink()
+        named = write_lines(subagents / "agent-named.jsonl", [lines[0], lines[2], lines[3]])
+        os.utime(named, (time.time() - 60, time.time() - 60))
+        headless = write_lines(subagents / "agent-headless.jsonl", lines[1:])
+        self.assertEqual(drivers.carries_token(named, token, prompt_file), "named")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, prompt_file), [named, headless],
+                         "a headless transcript comes after a named one, though newer")
 
     def test_usage_counts_each_api_message_once_with_its_largest_figures(self):
         usage = drivers.transcript_usage("".join(json.dumps(line) + "\n" for line in transcript_lines("t")))

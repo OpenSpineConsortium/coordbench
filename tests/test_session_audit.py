@@ -9,6 +9,7 @@ harness errors alone, and the summary leaving those runs out."""
 import contextlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -128,7 +129,7 @@ class TheAuditReadsATranscript(unittest.TestCase):
         write_lines(run_dir / "agent1_session.jsonl", [assistant("m1", TOKEN)])
         record = audit.audit_run(run_dir, roots=[])
         self.assertIs(record["agents"]["agent1"]["transcript_whole"], False)
-        self.assertEqual(record["harness_error"], "the transcript of agent1 lost its first lines")
+        self.assertEqual(record["harness_error"], "a transcript of agent1 lost its first lines")
         write_lines(run_dir / "agent1_session.jsonl", [user("Your task is in the file."), assistant("m1", TOKEN)])
         self.assertIsNone(audit.audit_run(run_dir, roots=[])["harness_error"])
         (run_dir / "agent1_session.jsonl").unlink()
@@ -152,14 +153,67 @@ class TheAuditReadsATranscript(unittest.TestCase):
             (run_dir / "result.json").write_text(json.dumps({"repo": "r", "task_id": int(run_dir.parts[-2]),
                                                              "features": [1, 2], "total_cost": 0.5}))
             (run_dir / "eval.json").write_text(json.dumps({"both_passed": True}))
-        (run_dirs[0] / "finish.out").write_text("OSError: [Errno 28] No space left on device\n")
+        # The setting's second run met the disk: the summary is rebuilt
+        # after every run of the setting is audited, not after its first.
+        (run_dirs[1] / "finish.out").write_text("OSError: [Errno 28] No space left on device\n")
         with contextlib.redirect_stdout(io.StringIO()), \
                 mock.patch.object(audit, "refresh_summary", wraps=audit.refresh_summary) as refresh:
             self.assertEqual(audit.main([str(run_dir) for run_dir in run_dirs]), 0)
         self.assertEqual([call.args[0] for call in refresh.call_args_list], [str(run_dirs[0]), str(run_dirs[2])])
         rebuilt = json.loads((logs / "t1" / "summary.json").read_text())
         self.assertEqual((rebuilt["completed"], rebuilt["failed"]), (1, 1))
-        self.assertEqual(rebuilt["results"][0]["harness_error"], "the run met a full disk")
+        self.assertEqual(rebuilt["results"][1]["harness_error"], "the run met a full disk")
+        # A copy of the runs, as subset.py makes, keeps its source's plan
+        # paths: its audit reads and rebuilds the copy, not the source.
+        copy = self.tmp / "copy"
+        shutil.copytree(logs / "t1", copy / "t1")
+        (copy / "t1" / "solo" / "r" / "1" / "f1_f2" / "finish.out").write_text("[Errno 28] No space left on device\n")
+        before = (logs / "t1" / "summary.json").read_text()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(audit.main([str(path) for path in sorted((copy / "t1").glob("solo/r/*/*"))]), 0)
+        self.assertEqual((logs / "t1" / "summary.json").read_text(), before, "the source's summary is untouched")
+        copied = json.loads((copy / "t1" / "summary.json").read_text())
+        self.assertEqual((copied["completed"], copied["failed"]), (0, 2))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            (copy / "t1" / "solo" / "r" / "1" / "f1_f2" / "plan.json").write_text("{}")
+            self.assertEqual(audit.main([str(copy / "t1" / "solo" / "r" / "1" / "f1_f2")]), 1,
+                             "a summary that cannot be rebuilt fails the command")
+
+    def test_a_re_audit_without_the_transcripts_keeps_the_attempts_it_cannot_count(self):
+        """Once the transcript roots no longer hold an agent's transcripts,
+        though its copy shows it ran, an audit run again cannot count its
+        attempts: the earlier audit's count stands, so a respawn found at
+        finish is not cleared and stays to be run again."""
+        run_dir = self.tmp / "again"
+        run_dir.mkdir()
+        lane.write_plan(run_dir, {"agents": [{"id": "agent1", "handle": {
+            "run_token": TOKEN, "log_path": str(run_dir / "agent1_stream.jsonl")}}]})
+        write_lines(run_dir / "agent1_session.jsonl", [user("Your task is in the file."), assistant("m1", TOKEN)])
+        (run_dir / "audit.json").write_text(json.dumps({"agents": {"agent1": {"attempts": 2}}}))
+        record = audit.write_audit(run_dir, roots=[])
+        self.assertEqual((record["agents"]["agent1"]["attempts"], record["harness_error"]),
+                         (2, "agent1 ran more than once"))
+        (run_dir / "audit.json").unlink()
+        record = audit.write_audit(run_dir, roots=[])
+        self.assertEqual((record["agents"]["agent1"]["attempts"], record["harness_error"]), (None, None))
+        # A copy of the run is read as itself, whatever its plan's paths say.
+        self.assertEqual(audit.copied_transcript({"log_path": "/gone/agent1_stream.jsonl"}, run_dir),
+                         run_dir / "agent1_session.jsonl")
+
+    def test_a_transcript_of_the_agent_that_lost_its_prompt_spoils_the_run(self):
+        """A transcript that lost its prompt to a full disk and carries the
+        agent's token in a reply is the agent's or a relay's: the run may
+        have spawned the agent twice, so it is a harness error, and the lane
+        takes the run as one that ran."""
+        roots = [self.tmp / "projects"]
+        prompt_file = str(self.tmp / "agent1.session-prompt.md")
+        handle = {"run_token": TOKEN, "prompt_file": prompt_file, "started": time.time() - 30}
+        write_lines(roots[0] / "p" / "s" / "subagents" / "agent-cut.jsonl",
+                    [assistant("m1", f"{TOKEN}\nStarting.")])
+        self.assertEqual(audit.spawns_of(handle, roots), (0, 1))
+        self.assertEqual(audit.attempts_of(handle, roots), 0)
+        agents = {"agent1": {"attempts": 1, "headless_transcripts": 1}}
+        self.assertEqual(audit.harness_error(agents, 0, None), "a transcript of agent1 lost its first lines")
 
     def test_a_harness_error_found_at_finish_is_an_error_and_rebuilds_the_summary(self):
         """lane.py finish keeps the score as scored_verdict, gives the run
@@ -232,6 +286,14 @@ class TheLaneHandsARunOutOnce(unittest.TestCase):
     def test_a_marker_or_a_patch_means_the_agents_ran(self):
         (self.workspaces["agent2"] / "patch.txt").write_text("diff\n")
         self.assertTrue(lane.ran_before(self.item))
+
+    def test_a_transcript_that_lost_its_prompt_means_the_agents_may_have_ran(self):
+        """Finishing a run that may have run is safer than spawning its
+        agents again over their workspaces."""
+        with mock.patch.object(audit, "spawns_of", return_value=(0, 1)):
+            self.assertTrue(lane.ran_before(self.item))
+        with mock.patch.object(audit, "spawns_of", return_value=(0, 0)):
+            self.assertFalse(lane.ran_before(self.item))
 
     def test_a_run_that_ran_is_finished_with_its_unmarked_agents_lost(self):
         (self.workspaces["agent1"] / lane.MARKER).touch()

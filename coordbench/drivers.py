@@ -1071,8 +1071,9 @@ def carries_token(path, token, prompt_file=None):
     token short of the run id's suffix, though the prompt file it had just
     read back held the token whole.
 
-    With a prompt file given, every match needs a prompt that names it,
-    which keeps out a review agent whose prompt quoted the token.
+    With a prompt file given, every match but a headless one needs a
+    prompt that names it, which keeps out a review agent whose prompt
+    quoted the token.
     "headless" is a transcript that does not open on its prompt: a disk
     that was full as the agent was spawned dropped the first lines and
     kept the rest (one relay of the curse-1 jinja 1559 run did so). Its

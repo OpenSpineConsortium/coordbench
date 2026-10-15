@@ -214,14 +214,16 @@ def wait_for_disk(log_dir, minimum_gb, minutes):
 def ran_before(item):
     """Whether an agent of the item's prepared run ever ran: a marker or a
     patch.txt in its workspace, or a subagent transcript spawned as it
-    (audit.attempts_of). A plan whose relay was dropped before any agent
-    was spawned has none, and is handed out again."""
+    (audit.spawns_of), one that lost its prompt to a full disk included,
+    since finishing a run that may have run is safer than spawning its
+    agents again over their workspace. A plan whose relay was dropped
+    before any agent was spawned has none, and is handed out again."""
     for agent in read_plan(item["run_dir"]).get("agents") or []:
         handle = agent.get("handle") or {}
         workspace = handle.get("workspace")
         if workspace and ((Path(workspace) / MARKER).exists() or (Path(workspace) / "patch.txt").exists()):
             return True
-        if audit.attempts_of(handle):
+        if any(audit.spawns_of(handle)):
             return True
     return False
 

@@ -15,8 +15,11 @@ output and here:
   the paper's k/n: eval.json both_passed over every attempted pair,
   where a pair with no eval.json or an eval error counts as a failure
   and the agents' status is ignored, as CooperBench's runner scores an
-  errored agent's patch. Beside it are CooperBench's own three rates
-  (summary.json's passed / (passed + failed), the console's and the
+  errored agent's patch; a run whose audit.json (the session route's
+  audit) names a harness error is left out of every rate and figure and
+  listed under "Runs left out as harness errors". Beside it are
+  CooperBench's own three rates (summary.json's passed / (passed +
+  failed), the console's and the
   ablation page's passed / evaluated, the website's passed / attempted)
   and coordbench's rate on the pairs its agents finished, where a pair an
   agent left in Error is set apart rather than failed: a harness error is
@@ -653,8 +656,10 @@ def rates_section(groups, seed):
     body = table(header, rate_rows(groups, seed)) + [
         "", "The first rate is the paper's k/n: eval.json both_passed over every attempted pair, a pair "
         "without an evaluation or with an eval error failing and the agents' status ignored, as "
-        "CooperBench scores an errored agent's patch. The rate on finished pairs is coordbench's: a pair "
-        "an agent left in Error, or with no usable evaluation, is set apart (Errors) rather than failed. "
+        "CooperBench scores an errored agent's patch; a run the session route's audit found a harness "
+        "error is left out, and listed apart when there is one. The rate on finished pairs is coordbench's: "
+        "a pair an agent left in Error, or with no usable evaluation, is set apart (Errors) rather than "
+        "failed. "
         "The bootstrap resamples task sets.", "", REFERENCES["rates"]]
     return section("Pass rates", body)
 
