@@ -1,0 +1,57 @@
+diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
+index d21b83aa..39d841f0 100644
+--- a/src/jinja2/ext.py
++++ b/src/jinja2/ext.py
+@@ -1,4 +1,5 @@
+ """Extension API for adding custom tags and behavior."""
++import hashlib
+ import pprint
+ import re
+ import typing as t
+@@ -257,6 +258,9 @@ class InternationalizationExtension(Extension):
+     def __init__(self, environment: Environment) -> None:
+         super().__init__(environment)
+         environment.globals["_"] = _gettext_alias
++        # Versions are kept per message, keyed by the MD5 of its text, so
++        # the key has one fixed size however long or exotic the message is.
++        self._translation_versions: t.Dict[str, str] = {}
+         environment.extend(
+             install_gettext_translations=self._install,
+             install_null_translations=self._install_null,
+@@ -264,8 +268,36 @@ class InternationalizationExtension(Extension):
+             uninstall_gettext_translations=self._uninstall,
+             extract_translations=self._extract,
+             newstyle_gettext=False,
++            set_translation_version=self._set_translation_version,
++            get_translation_version=self._get_translation_version,
++            compare_translation_versions=self._compare_translation_versions,
++            translation_version_control=True,
+         )
+ 
++    @staticmethod
++    def _version_key(message: str) -> str:
++        return hashlib.md5(message.encode("utf-8")).hexdigest()
++
++    def _set_translation_version(self, message: str, version: str) -> None:
++        """Store ``version`` for ``message``, replacing any earlier one."""
++        self._translation_versions[self._version_key(message)] = version
++
++    def _get_translation_version(self, message: str) -> t.Optional[str]:
++        """Return the version stored for ``message``, or ``None``."""
++        return self._translation_versions.get(self._version_key(message))
++
++    def _compare_translation_versions(self, message1: str, message2: str) -> bool:
++        """Return ``True`` if both messages have the same version. A message
++        with no version never matches, not even another unversioned one.
++        """
++        version1 = self._get_translation_version(message1)
++        version2 = self._get_translation_version(message2)
++
++        if version1 is None or version2 is None:
++            return False
++
++        return version1 == version2
++
+     def _install(
+         self, translations: "_SupportedTranslations", newstyle: t.Optional[bool] = None
+     ) -> None:

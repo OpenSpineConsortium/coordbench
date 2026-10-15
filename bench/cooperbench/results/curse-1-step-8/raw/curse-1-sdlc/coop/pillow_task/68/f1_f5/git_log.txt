@@ -1,0 +1,47 @@
+commit 25cb0e139c076f627c19fa06768dcd43737d8def (main)
+Merge: 3876394a7 650a9d24b
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 12:48:56 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit 650a9d24b1adf8dbaaefca6a97dfa9196c00158c (claude/5)
+Merge: e55782498 3876394a7
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:48:49 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/5
+    
+    # Conflicts:
+    #       src/PIL/ImageOps.py
+
+commit e557824980bb1baea2784898d533457710b6bf4b
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:48:14 2026 +0000
+
+    Add a logger parameter to ImageOps.exif_transpose
+    
+    A callable or a logging.Logger receives one message per event: the
+    orientation found, the transposition applied, the metadata changed and the
+    time taken. Without a logger nothing changes.
+
+ Tests/test_imageops.py | 112 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/ImageOps.py    | 118 +++++++++++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 222 insertions(+), 8 deletions(-)
+
+commit 3876394a7f348abc78c2f488b1ab96bb3212b2be
+Merge: 5d52ede58 e1aaffd0f
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 12:46:39 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit e1aaffd0fe5556f1d120ceb097b0d964c985016c (claude/1)
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 12:46:33 2026 +0000
+
+    Support tuple format for XMP in exif_transpose
+
+ Tests/test_imageops.py | 21 +++++++++++++++++++++
+ src/PIL/ImageOps.py    | 20 +++++++++++++++-----
+ 2 files changed, 36 insertions(+), 5 deletions(-)

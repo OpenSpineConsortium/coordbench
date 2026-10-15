@@ -1,0 +1,362 @@
+diff --git a/Tests/test_imageops.py b/Tests/test_imageops.py
+index 3621aa50f..e49fe15cb 100644
+--- a/Tests/test_imageops.py
++++ b/Tests/test_imageops.py
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+ 
++import logging
++
+ import pytest
+ 
+ from PIL import Image, ImageDraw, ImageOps, ImageStat, features
+@@ -458,6 +460,27 @@ def test_exif_transpose_xml_without_xmp() -> None:
+         assert 0x0112 not in transposed_im.getexif()
+ 
+ 
++def test_exif_transpose_with_xmp_tuple() -> None:
++    with Image.open("Tests/images/xmp_tags_orientation.png") as im:
++        assert im.getexif()[0x0112] == 3
++
++        im.info["xmp"] = (b"test",)
++        transposed_im = ImageOps.exif_transpose(im)
++        assert 0x0112 not in transposed_im.getexif()
++        assert transposed_im.info["xmp"] == (b"test",)
++
++        im.info["xmp"] = (
++            b'<x:xmpmeta><rdf:Description tiff:Orientation="3"/></x:xmpmeta>',
++            "<tiff:Orientation>3</tiff:Orientation>",
++        )
++        im.getexif()[0x0112] = 3
++        transposed_im = ImageOps.exif_transpose(im)
++        assert transposed_im.info["xmp"] == (
++            b"<x:xmpmeta><rdf:Description /></x:xmpmeta>",
++            "",
++        )
++
++
+ def test_exif_transpose_in_place() -> None:
+     with Image.open("Tests/images/orientation_rectangle.jpg") as im:
+         assert im.size == (2, 1)
+@@ -580,3 +603,121 @@ def test_autocontrast_preserve_one_color(color: tuple[int, int, int]) -> None:
+         img, cutoff=10, preserve_tone=True
+     )  # single color 10 cutoff
+     assert_image_equal(img, out)
++
++
++def test_exif_transpose_logger_callable() -> None:
++    messages: list[str] = []
++    with Image.open("Tests/images/hopper_orientation_6.jpg") as im:
++        original_exif = im.info["exif"]
++        transposed_im = ImageOps.exif_transpose(im, logger=messages.append)
++
++    assert 0x0112 not in transposed_im.getexif()
++    assert all(isinstance(message, str) for message in messages)
++    text = "\n".join(messages)
++    assert "found orientation tag 6" in text
++    assert "ROTATE_270" in text
++    assert "removed orientation tag" in text
++    assert "updated info['exif']" in text
++    assert "completed in" in text
++    assert transposed_im.info["exif"] != original_exif
++
++
++def test_exif_transpose_logger_does_not_change_result() -> None:
++    with Image.open("Tests/images/hopper_orientation_3.jpg") as im:
++        expected = ImageOps.exif_transpose(im)
++        actual = ImageOps.exif_transpose(im, logger=lambda message: None)
++    assert_image_equal(actual, expected)
++    assert actual.info == expected.info
++
++
++def test_exif_transpose_logger_no_orientation() -> None:
++    messages: list[str] = []
++    im = hopper()
++    transposed_im = ImageOps.exif_transpose(im, logger=messages.append)
++    assert_image_equal(transposed_im, im)
++    assert any("no orientation tag found" in message for message in messages)
++    assert any("no transposition needed" in message for message in messages)
++    assert not any("applying" in message for message in messages)
++
++
++def test_exif_transpose_logger_in_place() -> None:
++    messages: list[str] = []
++    with Image.open("Tests/images/orientation_rectangle.jpg") as im:
++        result = ImageOps.exif_transpose(im, in_place=True, logger=messages.append)
++        assert result is None
++        assert im.size == (1, 2)
++    text = "\n".join(messages)
++    assert "in_place=True" in text
++    assert "ROTATE_90" in text
++
++
++@pytest.mark.parametrize("suffix", ("", "_exiftool"))
++def test_exif_transpose_logger_xmp(suffix: str) -> None:
++    messages: list[str] = []
++    with Image.open("Tests/images/xmp_tags_orientation" + suffix + ".png") as im:
++        ImageOps.exif_transpose(im, logger=messages.append)
++    assert any("updated info['XML:com.adobe.xmp']" in message for message in messages)
++
++
++def test_exif_transpose_logger_unknown_orientation() -> None:
++    messages: list[str] = []
++    im = hopper()
++    im.getexif()[0x0112] = 9
++    transposed_im = ImageOps.exif_transpose(im, logger=messages.append)
++    assert_image_equal(transposed_im, im)
++    assert any("unrecognized orientation 9" in message for message in messages)
++
++
++def test_exif_transpose_logger_xmp_tuple() -> None:
++    messages: list[str] = []
++    with Image.open("Tests/images/xmp_tags_orientation.png") as im:
++        im.info["xmp"] = (b'<rdf:Description tiff:Orientation="3"/>', b"test")
++        ImageOps.exif_transpose(im, logger=messages.append)
++    assert any("updated info['xmp']" in message for message in messages)
++
++
++def test_exif_transpose_logging_logger(caplog: pytest.LogCaptureFixture) -> None:
++    logger = logging.getLogger("test_exif_transpose")
++    with Image.open("Tests/images/hopper_orientation_8.jpg") as im:
++        with caplog.at_level(logging.INFO, logger=logger.name):
++            ImageOps.exif_transpose(im, logger=logger)
++    assert caplog.records
++    assert all(record.name == logger.name for record in caplog.records)
++    assert any("ROTATE_90" in record.getMessage() for record in caplog.records)
++
++    # Unrecognized orientations are warnings
++    caplog.clear()
++    im = hopper()
++    im.getexif()[0x0112] = 0
++    with caplog.at_level(logging.INFO, logger=logger.name):
++        ImageOps.exif_transpose(im, logger=logger)
++    assert [r.levelno for r in caplog.records if "unrecognized" in r.getMessage()] == [
++        logging.WARNING
++    ]
++
++
++def test_exif_transpose_logging_logger_adapter(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    adapter = logging.LoggerAdapter(logging.getLogger("test_exif_transpose"), {})
++    with Image.open("Tests/images/hopper_orientation_2.jpg") as im:
++        with caplog.at_level(logging.INFO, logger="test_exif_transpose"):
++            ImageOps.exif_transpose(im, logger=adapter)
++    assert any("FLIP_LEFT_RIGHT" in record.getMessage() for record in caplog.records)
++
++
++def test_exif_transpose_logger_not_logging_by_default(
++    caplog: pytest.LogCaptureFixture,
++) -> None:
++    with caplog.at_level(logging.DEBUG):
++        with Image.open("Tests/images/hopper_orientation_6.jpg") as im:
++            ImageOps.exif_transpose(im)
++    assert not [r for r in caplog.records if "exif_transpose" in r.getMessage()]
++
++
++def test_exif_transpose_invalid_logger() -> None:
++    with pytest.raises(TypeError):
++        ImageOps.exif_transpose(
++            hopper(),
++            logger="not a logger",  # type: ignore[arg-type]
++        )
+diff --git a/src/PIL/ImageOps.py b/src/PIL/ImageOps.py
+index fef1d7328..23c17602c 100644
+--- a/src/PIL/ImageOps.py
++++ b/src/PIL/ImageOps.py
+@@ -19,13 +19,18 @@
+ from __future__ import annotations
+ 
+ import functools
++import logging
+ import operator
+ import re
+-from collections.abc import Sequence
+-from typing import Literal, Protocol, cast, overload
++import time
++from collections.abc import Callable, Sequence
++from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
+ 
+ from . import ExifTags, Image, ImagePalette
+ 
++if TYPE_CHECKING:
++    _Logger = Callable[[str], object] | logging.Logger | logging.LoggerAdapter[Any]
++
+ #
+ # helpers
+ 
+@@ -673,17 +678,62 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
+     return _lut(image, lut)
+ 
+ 
++def _log_completed(log: Callable[[str, int], None], started: float) -> None:
++    milliseconds = (time.perf_counter() - started) * 1000
++    log(f"exif_transpose: completed in {milliseconds:.3f} ms", logging.INFO)
++
++
++def _log_function(logger: _Logger | None) -> Callable[[str, int], None] | None:
++    """
++    Turn the ``logger`` argument of :py:func:`exif_transpose` into one function that
++    takes a message and a :py:mod:`logging` level, or ``None`` if there is no logger.
++
++    A standard logger receives the message at that level. Any other callable is
++    called with the message alone. An object that only has methods named like the
++    levels (``info``, ``warning``) is accepted too.
++    """
++    if logger is None:
++        return None
++    if isinstance(logger, (logging.Logger, logging.LoggerAdapter)):
++        return lambda message, level: logger.log(level, message)
++    if callable(logger):
++        return lambda message, level: logger(message)
++
++    method_names = {logging.INFO: "info", logging.WARNING: "warning"}
++
++    def log_with_method(message: str, level: int) -> None:
++        getattr(logger, method_names[level])(message)
++
++    if all(callable(getattr(logger, name, None)) for name in method_names.values()):
++        return log_with_method
++    msg = "logger must be callable or a logging.Logger"
++    raise TypeError(msg)
++
++
+ @overload
+-def exif_transpose(image: Image.Image, *, in_place: Literal[True]) -> None: ...
++def exif_transpose(
++    image: Image.Image,
++    *,
++    in_place: Literal[True],
++    logger: _Logger | None = None,
++) -> None: ...
+ 
+ 
+ @overload
+ def exif_transpose(
+-    image: Image.Image, *, in_place: Literal[False] = False
++    image: Image.Image,
++    *,
++    in_place: Literal[False] = False,
++    logger: _Logger | None = None,
+ ) -> Image.Image: ...
+ 
+ 
+-def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image | None:
++def exif_transpose(
++    image: Image.Image,
++    *,
++    in_place: bool = False,
++    logger: _Logger | None = None,
++) -> Image.Image | None:
+     """
+     If an image has an EXIF Orientation tag, other than 1, transpose the image
+     accordingly, and remove the orientation data.
+@@ -694,10 +744,31 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+         If ``False`` (default), a new :py:class:`~PIL.Image.Image` object is returned
+         with the transposition applied. If there is no transposition, a copy of the
+         image will be returned.
+-    """
++    :param logger: Optional. Keyword-only argument.
++        Either a callable, which is called with one message string per event, or a
++        :py:class:`logging.Logger`, which receives the messages at the ``INFO``
++        level, or at the ``WARNING`` level for an orientation value that is not
++        understood. The messages say which orientation was found, which
++        transformation was applied, which metadata was changed, and how long the
++        call took. If ``None`` (default), nothing is logged.
++    """
++    log = _log_function(logger)
++    if log:
++        started = time.perf_counter()
++        log(
++            f"exif_transpose: processing {image.mode} image of size {image.size} "
++            f"(in_place={in_place})",
++            logging.INFO,
++        )
++
+     image.load()
+     image_exif = image.getexif()
+     orientation = image_exif.get(ExifTags.Base.Orientation, 1)
++    if log:
++        if ExifTags.Base.Orientation in image_exif:
++            log(f"exif_transpose: found orientation tag {orientation}", logging.INFO)
++        else:
++            log("exif_transpose: no orientation tag found, assuming 1", logging.INFO)
+     method = {
+         2: Image.Transpose.FLIP_LEFT_RIGHT,
+         3: Image.Transpose.ROTATE_180,
+@@ -708,6 +779,11 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+         8: Image.Transpose.ROTATE_90,
+     }.get(orientation)
+     if method is not None:
++        if log:
++            log(
++                f"exif_transpose: applying {method.name} for orientation {orientation}",
++                logging.INFO,
++            )
+         if in_place:
+             image.im = image.im.transpose(method)
+             image._size = image.im.size
+@@ -717,6 +793,8 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+ 
+         exif = exif_image.getexif()
+         if ExifTags.Base.Orientation in exif:
++            if log:
++                info_before = dict(exif_image.info)
+             del exif[ExifTags.Base.Orientation]
+             if "exif" in exif_image.info:
+                 exif_image.info["exif"] = exif.tobytes()
+@@ -729,13 +807,47 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+                         r"<tiff:Orientation>([0-9])</tiff:Orientation>",
+                     ):
+                         value = exif_image.info[key]
+-                        exif_image.info[key] = (
+-                            re.sub(pattern, "", value)
+-                            if isinstance(value, str)
+-                            else re.sub(pattern.encode(), b"", value)
+-                        )
++                        if isinstance(value, str):
++                            value = re.sub(pattern, "", value)
++                        elif isinstance(value, tuple):
++                            # XMP wrapped in <?xpacket> tags may be stored as a
++                            # tuple, for example after a rotation by macOS
++                            # QuickActions or QuickLook
++                            value = tuple(
++                                re.sub(pattern, "", v)
++                                if isinstance(v, str)
++                                else re.sub(pattern.encode(), b"", v)
++                                for v in value
++                            )
++                        else:
++                            value = re.sub(pattern.encode(), b"", value)
++                        exif_image.info[key] = value
++            if log:
++                log("exif_transpose: removed orientation tag", logging.INFO)
++                for key, before in info_before.items():
++                    if exif_image.info[key] != before:
++                        log(f"exif_transpose: updated info[{key!r}]", logging.INFO)
++        elif log:
++            log(
++                "exif_transpose: the transposed image has no orientation tag to "
++                "remove, so its metadata is unchanged",
++                logging.WARNING,
++            )
++        if log:
++            _log_completed(log, started)
+         if not in_place:
+             return transposed_image
+-    elif not in_place:
+-        return image.copy()
++    else:
++        if log:
++            if orientation == 1:
++                log("exif_transpose: no transposition needed", logging.INFO)
++            else:
++                log(
++                    f"exif_transpose: unrecognized orientation {orientation!r}, "
++                    "image not transposed",
++                    logging.WARNING,
++                )
++            _log_completed(log, started)
++        if not in_place:
++            return image.copy()
+     return None

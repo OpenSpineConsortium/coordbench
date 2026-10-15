@@ -1,0 +1,81 @@
+{
+  "run_name": "curse-1-sdlc",
+  "agent_framework": "claude_code_subagent",
+  "model": "claude-sonnet-5-5",
+  "setting": "coop",
+  "concurrency": 1,
+  "total_tasks": 1,
+  "started_at": "2026-10-15T05:46:36.022661",
+  "arm": "sdlc",
+  "driver": "session",
+  "options": {},
+  "agent_models": {},
+  "max_turns": null,
+  "timeout_s": 2700.0,
+  "disallowed_tools": [
+    "WebFetch",
+    "WebSearch"
+  ],
+  "scoring_timeout_s": 10800,
+  "cooperbench_sandbox_timeout_s": 600,
+  "isolation": "advisory",
+  "differences_from_cooperbench": [
+    "the agent is a subagent of an orchestrating Claude Code session on the host, which picks its model",
+    "isolation is advisory: the subagent's file tools reach the host, and only its instructions keep it to its workspace",
+    "no stream and no result event: steps and durations are unknown; tokens are summed from the subagent's transcript and the cost is estimated from them"
+  ],
+  "provenance": {
+    "cooperbench": {
+      "dir": "/root/cooperbench",
+      "commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+      "modified": [
+        "src/cooperbench/agents/claude_code/setup.sh"
+      ],
+      "modified_count": 1
+    },
+    "dataset": {
+      "dir": "/root/cooperbench/dataset",
+      "git_tree": "9c9e5802e06d89c7f84a9ebb13c3a5998b007e36",
+      "last_commit": "55a63e9329e1ef4e9957113534d5cad57c0f1f88",
+      "modified": false,
+      "sha256": "b0d33805162fa8001deba5f891de65e7b54e96351c2f21d810a0f0ac142710f6",
+      "files": 774
+    },
+    "coordbench": {
+      "dir": "/home/user/coordbench/coordbench",
+      "commit": "5e4860e4a2157f4ef14397f877fd9c3dccd81a14",
+      "modified": [
+        "coordbench/vendor/VENDORED",
+        "coordbench/vendor/sdlc_protocol/adapters/github.py",
+        "coordbench/vendor/sdlc_protocol/board.py",
+        "coordbench/vendor/sdlc_protocol/cli.py",
+        "coordbench/vendor/sdlc_protocol/coordinator.py",
+        "coordbench/vendor/sdlc_protocol/gate.py",
+        "coordbench/vendor/sdlc_protocol/guard.py",
+        "coordbench/vendor/sdlc_protocol/labels.py",
+        "coordbench/vendor/sdlc_protocol/team.py"
+      ],
+      "modified_count": 9
+    }
+  },
+  "images": {
+    "akhatua/cooperbench-pallets-click:task2068": {
+      "image": "akhatua/cooperbench-pallets-click:task2068",
+      "id": "sha256:8367c8c855d5f19c6e8eab3915d0bc725b970f1e5cab4b35319b500f4e2d7c18",
+      "repo_digests": [
+        "akhatua/cooperbench-pallets-click@sha256:8367c8c855d5f19c6e8eab3915d0bc725b970f1e5cab4b35319b500f4e2d7c18"
+      ],
+      "overlay": "cloud-session"
+    }
+  },
+  "pairs": [
+    {
+      "repo": "pallets_click_task",
+      "task_id": 2068,
+      "features": [
+        1,
+        6
+      ]
+    }
+  ]
+}

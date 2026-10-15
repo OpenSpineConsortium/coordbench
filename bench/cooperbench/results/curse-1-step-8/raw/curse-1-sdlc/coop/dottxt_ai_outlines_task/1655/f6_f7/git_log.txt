@@ -1,0 +1,47 @@
+commit 9c93556ab0152ce3aa130bd6273160b8dc96cf50 (main)
+Merge: 4c3d851 45cc760
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 11:11:41 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 45cc76019b14e4e18a92681b28503f61e78f5ca3 (claude/6)
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 11:11:37 2026 +0000
+
+    feat(types): add url type with regex pattern for HTTP and HTTPS URLs
+
+ outlines/types/__init__.py | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+commit 4c3d8513d64cf3a1c40bf0b2bf66580779cf6cb6
+Merge: 4dd7802 57c5c59
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 11:10:39 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit 57c5c591cebfec1c26b7bc65244128dd6da96b3c (claude/7)
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:10:35 2026 +0000
+
+    Keep the submission to source files: drop the scratch test rows
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ tests/types/test_custom_types.py | 14 --------------
+ 1 file changed, 14 deletions(-)
+
+commit 90e3b7e324aea48defda5d36bf58fc8bb241daa0
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 11:10:27 2026 +0000
+
+    feat(types): add credit_card regex type for 16-digit card numbers
+    
+    Accepts four groups of four digits with no separators, spaces only or hyphens only, and refuses a mix of the two separators.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ outlines/types/__init__.py       | 10 ++++++++++
+ tests/types/test_custom_types.py | 14 ++++++++++++++
+ 2 files changed, 24 insertions(+)

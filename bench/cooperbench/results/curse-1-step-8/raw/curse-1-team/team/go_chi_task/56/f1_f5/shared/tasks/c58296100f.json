@@ -1,0 +1,1 @@
+{"id": "c58296100f", "title": "Implement feature 5", "owner": "agent2", "status": "done", "created_by": "bench-runner", "created_at": 1792068002.0134385, "last_note": "patch at /workspace/shared/agent2.patch (cors.go new, tree.go bottom hunk only; context.go and mux.go untouched; applies cleanly to HEAD)", "metadata": {"feature_id": 5, "assigned_to": "agent2"}}

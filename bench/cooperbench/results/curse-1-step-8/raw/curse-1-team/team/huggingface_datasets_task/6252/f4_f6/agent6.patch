@@ -1,0 +1,15 @@
+diff --git a/src/datasets/features/image.py b/src/datasets/features/image.py
+index 7555e160a..29115d807 100644
+--- a/src/datasets/features/image.py
++++ b/src/datasets/features/image.py
+@@ -188,6 +188,10 @@ class Image:
+         image.load()  # to avoid "Too many open files" errors
+         if self.mode and self.mode != image.mode:
+             image = image.convert(self.mode)
++        # Most vision models and viewers expect RGB, so a CMYK image that no mode was requested for
++        # is converted to RGB here; a user who asked for CMYK explicitly keeps it.
++        if image.mode == "CMYK" and self.mode != "CMYK":
++            image = image.convert("RGB")
+         return image
+ 
+     def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:

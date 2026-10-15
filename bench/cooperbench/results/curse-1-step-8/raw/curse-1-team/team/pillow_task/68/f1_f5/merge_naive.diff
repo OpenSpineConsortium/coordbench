@@ -1,0 +1,28 @@
+diff --cc src/PIL/ImageOps.py
+index 9c4a684da,f881e96ae..000000000
+--- a/src/PIL/ImageOps.py
++++ b/src/PIL/ImageOps.py
+@@@ -835,11 -835,15 +835,23 @@@ def exif_transpose
+                          r"<tiff:Orientation>([0-9])</tiff:Orientation>",
+                      ):
+                          value = exif_image.info[key]
+++<<<<<<< HEAD
+ +                        exif_image.info[key] = (
+ +                            re.sub(pattern, "", value)
+ +                            if isinstance(value, str)
+ +                            else re.sub(pattern.encode(), b"", value)
+ +                        )
+++=======
++                         if isinstance(value, str):
++                             value = re.sub(pattern, "", value)
++                         elif isinstance(value, tuple):
++                             value = tuple(
++                                 re.sub(pattern.encode(), b"", v) for v in value
++                             )
++                         else:
++                             value = re.sub(pattern.encode(), b"", value)
++                         exif_image.info[key] = value
+++>>>>>>> agent1
+          else:
+              _log(
+                  logger, "exif_transpose: no orientation tag in EXIF metadata to remove"

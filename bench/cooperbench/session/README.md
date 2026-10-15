@@ -76,6 +76,15 @@ much of the benchmark a run takes, and the readers of what came out.
   plain-text rule: a JSON file is written again with its non-ASCII
   escaped, a text file gets its missing final newline, and a file that
   cannot be made plain text is left out and named.
+- subset.py: one sample's runs copied out of a tag's logs into logs of
+  their own, with each arm's config.json and a summary.json rebuilt from
+  the copied pairs, so the three tools above read the stratified sample
+  alone when the tag also holds pairs outside it, as a tag grown from a
+  pilot does; the sample is the queue's items that carry a sample
+  record. Only finished runs are copied, transcripts included, and the
+  sample's lines of the queue go beside them, where bundle.py looks;
+  runs not finished are named, so a sample still running reads as
+  incomplete, and OUT must be new or empty.
 
 What differs from a run on the runners is in coordbench/README.md's
 session-driver section and in each pair's result.json (driver: session,
@@ -102,6 +111,9 @@ and grown by adding again with a larger N once the window has reset.
     LOGS=~/cooperbench/logs; Q=$LOGS/TAG-queue.jsonl
     python3 bench/cooperbench/session/strata.py --published coop-index.json \
         --by language,conflict,published table            # what there is
+    python3 bench/cooperbench/session/strata.py --published coop-index.json --by language,conflict,published \
+        --skip openai_tiktoken_task/0,dottxt_ai_outlines_task/1706,llama_index_task/18813 \
+        sample 8                                          # the order the add below queues, same skip and seed
     python3 bench/cooperbench/session/queue.py add $Q --tag TAG \
         --arms solo,coop,sdlc,coop-git,team --sample 8 \
         --stratify language,conflict,published --published coop-index.json \
@@ -113,6 +125,8 @@ and grown by adding again with a larger N once the window has reset.
         --run sdlc=TAG-sdlc --run coop-git=TAG-coop-git --run team=TAG-team --cooperbench-dir ~/cooperbench
     python3 bench/cooperbench/session/summary.py --logs $LOGS --tag TAG --out summary.json --csv pairs.csv --md summary.md
     python3 bench/cooperbench/session/bundle.py --logs $LOGS --tag TAG --out bench/cooperbench/results/TAG
+    python3 bench/cooperbench/session/subset.py $Q $LOGS $LOGS-sample    # then the three above with --logs $LOGS-sample;
+        # it copies the sample's finished runs and its lines of the queue, and names what is not finished
 
 The three tasks skipped above download at test time, which the cloud
 session's network refuses; a runner can take them. coop-index.json is

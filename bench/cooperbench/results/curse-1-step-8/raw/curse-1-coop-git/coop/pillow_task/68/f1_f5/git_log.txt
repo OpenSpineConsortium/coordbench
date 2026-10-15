@@ -1,0 +1,43 @@
+commit 84e696623542721821008567577c8b4bef85577d
+Merge: f0f1ab98e 4c65473ca
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:49:42 2026 +0000
+
+    Merge team/agent2
+
+commit 15b6534277acc6d3e591e0b74eef13c787f06d5a (agent2, agent1)
+Merge: ec318a92a f0f1ab98e
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:49:24 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit ec318a92aef08b2448bbc4839c2f4d1d9579d95c
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:48:56 2026 +0000
+
+    Add logger parameter to ImageOps.exif_transpose
+
+ Tests/test_imageops.py | 126 +++++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/ImageOps.py    | 125 +++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 238 insertions(+), 13 deletions(-)
+
+commit 4c65473ca3bb1b67965b2d180857273a0e6095e0
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:48:56 2026 +0000
+
+    Add logger parameter to ImageOps.exif_transpose
+
+ Tests/test_imageops.py | 126 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/ImageOps.py    | 127 +++++++++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 239 insertions(+), 14 deletions(-)
+
+commit f0f1ab98eef1408d559cc9e872f569c77c792a05
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:46:45 2026 +0000
+
+    Support tuple format for XMP in exif_transpose
+
+ Tests/test_imageops.py | 16 ++++++++++++++++
+ src/PIL/ImageOps.py    | 18 +++++++++++++-----
+ 2 files changed, 29 insertions(+), 5 deletions(-)

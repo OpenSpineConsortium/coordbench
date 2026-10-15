@@ -1,0 +1,72 @@
+diff --cc crates/typst/src/foundations/str.rs
+index 0844f739e,2fc1d2df8..000000000
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@@ -190,15 -190,12 +190,22 @@@ impl Str 
+          #[named]
+          count: Option<usize>,
+          /// Characters to remove from the start of the string before the first
+++<<<<<<< HEAD
+ +        /// grapheme cluster is extracted. Each character of this string is
+++=======
++         /// grapheme clusters are extracted. Each character of this string is
+++>>>>>>> agent1
+          /// removed, in any order and as often as it occurs. If the string is
+          /// empty after removing them, this fails with an error.
+          #[named]
+          strip: Option<Str>,
+      ) -> StrResult<Value> {
+++<<<<<<< HEAD
+ +        if let Some(count) = count {
+ +            check_count(count)?;
+ +        }
+++=======
+++>>>>>>> agent1
+          let mut s = self.as_str();
+          if let Some(strip) = &strip {
+              s = s.trim_start_matches(|c: char| strip.as_str().contains(c));
+@@@ -210,6 -207,7 +217,10 @@@
+                  .map(|g| Value::Str(g.into()))
+                  .ok_or_else(string_is_empty),
+              Some(count) => {
+++<<<<<<< HEAD
+++=======
++                 check_count(count)?;
+++>>>>>>> agent1
+                  let graphemes: Vec<&str> = s.graphemes(true).take(count).collect();
+                  collect_graphemes(graphemes, count, s)
+              }
+@@@ -230,15 -228,12 +241,22 @@@
+          #[named]
+          count: Option<usize>,
+          /// Characters to remove from the end of the string before the last
+++<<<<<<< HEAD
+ +        /// grapheme cluster is extracted. Each character of this string is
+++=======
++         /// grapheme clusters are extracted. Each character of this string is
+++>>>>>>> agent1
+          /// removed, in any order and as often as it occurs. If the string is
+          /// empty after removing them, this fails with an error.
+          #[named]
+          strip: Option<Str>,
+      ) -> StrResult<Value> {
+++<<<<<<< HEAD
+ +        if let Some(count) = count {
+ +            check_count(count)?;
+ +        }
+++=======
+++>>>>>>> agent1
+          let mut s = self.as_str();
+          if let Some(strip) = &strip {
+              s = s.trim_end_matches(|c: char| strip.as_str().contains(c));
+@@@ -250,6 -245,7 +268,10 @@@
+                  .map(|g| Value::Str(g.into()))
+                  .ok_or_else(string_is_empty),
+              Some(count) => {
+++<<<<<<< HEAD
+++=======
++                 check_count(count)?;
+++>>>>>>> agent1
+                  let mut graphemes: Vec<&str> =
+                      s.graphemes(true).rev().take(count).collect();
+                  graphemes.reverse();

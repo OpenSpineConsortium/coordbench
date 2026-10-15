@@ -1,0 +1,45 @@
+diff --git a/src/datasets/features/image.py b/src/datasets/features/image.py
+index 7555e160a..310d15d80 100644
+--- a/src/datasets/features/image.py
++++ b/src/datasets/features/image.py
+@@ -61,7 +61,14 @@ class Image:
+ 
+     Args:
+         mode (`str`, *optional*):
+-            The mode to convert the image to. If `None`, the native mode of the image is used.
++            The mode to convert the image to. If `None`, the native mode of the image is used,
++            except that images in CMYK mode are converted to RGB, since most vision models and
++            visualization tools expect RGB input.
++        crop_margin (`int`, *optional*):
++            Number of pixels to crop from each edge (left, top, right and bottom) of the image when decoding,
++            for example to remove a watermark or a border. If `None` or `0`, the image is not cropped.
++            An image too small to keep any pixels after the crop (width or height not larger than
++            twice the margin) is returned uncropped.
+         decode (`bool`, defaults to `True`):
+             Whether to decode the image data. If `False`,
+             returns the underlying dictionary in the format `{"path": image_path, "bytes": image_bytes}`.
+@@ -84,6 +91,7 @@ class Image:
+     mode: Optional[str] = None
+     decode: bool = True
+     id: Optional[str] = None
++    crop_margin: Optional[int] = None
+     # Automatically constructed
+     dtype: ClassVar[str] = "PIL.Image.Image"
+     pa_type: ClassVar[Any] = pa.struct({"bytes": pa.binary(), "path": pa.string()})
+@@ -186,8 +194,16 @@ class Image:
+         else:
+             image = PIL.Image.open(BytesIO(bytes_))
+         image.load()  # to avoid "Too many open files" errors
++        if self.crop_margin:
++            width, height = image.size
++            margin = self.crop_margin
++            if margin * 2 < width and margin * 2 < height:
++                image = image.crop((margin, margin, width - margin, height - margin))
+         if self.mode and self.mode != image.mode:
+             image = image.convert(self.mode)
++        elif not self.mode and image.mode == "CMYK":
++            # CMYK is not understood by most vision models and viewers, so hand out RGB unless a mode was asked for
++            image = image.convert("RGB")
+         return image
+ 
+     def flatten(self) -> Union["FeatureType", Dict[str, "FeatureType"]]:

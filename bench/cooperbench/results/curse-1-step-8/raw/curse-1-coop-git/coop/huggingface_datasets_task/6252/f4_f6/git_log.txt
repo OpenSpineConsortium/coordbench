@@ -1,0 +1,24 @@
+commit a678e620d94b79dc98fafb7b7be07ac140540b09 (agent1)
+Merge: 26cc6b58 14983fa0
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:17:32 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 26cc6b587cafd4718d407c88b83eb8ccc430e571
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:17:27 2026 +0000
+
+    Add optional crop_margin to Image feature
+
+ src/datasets/features/image.py | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+commit 14983fa05254fbd2fa11e6caf94a826ff36b7204 (agent2)
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:17:12 2026 +0000
+
+    Auto-convert CMYK images to RGB on decode
+
+ src/datasets/features/image.py | 3 +++
+ 1 file changed, 3 insertions(+)

@@ -1,0 +1,146 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..dad029aed 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -178,24 +178,96 @@ impl Str {
+ 
+     /// Extracts the first grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If `strip` is given, all leading characters that occur in it are
++    /// ignored first. Fails with an error if nothing is left afterwards.
++    ///
++    /// If `count` is given, returns an array of the first `count` grapheme
++    /// clusters instead, each as its own string. Fails with an error if the
++    /// string has fewer than `count` grapheme clusters.
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
++    pub fn first(
++        &self,
++        /// A string of characters to ignore at the start of the string before
++        /// extracting the first grapheme cluster.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        /// The number of grapheme clusters to return as an array. If omitted,
++        /// returns a single string.
++        #[named]
++        count: Option<usize>,
++    ) -> StrResult<Value> {
++        let trimmed = match &strip {
++            Some(set) if !set.is_empty() => {
++                self.0.trim_start_matches(|c: char| set.as_str().contains(c))
++            }
++            _ => self.0.as_str(),
++        };
++        trimmed
+             .graphemes(true)
+             .next()
+             .map(Into::into)
+             .ok_or_else(string_is_empty)
++        match count {
++            None => trimmed
++                .graphemes(true)
++                .next()
++                .map(|cluster| cluster.into_value())
++                .ok_or_else(string_is_empty),
++            Some(count) => {
++                let clusters = clusters_for_count(trimmed, count)?;
++                Ok(cluster_array(&clusters[..count]))
++            }
++        }
+     }
+ 
+     /// Extracts the last grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If `strip` is given, all trailing characters that occur in it are
++    /// ignored first. Fails with an error if nothing is left afterwards.
++    ///
++    /// If `count` is given, returns an array of the last `count` grapheme
++    /// clusters instead, each as its own string and in their original order.
++    /// Fails with an error if the string has fewer than `count` grapheme
++    /// clusters.
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
++    pub fn last(
++        &self,
++        /// A string of characters to ignore at the end of the string before
++        /// extracting the last grapheme cluster.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        /// The number of grapheme clusters to return as an array. If omitted,
++        /// returns a single string.
++        #[named]
++        count: Option<usize>,
++    ) -> StrResult<Value> {
++        let trimmed = match &strip {
++            Some(set) if !set.is_empty() => {
++                self.0.trim_end_matches(|c: char| set.as_str().contains(c))
++            }
++            _ => self.0.as_str(),
++        };
++        trimmed
+             .graphemes(true)
+             .next_back()
+             .map(Into::into)
+             .ok_or_else(string_is_empty)
++        match count {
++            None => trimmed
++                .graphemes(true)
++                .next_back()
++                .map(|cluster| cluster.into_value())
++                .ok_or_else(string_is_empty),
++            Some(count) => {
++                let clusters = clusters_for_count(trimmed, count)?;
++                let start = clusters.len() - count;
++                Ok(cluster_array(&clusters[start..]))
++            }
++        }
+     }
+ 
+     /// Extracts the first grapheme cluster after the specified index. Returns
+@@ -835,6 +907,40 @@ fn string_is_empty() -> EcoString {
+     "string is empty".into()
+ }
+ 
++/// Splits the string into grapheme clusters, checking that at least `count`
++/// of them are there and that `count` is at least one.
++fn clusters_for_count(text: &str, count: usize) -> StrResult<Vec<&str>> {
++    if count == 0 {
++        return Err(count_too_small());
++    }
++    let clusters: Vec<&str> = text.graphemes(true).collect();
++    if clusters.len() < count {
++        return Err(not_enough_characters(count, clusters.len()));
++    }
++    Ok(clusters)
++}
++
++/// Turns grapheme clusters into an array value of strings.
++fn cluster_array(clusters: &[&str]) -> Value {
++    Value::Array(clusters.iter().map(|&cluster| cluster.into_value()).collect())
++}
++
++/// The error message when the requested count is not positive.
++#[cold]
++fn count_too_small() -> EcoString {
++    "count must be at least 1".into()
++}
++
++/// The error message when the string has fewer characters than requested.
++#[cold]
++fn not_enough_characters(requested: usize, available: usize) -> EcoString {
++    eco_format!(
++        "not enough characters (requested {}, but string only has {})",
++        requested,
++        available
++    )
++}
++
+ /// A regular expression.
+ ///
+ /// Can be used as a [show rule selector]($styling/#show-rules) and with

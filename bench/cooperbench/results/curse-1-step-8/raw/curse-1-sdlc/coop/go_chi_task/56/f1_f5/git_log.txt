@@ -1,0 +1,61 @@
+commit b83a91c2af47eb760dec0c3de4d33a9b65bf9d8d (main)
+Merge: 5926908 3e48f49
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 12:40:47 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 3e48f49323d070406f207385480452d079a793c3 (claude/1)
+Merge: 9a4e228 5926908
+Author: agent1 <agent1@coordbench.local>
+Date:   Thu Oct 15 12:40:46 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/1
+    
+    # Conflicts:
+    #       tree.go
+
+commit 9a4e22892df94411a4f129a208ce53d04704f45f
+Author: agent1 <agent1@coordbench.local>
+Date:   Thu Oct 15 12:38:46 2026 +0000
+
+    Add Allow header on 405 responses (core + middleware)
+    
+    chi now collects the methods registered on the matched route when the path
+    matches but the request method does not, and the default 405 handler lists
+    them in Allow, in method order, as RFC 9110 asks. middleware.SetAllowHeader
+    adds the same header ahead of routing for apps that set their own 405 handler.
+    Only the 405 path does any extra work.
+
+ context.go                    | 24 ++++++++++++
+ middleware/allowed_methods.go | 86 +++++++++++++++++++++++++++++++++++++++++++
+ mux.go                        | 51 +++++++++++++++++++++----
+ tree.go                       | 36 ++++++++++++++++++
+ 4 files changed, 189 insertions(+), 8 deletions(-)
+
+commit 59269088f30e4e97dd2bd8e151a7250ec41c6b93
+Merge: 7f28096 a8d0b77
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 12:37:40 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit a8d0b7791d457f9c60e18bdd703c925481e1ba7e (claude/5)
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 12:37:30 2026 +0000
+
+    Add built-in CORS support
+    
+    CORSOptions and DefaultCORSOptions configure a CORS middleware that sets the
+    Access-Control-* headers and answers OPTIONS preflights with a 204. Mux gets
+    EnableCORS, EnableCORSWithOptions and WithCORS; they install a
+    method-not-allowed handler that answers preflights and lists the path's
+    methods in the Allow header of a 405. methodNames and GetMethodName map a
+    method type back to its name.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ cors.go | 202 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ mux.go  |  37 ++++++++++++
+ tree.go |  21 +++++++
+ 3 files changed, 260 insertions(+)

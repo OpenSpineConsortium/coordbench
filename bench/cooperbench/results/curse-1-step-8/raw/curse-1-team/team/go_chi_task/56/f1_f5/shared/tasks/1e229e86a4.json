@@ -1,0 +1,1 @@
+{"id": "1e229e86a4", "title": "Lead-only: integrate and submit feature 1", "owner": "agent1", "status": "in_progress", "created_by": "bench-runner", "created_at": 1792068002.0134952, "last_note": "implementing Allow header (context/tree/mux/middleware); will integrate agent2 patch last", "metadata": {"feature_id": 1, "assigned_to": "agent1", "lead_task": true}}

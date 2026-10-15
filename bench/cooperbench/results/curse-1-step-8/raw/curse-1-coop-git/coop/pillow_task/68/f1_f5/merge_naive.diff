@@ -1,0 +1,189 @@
+diff --git a/src/PIL/ImageOps.py b/src/PIL/ImageOps.py
+index fef1d7328..26cb5f075 100644
+--- a/src/PIL/ImageOps.py
++++ b/src/PIL/ImageOps.py
+@@ -19,9 +19,11 @@
+ from __future__ import annotations
+ 
+ import functools
++import logging
+ import operator
+ import re
+-from collections.abc import Sequence
++import time
++from collections.abc import Callable, Sequence
+ from typing import Literal, Protocol, cast, overload
+ 
+ from . import ExifTags, Image, ImagePalette
+@@ -673,17 +675,36 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
+     return _lut(image, lut)
+ 
+ 
++def _remove_xmp_pattern(pattern: str, value: str | bytes) -> str | bytes:
++    if isinstance(value, str):
++        return re.sub(pattern, "", value)
++    return re.sub(pattern.encode(), b"", value)
++
++
+ @overload
+-def exif_transpose(image: Image.Image, *, in_place: Literal[True]) -> None: ...
++def exif_transpose(
++    image: Image.Image,
++    *,
++    in_place: Literal[True],
++    logger: Callable[[str], object] | logging.Logger | None = None,
++) -> None: ...
+ 
+ 
+ @overload
+ def exif_transpose(
+-    image: Image.Image, *, in_place: Literal[False] = False
++    image: Image.Image,
++    *,
++    in_place: Literal[False] = False,
++    logger: Callable[[str], object] | logging.Logger | None = None,
+ ) -> Image.Image: ...
+ 
+ 
+-def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image | None:
++def exif_transpose(
++    image: Image.Image,
++    *,
++    in_place: bool = False,
++    logger: Callable[[str], object] | logging.Logger | None = None,
++) -> Image.Image | None:
+     """
+     If an image has an EXIF Orientation tag, other than 1, transpose the image
+     accordingly, and remove the orientation data.
+@@ -694,19 +715,103 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+         If ``False`` (default), a new :py:class:`~PIL.Image.Image` object is returned
+         with the transposition applied. If there is no transposition, a copy of the
+         image will be returned.
++    :param logger: Optional. Keyword-only argument.
++        Either a callable, which is called with each message as a single string,
++        or a :py:class:`logging.Logger`, which receives the messages through its
++        ``info`` method, and its ``warning`` method for problems such as an
++        unrecognised orientation value. The messages report the orientation that
++        was found, the transformation applied, the metadata that was changed and
++        the time taken. If ``None`` (default), nothing is logged.
++    """
++    log = _log_function(logger)
++    if log is None:
++        return _exif_transpose(image, in_place)
++
++    start = time.perf_counter()
++    image.load()
++    orientation = image.getexif().get(ExifTags.Base.Orientation, 1)
++    method = _EXIF_TRANSPOSE_METHODS.get(orientation)
++    info_before = dict(image.info)
++    log(
++        f"exif_transpose: processing {image.format or 'unknown format'} image, "
++        f"size={image.size}, mode={image.mode}, in_place={in_place}"
++    )
++    if method is not None:
++        log(f"Found EXIF orientation tag: {orientation}")
++        log(f"Applying transformation {method.name} for orientation {orientation}")
++    elif orientation == 1:
++        log("EXIF orientation is 1 or missing: no transformation needed")
++    else:
++        log(
++            f"Unrecognised EXIF orientation value {orientation!r}: "
++            "no transformation applied",
++            warning=True,
++        )
++
++    try:
++        result = _exif_transpose(image, in_place)
++    except Exception as e:
++        log(f"exif_transpose failed with {type(e).__name__}: {e}", warning=True)
++        raise
++
++    if method is not None:
++        exif_image = image if result is None else result
++        if ExifTags.Base.Orientation in exif_image.getexif():
++            log("EXIF orientation tag could not be removed", warning=True)
++        else:
++            log("Removed EXIF orientation tag from the image's EXIF data")
++        for key in exif_image.info:
++            if key in info_before and exif_image.info[key] != info_before[key]:
++                log(f"Updated image.info[{key!r}] to remove the orientation")
++        log(f"New image size: {exif_image.size}")
++    elif not in_place:
++        log("Returning an unchanged copy of the image")
++
++    elapsed = time.perf_counter() - start
++    log(f"exif_transpose completed in {elapsed:.6f} seconds")
++    return result
++
++
++_EXIF_TRANSPOSE_METHODS = {
++    2: Image.Transpose.FLIP_LEFT_RIGHT,
++    3: Image.Transpose.ROTATE_180,
++    4: Image.Transpose.FLIP_TOP_BOTTOM,
++    5: Image.Transpose.TRANSPOSE,
++    6: Image.Transpose.ROTATE_270,
++    7: Image.Transpose.TRANSVERSE,
++    8: Image.Transpose.ROTATE_90,
++}
++
++
++def _log_function(
++    logger: Callable[[str], object] | logging.Logger | None,
++) -> Callable[..., None] | None:
++    """
++    Turn the ``logger`` argument of :py:func:`exif_transpose` into one function,
++    ``log(message, warning=False)``, so the rest of the code does not care which
++    kind of logger it was given. A callable receives each message as its only
++    argument. A logger object receives ordinary messages through ``info`` and
++    messages about problems through ``warning``.
+     """
++    if logger is None:
++        return None
++    if callable(logger):
++        return lambda message, warning=False: logger(message)
++    if hasattr(logger, "info") and hasattr(logger, "warning"):
++
++        def log(message: str, warning: bool = False) -> None:
++            (logger.warning if warning else logger.info)(message)
++
++        return log
++    msg = "logger must be a callable or a logging.Logger"
++    raise TypeError(msg)
++
++
++def _exif_transpose(image: Image.Image, in_place: bool) -> Image.Image | None:
+     image.load()
+     image_exif = image.getexif()
+     orientation = image_exif.get(ExifTags.Base.Orientation, 1)
+-    method = {
+-        2: Image.Transpose.FLIP_LEFT_RIGHT,
+-        3: Image.Transpose.ROTATE_180,
+-        4: Image.Transpose.FLIP_TOP_BOTTOM,
+-        5: Image.Transpose.TRANSPOSE,
+-        6: Image.Transpose.ROTATE_270,
+-        7: Image.Transpose.TRANSVERSE,
+-        8: Image.Transpose.ROTATE_90,
+-    }.get(orientation)
++    method = _EXIF_TRANSPOSE_METHODS.get(orientation)
+     if method is not None:
+         if in_place:
+             image.im = image.im.transpose(method)
+@@ -729,11 +834,13 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
+                         r"<tiff:Orientation>([0-9])</tiff:Orientation>",
+                     ):
+                         value = exif_image.info[key]
+-                        exif_image.info[key] = (
+-                            re.sub(pattern, "", value)
+-                            if isinstance(value, str)
+-                            else re.sub(pattern.encode(), b"", value)
+-                        )
++                        if isinstance(value, tuple):
++                            # XMP wrapped in <?xpacket> can be stored as a tuple
++                            exif_image.info[key] = tuple(
++                                _remove_xmp_pattern(pattern, v) for v in value
++                            )
++                        else:
++                            exif_image.info[key] = _remove_xmp_pattern(pattern, value)
+         if not in_place:
+             return transposed_image
+     elif not in_place:

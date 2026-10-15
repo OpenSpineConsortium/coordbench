@@ -1,0 +1,389 @@
+{
+  "format": "coordbench-judge/1",
+  "pair": {
+    "repo": "go_chi_task",
+    "task_id": 56,
+    "features": [
+      1,
+      5
+    ],
+    "arm": "coop-git",
+    "setting": "coop",
+    "model": "claude-sonnet-5-5",
+    "driver": "session",
+    "run_name": "curse-1-coop-git",
+    "run_id": "coop-git-56-f1_f5-9691f5"
+  },
+  "calls": {},
+  "skipped": {},
+  "errors": {},
+  "heuristics": {
+    "unanswered_questions": [],
+    "ignored_questions": [],
+    "near_duplicates": [],
+    "speech_acts_keyword": {
+      "2": "Question",
+      "15": "Plan",
+      "21": "Ack",
+      "52": "Update"
+    },
+    "resource_division_candidates": [],
+    "negotiation_candidates": [],
+    "contradictions": [],
+    "overlapping_hunks": [
+      {
+        "file": "context.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            76,
+            81
+          ],
+          [
+            76,
+            81
+          ]
+        ],
+        "same_heading": "type Context struct {"
+      },
+      {
+        "file": "context.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            91,
+            96
+          ],
+          [
+            91,
+            96
+          ]
+        ],
+        "same_heading": "func (x *Context) Reset() {"
+      },
+      {
+        "file": "cors.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "same_heading": null
+      },
+      {
+        "file": "middleware/allowed_methods.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "same_heading": null
+      },
+      {
+        "file": "mux.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            334,
+            339
+          ],
+          [
+            334,
+            339
+          ]
+        ],
+        "same_heading": "func (mx *Mux) Mount(pattern string, handler http.Handler) {"
+      },
+      {
+        "file": "mux.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            377,
+            388
+          ],
+          [
+            377,
+            388
+          ]
+        ],
+        "same_heading": "func (mx *Mux) NotFoundHandler() http.HandlerFunc {"
+      },
+      {
+        "file": "mux.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            445,
+            451
+          ],
+          [
+            445,
+            451
+          ]
+        ],
+        "same_heading": "func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {"
+      },
+      {
+        "file": "mux.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            479,
+            487
+          ],
+          [
+            479,
+            487
+          ]
+        ],
+        "same_heading": "func (mx *Mux) updateRouteHandler() {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            43,
+            48
+          ],
+          [
+            43,
+            48
+          ]
+        ],
+        "same_heading": "var methodMap = map[string]methodTyp{"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            59,
+            64
+          ],
+          [
+            59,
+            64
+          ]
+        ],
+        "same_heading": "func RegisterMethod(method string) {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            455,
+            461
+          ],
+          [
+            455,
+            461
+          ]
+        ],
+        "same_heading": "func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            494,
+            500
+          ],
+          [
+            494,
+            500
+          ]
+        ],
+        "same_heading": "func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            517,
+            522
+          ],
+          [
+            517,
+            522
+          ]
+        ],
+        "same_heading": "func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            864,
+            866
+          ],
+          [
+            864,
+            866
+          ]
+        ],
+        "same_heading": "func walk(r Routes, walkFn WalkFunc, parentRoute string, parentMw ...func(http.H"
+      }
+    ],
+    "insertion_markers": [],
+    "missing_final_status": [
+      "agent1"
+    ],
+    "git_disasters": [
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push -q team agent2 --force"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push -q team agent2 --force"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push -q team agent2 --force"
+      }
+    ],
+    "git_broken": [],
+    "git_impatience": [
+      {
+        "agent": "agent1",
+        "command": "git fetch team 2>&1",
+        "at": 1792067783.178,
+        "partner_first_push_at": 1792067940.605
+      },
+      {
+        "agent": "agent1",
+        "command": "head=$(docker exec -w /workspace/repo coordbench-coop-git-56-f1_f5-9691f5-agent1 bash -lc 'git fetch team -q 2>/dev/null",
+        "at": 1792067790.336,
+        "partner_first_push_at": 1792067940.605
+      },
+      {
+        "agent": "agent1",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-56-f1_f5-9691f5-agent1 bash -lc 'git fetch team -q",
+        "at": 1792067815.925,
+        "partner_first_push_at": 1792067940.605
+      },
+      {
+        "agent": "agent1",
+        "command": "head=$(docker exec -w /workspace/repo coordbench-coop-git-56-f1_f5-9691f5-agent1 bash -c 'git fetch team -q 2>/dev/null",
+        "at": 1792067824.821,
+        "partner_first_push_at": 1792067940.605
+      }
+    ],
+    "git_destructive": []
+  },
+  "heuristics_meta": {
+    "computed_at": "2026-10-15T12:42:04+00:00",
+    "conversation_source": "events.jsonl",
+    "message_count": 4,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
+    "definitions": {
+      "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
+      "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
+      "near_duplicates": "C4a/C4b candidates: [id, id, difflib ratio >= 0.9, both status-like], same sender",
+      "speech_acts_keyword": "the keyword baseline of the speech acts, beside the judge's",
+      "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
+      "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
+      "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
+      "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
+      "insertion_markers": "App D: added comment lines marking where another agent inserts code",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it",
+      "git_disasters": "coordbench's label for git-failures.json's git_disasters: force pushes and hard resets",
+      "git_broken": "coordbench's label for broken: a push followed by a failing test run",
+      "git_impatience": "coordbench's label for impatience: fetches before the partner's first push",
+      "git_destructive": "coordbench's label for destructive: a commit deleting 100 or more lines of a file the partner changed (from git log --stat, approximate when the bar is scaled)"
+    },
+    "final_status_times": {
+      "agent1": {
+        "last_edit_at": 1792068008.6,
+        "last_message_at": 1792067778.1753516
+      },
+      "agent2": {
+        "last_edit_at": null,
+        "last_message_at": 1792068017.897706
+      }
+    },
+    "git_blog_names": {
+      "impatience": "The Real-Time Interaction Problem",
+      "destructive": "Uncooperative Behaviors",
+      "broken": "The Commitment Problem",
+      "git_disasters": "Misuse of Cooperation Tools",
+      "blame": "Hallucination in Communication",
+      "sagas": "Hallucination in Communication"
+    }
+  }
+}

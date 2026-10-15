@@ -1,0 +1,220 @@
+{
+  "repo": "typst_task",
+  "task_id": 6554,
+  "features": [
+    5,
+    9
+  ],
+  "setting": "coop",
+  "run_id": "coop-git-6554-f5_f9-34f615",
+  "run_name": "curse-1-coop-git",
+  "agent_framework": "claude_code_subagent",
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-10-15T16:10:36.261988",
+  "ended_at": "2026-10-15T16:20:55.388208",
+  "duration_seconds": 619.12622,
+  "agents": {
+    "agent1": {
+      "feature_id": 5,
+      "status": "Submitted",
+      "cost": null,
+      "steps": null,
+      "input_tokens": 52,
+      "output_tokens": null,
+      "cache_read_tokens": 2467006,
+      "cache_write_tokens": 111733,
+      "patch_lines": 128,
+      "error": null,
+      "role": "peer",
+      "duration_ms": null,
+      "api_duration_ms": null,
+      "end_reason": null,
+      "model_requested": "claude-sonnet-5-5",
+      "model": "claude-sonnet-5-5",
+      "model_differs": false,
+      "claude_code_version": "2.1.300",
+      "tools": null,
+      "mcp_servers": null,
+      "cost_source": null,
+      "output_tokens_lower_bound": 12472,
+      "cost_lower_bound": null
+    },
+    "agent2": {
+      "feature_id": 9,
+      "status": "Submitted",
+      "cost": null,
+      "steps": null,
+      "input_tokens": 50,
+      "output_tokens": null,
+      "cache_read_tokens": 2405073,
+      "cache_write_tokens": 68870,
+      "patch_lines": 132,
+      "error": null,
+      "role": "peer",
+      "duration_ms": null,
+      "api_duration_ms": null,
+      "end_reason": null,
+      "model_requested": "claude-sonnet-5-5",
+      "model": "claude-sonnet-5-5",
+      "model_differs": false,
+      "claude_code_version": "2.1.300",
+      "tools": null,
+      "mcp_servers": null,
+      "cost_source": null,
+      "output_tokens_lower_bound": 10459,
+      "cost_lower_bound": null
+    }
+  },
+  "total_cost": null,
+  "total_steps": null,
+  "messages_sent": 6,
+  "log_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/typst_task/6554/f5_f9",
+  "error_kind": null,
+  "arm": "coop-git",
+  "driver": "session",
+  "agents_seconds": 531.705146,
+  "isolation": "advisory",
+  "options": {},
+  "agent_models": {},
+  "max_turns": null,
+  "timeout_s": 2700.0,
+  "disallowed_tools": [
+    "WebFetch",
+    "WebSearch"
+  ],
+  "provenance": {
+    "cooperbench": {
+      "dir": "/root/cooperbench",
+      "commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+      "modified": [
+        "src/cooperbench/agents/claude_code/setup.sh"
+      ],
+      "modified_count": 1
+    },
+    "dataset": {
+      "dir": "/root/cooperbench/dataset",
+      "git_tree": "9c9e5802e06d89c7f84a9ebb13c3a5998b007e36",
+      "last_commit": "55a63e9329e1ef4e9957113534d5cad57c0f1f88",
+      "modified": false,
+      "sha256": "b0d33805162fa8001deba5f891de65e7b54e96351c2f21d810a0f0ac142710f6",
+      "files": 774
+    },
+    "coordbench": {
+      "dir": "/home/user/coordbench/coordbench",
+      "commit": "43c2e3d186d65b7ad4dfc1f7620b7bf19241ecbc",
+      "modified": [],
+      "modified_count": 0
+    }
+  },
+  "image": {
+    "image": "akhatua/cooperbench-typst:task6554",
+    "id": "sha256:ab09cebafee0683fcfa37d412d675071425048db7ecd8ee456df877a1701b5a3",
+    "repo_digests": [
+      "akhatua/cooperbench-typst@sha256:ab09cebafee0683fcfa37d412d675071425048db7ecd8ee456df877a1701b5a3"
+    ],
+    "overlay": "cloud-session"
+  },
+  "metrics": {
+    "events": {
+      "run_started": 1,
+      "tool": 27,
+      "message": 6,
+      "tool_done": 27,
+      "receive": 11
+    },
+    "tool_surface": "mcp",
+    "messages_sent": 6,
+    "messages_by_agent": {
+      "agent1": 3,
+      "agent2": 3
+    },
+    "message_chars": 2537,
+    "message_words": 377,
+    "tool_calls": {
+      "broadcast": 2,
+      "receive_messages": 11,
+      "send_message": 4,
+      "peek_messages": 10
+    }
+  },
+  "timings": [
+    {
+      "phase": "hub",
+      "agent": null,
+      "started": "2026-10-15T16:10:35.855421",
+      "ended": "2026-10-15T16:10:36.007944",
+      "seconds": 0.152523
+    },
+    {
+      "phase": "git_remote",
+      "agent": null,
+      "started": "2026-10-15T16:10:36.383415",
+      "ended": "2026-10-15T16:10:41.719430",
+      "seconds": 5.336015
+    },
+    {
+      "phase": "run_create",
+      "agent": null,
+      "started": "2026-10-15T16:10:41.719499",
+      "ended": "2026-10-15T16:10:41.727019",
+      "seconds": 0.00752
+    },
+    {
+      "phase": "provision",
+      "agent": "agent1",
+      "started": "2026-10-15T16:10:41.954172",
+      "ended": "2026-10-15T16:11:23.757019",
+      "seconds": 41.802847
+    },
+    {
+      "phase": "provision",
+      "agent": "agent2",
+      "started": "2026-10-15T16:11:23.757123",
+      "ended": "2026-10-15T16:11:53.295393",
+      "seconds": 29.53827
+    },
+    {
+      "phase": "agent",
+      "agent": "agent1",
+      "started": "2026-10-15T16:11:53.295440",
+      "ended": "2026-10-15T16:20:24.296586",
+      "seconds": 511.001146
+    },
+    {
+      "phase": "agent",
+      "agent": "agent2",
+      "started": "2026-10-15T16:11:53.296210",
+      "ended": "2026-10-15T16:20:45.000586",
+      "seconds": 531.704376
+    },
+    {
+      "phase": "close",
+      "agent": null,
+      "started": "2026-10-15T16:20:55.388228",
+      "ended": "2026-10-15T16:20:55.405648",
+      "seconds": 0.01742
+    },
+    {
+      "phase": "teardown",
+      "agent": null,
+      "started": "2026-10-15T16:20:55.429885",
+      "ended": "2026-10-15T16:21:09.286044",
+      "seconds": 13.856159
+    },
+    {
+      "phase": "score",
+      "agent": null,
+      "started": "2026-10-15T16:21:09.286145",
+      "ended": "2026-10-15T16:23:54.331509",
+      "seconds": 165.045364
+    },
+    {
+      "phase": "cascade",
+      "agent": null,
+      "started": "2026-10-15T16:23:54.334676",
+      "ended": "2026-10-15T16:30:25.844164",
+      "seconds": 391.509488
+    }
+  ],
+  "utc_offset_seconds": 0
+}

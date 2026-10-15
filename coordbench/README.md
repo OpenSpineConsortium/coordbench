@@ -486,7 +486,10 @@ benchmarked as coordination:
   api_duration_ms as null (unknown), never as zero. Its tokens come from
   its own transcript: the prompt asks the subagent to open its first
   reply with a run token, finish finds the transcript under Claude Code's
-  projects directory that carries it, copies it as
+  projects directory that carries it (or, last, the one whose prompt names
+  the agent's own prompt file and carries no other run's token, for an
+  agent that never wrote the token in a reply),
+  copies it as
   `<agent>_session.jsonl`, sums each API message's usage once and
   estimates the cost at the model's price (cost_source "estimated from
   tokens"; null for a model without a price). Claude Code writes a
