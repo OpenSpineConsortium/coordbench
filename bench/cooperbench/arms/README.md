@@ -8,8 +8,11 @@ arm and is named by its directory. There is one, xblossom.
 
 xblossom is CooperBench's team mode with four moves added, from the
 X-Blossom plan for parallel agents that reuse each other's checked work.
-It is the built-in team arm plus one prompt section, so a difference
-between the two arms comes from the prompt alone. The arm is the
+It is the built-in team arm plus one prompt section. On the session
+route, which loads no arm's skill, a difference between the two arms
+therefore comes from the prompt alone; with the claude-cli driver on the
+mcp tool surface each arm also loads its own plugin's skill, and
+xblossom's restates the four rules in other words. The arm is the
 directory `xblossom/` beside this file, a Claude Code plugin and a
 coordbench arm in one.
 
@@ -51,9 +54,10 @@ moves:
    the same hash in every agent's copy, so a peer's fact is found. An
    edited file gets a new hash, so a fact about old content is never
    read. The line is written through a here-document with a quoted
-   delimiter (`<<\FACT`). The shell therefore runs and expands nothing
-   in the fact, and the template still fits inside the session route's
-   `bash -lc '...'`.
+   delimiter (`<<\FACT`), so the shell runs and expands nothing in the
+   fact. The template fits inside the session route's `bash -lc '...'`
+   as long as the line holds no single quote, which would end that
+   wrapper; the prompt asks for double quotes instead.
 2. **A disjoint plan.** Each prompt holds only its own feature. So every
    agent first declares its feature's files in
    `/workspace/shared/FILES.md`, and the lead's `PLAN.md` gives each task
@@ -100,9 +104,11 @@ directory's name, so its logs land under `<tag>-xblossom`:
     python3 queue.py add "$QUEUE" --tag xb1 --arms "solo,team,$ARM" --pairs go_chi_task/56/f1_f5
 
 Keep the path free of spaces and shell metacharacters. Then start the
-lanes as for any arm, and read the results side by side:
+lanes as for any arm, with lane.js's `root` set to the checkout that
+holds this arm (its default is /home/user/coordbench), and read the
+results side by side:
 
-    python3 summary.py --logs <log dir> --tag xb1 --arms solo,team,xblossom
+    python3 summary.py --logs <log dir> --tag xb1 --arms solo,team,xblossom --bases solo,team
     python3 ../report.py --logs <log dir> --run solo=xb1-solo --run team=xb1-team --run xblossom=xb1-xblossom
     python3 bundle.py --logs <log dir> --tag xb1 --out <results dir> --arms solo,team,xblossom
 
@@ -115,12 +121,16 @@ With the claude-cli driver it is one run.py call per pair, signed in with
 
 ## What it measures
 
-The outcome is the team arm's: CooperBench's merged evaluation of the
-lead's `patch.txt`, scored by the same code under the same setting. The
-comparison that counts is paired, xblossom against team on the same
-pairs, with the same model and limits. Since the prompts share their
-whole team part, a difference in pass rate, wall time or tokens is the
-four moves' effect.
+The outcome is the team arm's, scored by the same code under the same
+setting: CooperBench's merged evaluation of both agents' `patch.txt`,
+the naive merge's tree when the two merge cleanly and the lead's patch
+alone when they conflict. A region the plan marks shared and the lead
+joins at integration usually sends the pair to the lead's patch alone.
+The comparison that counts is paired, xblossom against team on the same
+pairs, with the same model and limits (summary.py `--bases solo,team`
+gives its wall, token and cost ratios). Since the prompts share their
+whole team part, on the session route a difference in pass rate, wall
+time or tokens is the four moves' effect.
 
 Each move also leaves a trace that can be counted. None of these are
 new instruments; they are the team arm's records and the copy of the

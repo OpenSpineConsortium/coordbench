@@ -304,7 +304,7 @@ def markdown(summary, arms):
                      f"{'$' + format(s['cost_usd_per_pair_mean'], '.2f') if s['cost_usd_per_pair_mean'] is not None else '-'} | "
                      f"{'$' + format(s['cost_usd_per_passing_pair'], '.2f') if s['cost_usd_per_passing_pair'] else '-'} | "
                      f"{s['messages_per_pair_mean'] if s['messages_per_pair_mean'] is not None else '-'} |")
-    lines += ["", "## Paired against solo and coop, over the pairs both arms completed "
+    lines += ["", f"## Paired against {' and '.join(summary['bases'])}, over the pairs both arms completed "
               "(b over a: below 1 means b is cheaper or faster)", ""]
     lines.append("| a | b | shared | both pass | only a | only b | neither | wall ratio | agent s ratio | tokens ratio | cost ratio |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
@@ -331,13 +331,16 @@ def main(argv=None):
     parser.add_argument("--out")
     parser.add_argument("--csv")
     parser.add_argument("--md")
+    parser.add_argument("--bases", default="solo,coop",
+                        help="the arms every other arm is paired against, in order")
     args = parser.parse_args(argv)
     arms = args.arms.split(",")
+    bases = args.bases.split(",")
     rows = collect(args.logs, args.tag, arms)
     by_arm = {arm: [r for r in rows if r["arm"] == arm] for arm in arms}
-    summary = {"tag": args.tag, "prices_usd_per_mtok": PRICES,
+    summary = {"tag": args.tag, "prices_usd_per_mtok": PRICES, "bases": bases,
                "arms": {arm: summarize_arm(by_arm[arm]) for arm in arms if by_arm[arm]}, "paired": {}}
-    for base in ("solo", "coop"):
+    for base in bases:
         for arm in arms:
             if arm != base and by_arm.get(base) and by_arm.get(arm):
                 summary["paired"][f"{base} vs {arm}"] = paired(by_arm[base], by_arm[arm])

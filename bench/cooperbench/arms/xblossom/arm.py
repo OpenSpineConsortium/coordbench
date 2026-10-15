@@ -16,7 +16,9 @@ asking for four moves:
    a new hash, so a fact about old content is never read. The line is
    appended through a here-document with a quoted delimiter, so the shell
    neither runs nor expands what the fact quotes, and it starts with the
-   path because two files of the same content share one hash.
+   path because two files of the same content share one hash. The line
+   holds no single quote, since on the session route every command runs
+   inside bash -lc '...', where a single quote ends the wrapper.
 2. A disjoint plan. Each agent's prompt holds only its own feature, so
    every agent first declares its feature's files in FILES.md on the
    volume, and the lead's PLAN.md gives each task a set of files from
@@ -87,7 +89,9 @@ XBLOSSOM_SECTION = """## Four working rules for this team
 
 These rules come on top of everything above; where they differ from it,
 they win. The lead is **{lead}**. Run each shell block below where you
-run git.
+run git, and read and write every file under `/workspace/shared`
+(FILES.md, PLAN.md, REQUESTS.md and the facts) with shell commands
+there too, never with file tools.
 
 ### 1. Facts are filed under the file's content hash
 
@@ -101,7 +105,10 @@ cd /workspace/repo && cat /workspace/shared/facts/$(git hash-object <path>) 2>/d
 After you check a fact about a file (what a function does, where a feature
 hooks in, which tests cover it), append one line to that file's facts:
 its path, the fact, then the command that checked it. The here-document
-keeps the line exactly as you type it, quotes, `$` and backticks included:
+keeps the line as you type it, `$`, backticks and double quotes included.
+Leave single quotes out of the line and use double quotes in the
+checking command, since where commands run inside `bash -lc '...'` a
+single quote ends that wrapper:
 
 ```bash
 cd /workspace/repo && mkdir -p /workspace/shared/facts &&
@@ -175,9 +182,10 @@ test: <command> -> exit <code>
 ```
 
 With the shell command, put the note in single quotes,
-`coop-task-update <task_id> done -n '<note>'`, so the shell passes it as
-written. Write `test: none` when you ran no test. A message saying you
-are done carries the same lines."""
+`coop-task-update <task_id> done -n '<note>'`, and use only double
+quotes inside it: a single quote inside would end the note. Write
+`test: none` when you ran no test. A message saying you are done carries
+the same lines."""
 
 
 # Rule 2's last paragraph, by role. A member asks before it touches

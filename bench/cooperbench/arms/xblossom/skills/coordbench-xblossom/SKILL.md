@@ -113,7 +113,9 @@ no changes to test files unless the task asks for them.
 ## The four rules of this arm
 
 These come on top of everything above; where they differ from it, they
-win. Run each shell command below where you run git.
+win. Run each shell command below where you run git, and read and write
+every file under `/workspace/shared` with shell commands there too,
+never with file tools.
 
 ### 1. Facts are filed under the file's content hash
 
@@ -126,8 +128,10 @@ cd /workspace/repo && cat /workspace/shared/facts/$(git hash-object <path>) 2>/d
 After you check a fact about a file (what a function does, where a
 feature hooks in, which tests cover it), append one line to its facts:
 the path, the fact, then the command that checked it. The here-document
-with a quoted delimiter keeps the line exactly as typed, quotes, `$` and
-backticks included:
+with a quoted delimiter keeps the line as typed, `$`, backticks and
+double quotes included. Leave single quotes out of the line and use
+double quotes in the checking command: inside `bash -lc '...'` a single
+quote ends the wrapper.
 
 ```bash
 cd /workspace/repo && mkdir -p /workspace/shared/facts &&
@@ -194,5 +198,6 @@ the test command you ran and the exit code it really returned, or
 
 Paste the stat lines into the note as git printed them, with no `$(...)`
 in the coordination command, and with the shell command put the note in
-single quotes: `coop-task-update <task_id> done -n '<note>'`. A message
+single quotes, with only double quotes inside it:
+`coop-task-update <task_id> done -n '<note>'`. A message
 saying you are done carries the same lines.

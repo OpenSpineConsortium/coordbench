@@ -335,6 +335,22 @@ class SummaryCountsWhatWasMeasured(unittest.TestCase):
         self.assertEqual([row["merge_conflict"] for row in rows], [True, True, False, False, None])
         self.assertEqual(summary.summarize_arm(rows)["merge_conflict_pairs"], 2)
 
+    def test_the_bases_say_what_every_other_arm_is_paired_against(self):
+        agents = {"agent1": measured_agent(1), "agent2": measured_agent(1)}
+        for arm in ("solo", "team", "xblossom"):
+            write_pair(self.logs, arm, 1, agents)
+
+        def paired_keys(*extra):
+            out = Path(self.logs) / "summary.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                summary.main(["--logs", self.logs, "--tag", "curse-1", "--arms", "solo,team,xblossom",
+                              "--out", str(out), *extra])
+            return sorted(json.loads(out.read_text())["paired"])
+
+        self.assertEqual(paired_keys(), ["solo vs team", "solo vs xblossom"], "coop is absent, so solo alone")
+        self.assertEqual(paired_keys("--bases", "solo,team"),
+                         ["solo vs team", "solo vs xblossom", "team vs solo", "team vs xblossom"])
+
     def test_ratios_come_from_the_medians_before_rounding(self):
         def row(task, cost, tokens=None):
             return {"repo": "r", "task": task, "features": "f1_f2", "agent_errors": 0, "passed": True,
@@ -385,13 +401,15 @@ class AnArmGivenByItsDirectory(unittest.TestCase):
 
     def test_bundle_takes_the_arms_it_is_given(self):
         logs = self.tmp / "logs"
-        result = logs / "xb1-xblossom" / "team" / "r" / "1" / "f1_f2" / "result.json"
+        # An arm bundle.ARMS does not list, so only --arms can bring it in.
+        self.assertNotIn("xcustom", bundle.ARMS)
+        result = logs / "xb1-xcustom" / "team" / "r" / "1" / "f1_f2" / "result.json"
         result.parent.mkdir(parents=True)
         result.write_text("{}\n")
         out = self.tmp / "out"
         with contextlib.redirect_stdout(io.StringIO()):
-            bundle.main(["--logs", str(logs), "--tag", "xb1", "--out", str(out), "--arms", "team,xblossom"])
-        self.assertTrue((out / "raw" / "xb1-xblossom" / "team" / "r" / "1" / "f1_f2" / "result.json").exists())
+            bundle.main(["--logs", str(logs), "--tag", "xb1", "--out", str(out), "--arms", "team,xcustom"])
+        self.assertTrue((out / "raw" / "xb1-xcustom" / "team" / "r" / "1" / "f1_f2" / "result.json").exists())
 
 
 if __name__ == "__main__":

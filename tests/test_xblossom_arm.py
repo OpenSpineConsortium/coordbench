@@ -6,7 +6,9 @@ xblossom prompt on both tool surfaces, with and without a git remote and
 for one to three agents, the section leaves no placeholder and asks for
 no inbox habit the team lead lacks, only a member writes its patch to the
 volume, the fact template stores a line full of shell syntax exactly,
-alone and inside the session route's bash -lc '...', and the arm runs in
+alone and inside the session route's bash -lc '...', as long as the line
+holds no single quote, which the section tells the agents to leave out
+and which no quoting inside that wrapper could carry, and the arm runs in
 a hub as the team arm does: an atomic claim, a refused second claim with
 exit 2, a done note carrying its certificate, and metrics that count the
 fact files on the volume and never a symlink planted there.
@@ -87,16 +89,20 @@ class XblossomArmTest(unittest.TestCase):
                     tag = f"{surface}-{int(git)}-{len(features)}"
                     ours = prompts(self.arm, features, options(volume, surface, git), "xb-" + tag)
                     theirs = prompts(self.team, features, options(volume, surface, git), "team-" + tag)
+                    self.assertEqual(sorted(ours), sorted(theirs))
                     for agent, (role, prompt) in ours.items():
                         with self.subTest(case=tag, agent=agent):
-                            self.check_prompt(role, prompt, theirs[agent][1])
+                            self.check_prompt(role, prompt, theirs[agent][1], alone=len(features) == 1)
 
-    def check_prompt(self, role, prompt, team_prompt):
+    def check_prompt(self, role, prompt, team_prompt, alone):
         self.assertTrue(prompt.startswith(team_prompt), "the team prompt is a prefix")
         added = prompt[len(team_prompt):]
-        if role == "solo" or not added:
-            self.assertNotIn("Four working rules", prompt, "a team of one gets the team prompt alone")
+        if alone:
+            self.assertEqual(added, "", "a team of one gets the team prompt alone")
             return
+        # Every agent of a team gets the section, the lead included, on
+        # both surfaces and with or without a git remote.
+        self.assertIn(role, ("lead", "member"))
         self.assertIn("Four working rules", added)
         self.assertIsNone(PLACEHOLDER.search(added), "no placeholder left")
         self.assertNotIn("$(git diff", added, "the certificate substitutes no command")
@@ -107,6 +113,10 @@ class XblossomArmTest(unittest.TestCase):
 
     def test_the_fact_template_stores_shell_syntax_exactly(self):
         prompt = prompts(self.arm, [5, 11], options(self.scratch / "vol"), "xb-fact")["agent2"][1]
+        flat = " ".join(prompt.split())
+        self.assertIn("Leave single quotes out of the line", flat, "the one thing bash -lc '...' cannot carry")
+        self.assertIn("use only double quotes inside it", flat, "the done note's own quoting")
+        self.assertNotIn("'", FACT, "the line under test is one the section allows")
         block = next(b for b in re.findall(r"```bash\n(.*?)```", prompt, re.S) if "<<" in b)
         repo, shared = self.scratch / "repo", self.scratch / "shared"
         (repo / "src").mkdir(parents=True)
