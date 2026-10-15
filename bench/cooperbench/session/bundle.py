@@ -11,7 +11,7 @@ value; another text file gets the final newline it lacks; a file that
 still holds a byte outside ASCII or a carriage return is left out and
 named on stdout, so nothing in the copy is silently changed.
 
-    python3 bundle.py --logs LOG_DIR --tag TAG --out DIR
+    python3 bundle.py --logs LOG_DIR --tag TAG --out DIR [--arms solo,team,xblossom]
 """
 
 import argparse
@@ -29,7 +29,7 @@ LEFT_OUT = ("_session.jsonl", "_traj.json", "trajectory.json.gz", "conversation.
 # an earlier attempt that finish set aside (the attempt that counts is
 # the one in the directory): all left out.
 LEFT_OUT_DIRS = ("bin", "hub")
-ARMS = ("solo", "coop", "coop-nocomm", "sdlc", "sdlc-watch", "coop-git", "team")
+ARMS = ("solo", "coop", "coop-nocomm", "sdlc", "sdlc-watch", "coop-git", "team", "xblossom")
 
 
 def wanted(path):
@@ -70,9 +70,11 @@ def main(argv=None):
     parser.add_argument("--logs", required=True, type=Path)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--arms", default=",".join(ARMS),
+                        help="the arms by name, an arm given by its directory by the directory's name")
     args = parser.parse_args(argv)
     copied, left_out = 0, []
-    for run_dir in sorted(args.logs / f"{args.tag}-{arm}" for arm in ARMS):
+    for run_dir in sorted(args.logs / f"{args.tag}-{arm}" for arm in args.arms.split(",")):
         if not run_dir.is_dir():
             continue
         for path in sorted(run_dir.rglob("*")):

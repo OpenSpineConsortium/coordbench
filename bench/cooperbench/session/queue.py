@@ -80,7 +80,15 @@ def write_items(path, items):
 
 
 def item_id(tag, arm, repo, task, pair):
-    return f"{tag}__{arm}__{repo}__{task}__f{pair[0]}_f{pair[1]}"
+    return f"{tag}__{arm_label(arm)}__{repo}__{task}__f{pair[0]}_f{pair[1]}"
+
+
+def arm_label(arm):
+    """An arm named by its directory (run.py's --arm takes a path) goes by
+    the directory's name in the item's id and run name, so its logs land
+    under <tag>-<name> as a built-in arm's do; the item keeps the path,
+    which prepare passes to run.py."""
+    return Path(arm).name if "/" in arm else arm
 
 
 def sampling_record(args):
@@ -129,7 +137,7 @@ def command_add(args):
                 if ident in known:
                     continue
                 item = {"id": ident, "tag": args.tag, "arm": arm, "repo": repo, "task": task,
-                        "features": f"{pair[0]},{pair[1]}", "run_name": f"{args.tag}-{arm}",
+                        "features": f"{pair[0]},{pair[1]}", "run_name": f"{args.tag}-{arm_label(arm)}",
                         "timeout_min": args.timeout_min, "model": args.model, "status": "pending",
                         "added_at": time.time()}
                 if record:
@@ -194,7 +202,7 @@ def show_items(args):
     if args.counts:
         counts = {}
         for item in items:
-            key = (item["arm"], item["status"])
+            key = (arm_label(item["arm"]), item["status"])
             counts[key] = counts.get(key, 0) + 1
         for (arm, status), n in sorted(counts.items()):
             print(f"{arm:10} {status:10} {n}")
