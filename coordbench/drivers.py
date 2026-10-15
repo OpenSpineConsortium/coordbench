@@ -928,7 +928,12 @@ class SessionDriver:
             time.sleep(max(0.0, min(self.poll_seconds, handle["deadline"] - time.time())))
             found = poll_marker(handle["agent"], marker)
         outcome = AgentOutcome(status="Submitted", measured=())
-        if not found:
+        if not found and handle.get("lost"):
+            # The orchestrating session lost the subagent (lane.py finish
+            # --dead): no time limit passed, so none is named.
+            reason = "the harness lost the subagent before it made its marker"
+            outcome = AgentOutcome(status="Error", error=reason, end_reason=reason, measured=())
+        elif not found:
             minutes = handle.get("timeout_s", 0) / 60
             reason = f"no {DONE_MARKER} within {minutes:.0f} minutes"
             # The adapter's own timeout is an exception, which it writes as the error.

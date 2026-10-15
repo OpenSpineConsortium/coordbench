@@ -88,8 +88,9 @@ class PlaceMissingMarkers(unittest.TestCase):
         self.write_plan({"agent2": workspace}, time.time() + 600)
         notes = lane.place_missing_markers(self.run_dir, set(), {"agent2"})
         self.assertEqual(notes["expired"], ["agent2"])
-        deadline = lane.read_plan(self.run_dir)["agents"][0]["handle"]["deadline"]
-        self.assertLess(deadline, time.time())
+        handle = lane.read_plan(self.run_dir)["agents"][0]["handle"]
+        self.assertLess(handle["deadline"], time.time())
+        self.assertTrue(handle["lost"], "so the driver says the harness lost it, not that it ran out of time")
 
 
 class FinishAfterTeardown(unittest.TestCase):
@@ -134,8 +135,11 @@ class FinishAfterTeardown(unittest.TestCase):
             done = SimpleNamespace(stdout='{"verdict": "fail"}\n', stderr="", returncode=0)
             with mock.patch.object(lane.subprocess, "run", return_value=done) as called:
                 verdict = lane.finish_pair(args)
-            self.assertEqual(verdict["verdict"], "fail")
             self.assertIn("finish", called.call_args_list[0][0][0])
+            # agent2 was lost, so the run measured the harness: its score
+            # is kept aside and the run is an error, to be run again.
+            self.assertEqual((verdict["verdict"], verdict["scored_verdict"]), ("error", "fail"))
+            self.assertEqual(verdict["harness_error"], "the harness lost agent2")
 
 
 class BundleWanted(unittest.TestCase):

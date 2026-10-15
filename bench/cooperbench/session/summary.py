@@ -16,6 +16,15 @@ transcript holds whole only on its final reply of each turn and so is a
 lower bound (drivers.transcript_usage). Cost is estimated from those
 counts at the list prices below, so the arms compare on the same scale;
 nothing was billed, the agents ran on a subscription.
+
+What the session route did to each run is read from the audit.json that
+lane.py finish writes (audit.py). A run that measured the harness rather
+than the arm (an agent the harness lost, a full disk, an agent spawned
+twice) is left out of every figure and counted as a harness error, so it
+is neither a failure nor a pass of its arm. The API calls and the context
+each call sends before any work give the tokens net of that fixed prompt,
+which the route sets, not the arm: on the session route every bench
+agent sends the orchestrating session's own prompt again on every call.
 """
 
 import argparse
@@ -140,6 +149,8 @@ def pair_row(tag, arm, pair_dir):
         tool_calls = tool_calls + calls if calls is not None and tool_calls is not None else None
     errors = [a.get("error") for a in agents if a.get("error")]
     merge = evaluation.get("merge") if isinstance(evaluation.get("merge"), dict) else {}
+    pair = pair_tokens(tokens, lower_bound, unmeasured or not agents)
+    route = route_fields(read_json(pair_dir / "audit.json"), pair["total_tokens"])
     return {
         "tag": tag, "arm": arm, "repo": result.get("repo"), "task": result.get("task_id"),
         "features": "_".join(f"f{f}" for f in result.get("features") or []),
@@ -156,7 +167,8 @@ def pair_row(tag, arm, pair_dir):
         # A pair with an unmeasured agent has no token count or cost: its
         # sums would read as the pair's and halve it.
         "unmeasured_agents": unmeasured,
-        **pair_tokens(tokens, lower_bound, unmeasured or not agents),
+        **pair,
+        **route,
         "cost_usd": round(cost, 4) if cost is not None else None,
         "tool_calls": tool_calls,
         "messages_sent": metrics.get("messages_sent"), "message_words": metrics.get("message_words"),
@@ -165,6 +177,28 @@ def pair_row(tag, arm, pair_dir):
         "protocol_merge_conflicts": metrics.get("merge_conflicts"),
         "time_to_first_merge_seconds": metrics.get("time_to_first_merge_seconds"),
         "run_id": result.get("run_id"), "log_dir": str(pair_dir),
+    }
+
+
+def route_fields(found, total_tokens):
+    """What audit.json says the session route did to the run: why it
+    measured the harness, if it did; the API calls; the tokens every call
+    sent before any work (calls times the first call's context, per
+    agent) and the total net of them; the refusals and the efforts. All
+    None when the run has no audit."""
+    agents = list((found or {}).get("agents", {}).values())
+    calls = [a.get("calls") for a in agents]
+    prefix = [a["calls"] * a["first_context"] for a in agents
+              if a.get("calls") is not None and a.get("first_context") is not None]
+    known = bool(agents) and len(prefix) == len(agents)
+    prefix_tokens = sum(prefix) if known else None
+    return {
+        "audited": found is not None, "harness_error": (found or {}).get("harness_error"),
+        "api_calls": sum(calls) if known else None,
+        "prefix_tokens": prefix_tokens,
+        "net_tokens": total_tokens - prefix_tokens if total_tokens is not None and prefix_tokens is not None else None,
+        "refusals": sum(a.get("refusals") or 0 for a in agents) if found else None,
+        "efforts": ",".join(sorted({e for a in agents for e in a.get("efforts") or []})) or None,
     }
 
 
@@ -212,7 +246,10 @@ def summarize_arm(attempts):
     failure as the paper counts it, and over the complete attempts (no
     agent in Error); the latency, token and cost figures over the
     complete attempts only, since a cut run's clock ran to its deadline
-    and its agents' work is partial."""
+    and its agents' work is partial. A run that measured the harness is
+    no attempt of the arm's and is only counted."""
+    harness_errors = [r for r in attempts if r.get("harness_error")]
+    attempts = [r for r in attempts if not r.get("harness_error")]
     rows = [r for r in attempts if not r["agent_errors"]]
     n = len(rows)
     k = sum(1 for r in rows if r["passed"])
@@ -253,6 +290,27 @@ def summarize_arm(attempts):
         "merges": sum(r["merges"] or 0 for r in rows),
         "protocol_merge_conflicts": sum(r["protocol_merge_conflicts"] or 0 for r in rows),
         "time_to_first_merge_median": median([r["time_to_first_merge_seconds"] for r in rows]),
+        **route_summary(rows, harness_errors),
+    }
+
+
+def route_summary(rows, harness_errors):
+    """The session route's share of the arm's figures, over the complete
+    attempts that have an audit."""
+    audited = [r for r in rows if r.get("audited")]
+    both = [r for r in audited if r.get("prefix_tokens") is not None and r.get("total_tokens")]
+    share = sum(r["prefix_tokens"] for r in both) / sum(r["total_tokens"] for r in both) if both else None
+    return {
+        "harness_errors": len(harness_errors),
+        "harness_error_runs": sorted(f"{r['repo']}/{r['task']}/{r['features']}: {r['harness_error']}"
+                                     for r in harness_errors),
+        "audited_pairs": len(audited),
+        "api_calls_per_pair_mean": mean([r.get("api_calls") for r in audited]),
+        "prefix_share_of_tokens": round(share, 4) if share is not None else None,
+        "net_tokens_per_pair_mean": mean([r.get("net_tokens") for r in audited]),
+        "net_tokens_per_pair_median": median([r.get("net_tokens") for r in audited]),
+        "refusal_pairs": sum(1 for r in audited if r.get("refusals")),
+        "efforts": sorted({e for r in audited for e in (r.get("efforts") or "").split(",") if e}),
     }
 
 
@@ -263,7 +321,8 @@ def paired(rows_a, rows_b):
     and from the medians before rounding, since a median rounded to one
     decimal (a cost of $0.6) moves the ratio by a tenth."""
     def by_key(rows):
-        return {(r["repo"], r["task"], r["features"]): r for r in rows if not r["agent_errors"]}
+        return {(r["repo"], r["task"], r["features"]): r for r in rows
+                if not r["agent_errors"] and not r.get("harness_error")}
     a, b = by_key(rows_a), by_key(rows_b)
     shared = sorted(set(a) & set(b))
     counts = {"both": 0, "only_a": 0, "only_b": 0, "neither": 0}
@@ -271,13 +330,14 @@ def paired(rows_a, rows_b):
         pa, pb = a[key]["passed"], b[key]["passed"]
         counts["both" if pa and pb else "only_a" if pa else "only_b" if pb else "neither"] += 1
     def ratio(field):
-        measured = [k for k in shared if a[k][field] is not None and b[k][field] is not None]
+        measured = [k for k in shared if a[k].get(field) is not None and b[k].get(field) is not None]
         ma, mb = exact_median([a[k][field] for k in measured]), exact_median([b[k][field] for k in measured])
         return round(mb / ma, 3) if ma and mb is not None else None
     return {"shared_pairs": len(shared), **counts,
             "wall_seconds_ratio_b_over_a": ratio("wall_seconds"),
             "agent_seconds_sum_ratio_b_over_a": ratio("agent_seconds_sum"),
             "total_tokens_ratio_b_over_a": ratio("total_tokens"),
+            "net_tokens_ratio_b_over_a": ratio("net_tokens"),
             "cost_ratio_b_over_a": ratio("cost_usd")}
 
 
@@ -306,13 +366,16 @@ def markdown(summary, arms):
                      f"{s['messages_per_pair_mean'] if s['messages_per_pair_mean'] is not None else '-'} |")
     lines += ["", f"## Paired against {' and '.join(summary['bases'])}, over the pairs both arms completed "
               "(b over a: below 1 means b is cheaper or faster)", ""]
-    lines.append("| a | b | shared | both pass | only a | only b | neither | wall ratio | agent s ratio | tokens ratio | cost ratio |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| a | b | shared | both pass | only a | only b | neither | wall ratio | agent s ratio | tokens ratio "
+                 "| net tokens ratio | cost ratio |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for key, p in summary["paired"].items():
         a, b = key.split(" vs ")
         lines.append(f"| {a} | {b} | {p['shared_pairs']} | {p['both']} | {p['only_a']} | {p['only_b']} | {p['neither']} | "
                      f"{p['wall_seconds_ratio_b_over_a']} | {p['agent_seconds_sum_ratio_b_over_a']} | "
-                     f"{p['total_tokens_ratio_b_over_a']} | {p['cost_ratio_b_over_a']} |")
+                     f"{p['total_tokens_ratio_b_over_a']} | {p.get('net_tokens_ratio_b_over_a')} | "
+                     f"{p['cost_ratio_b_over_a']} |")
+    lines += route_table(summary, arms)
     unmeasured = {arm: s["unmeasured_token_pairs"] for arm, s in summary["arms"].items() if s["unmeasured_token_pairs"]}
     lines += ["", f"Prices (USD per million tokens): {json.dumps(PRICES['claude-sonnet-5-5'])}; "
               "output tokens are a lower bound where the table says so (summary.json counts the pairs)."]
@@ -321,6 +384,30 @@ def markdown(summary, arms):
                      + ", ".join(f"{arm} {n}" for arm, n in unmeasured.items()) + ".")
     lines.append("")
     return "\n".join(lines)
+
+
+def route_table(summary, arms):
+    """What the session route did, per arm: the runs left out as harness
+    errors and why, and over the audited complete pairs the API calls, the
+    share of tokens the fixed prompt took, the tokens net of it, the pairs
+    with a refusal and the efforts the agents ran at."""
+    lines = ["", "## What the session route did (audit.json)", "",
+             "| arm | harness errors (left out) | audited pairs | API calls per pair (mean) | fixed prompt share "
+             "| net tokens per pair (median) | pairs with a refusal | efforts |",
+             "|---|---|---|---|---|---|---|---|"]
+    notes = []
+    for arm in arms:
+        s = summary["arms"].get(arm)
+        if not s or "harness_errors" not in s:
+            continue
+        share = f"{100 * s['prefix_share_of_tokens']:.0f}%" if s["prefix_share_of_tokens"] is not None else "-"
+        lines.append(f"| {arm} | {s['harness_errors']} | {s['audited_pairs']} | "
+                     f"{s['api_calls_per_pair_mean'] if s['api_calls_per_pair_mean'] is not None else '-'} | {share} | "
+                     f"{num(s['net_tokens_per_pair_median'])} | {s['refusal_pairs']} | {', '.join(s['efforts']) or '-'} |")
+        notes += [f"- {arm}: {run}" for run in s["harness_error_runs"]]
+    if notes:
+        lines += ["", "Runs left out as harness errors, to be run again:", "", *notes]
+    return lines
 
 
 def main(argv=None):

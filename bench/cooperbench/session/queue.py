@@ -9,12 +9,16 @@ the work balances itself and an item can be added while the run is on.
     python3 queue.py add QUEUE --tag TAG --arms solo,coop,sdlc [--pairs @pairs.txt|flash]
         [--sample N --stratify language,conflict,published --allocation equal --seed 0 --published coop/index.json]
         [--timeout-min 45] [--model claude-sonnet-5-5] [--skip REPO/TASK ...]
+        [--order-seed N] [--option KEY=VALUE ...]
     python3 queue.py next QUEUE --worker NAME      pop the first pending item (JSON on stdout)
     python3 queue.py set QUEUE ITEM_ID KEY=VALUE ...
     python3 queue.py show QUEUE [--counts]
-    python3 queue.py requeue QUEUE --status failed  put failed items back as pending
+    python3 queue.py requeue QUEUE --status failed [--harness-only] [--ids ...]
+                                                   put items back as pending
     python3 queue.py pause QUEUE                   pending items wait (status paused) until resume
     python3 queue.py resume QUEUE [--pairs ...]    paused items are pending again
+    python3 queue.py shuffle QUEUE --tag TAG --seed N
+                                                   put each pair's arms not yet taken in a seeded order
 
 A run grows by adding again: --sample N takes the first N pairs of the
 nested stratified order strata.py fixes by the seed (the same seed and
@@ -29,6 +33,19 @@ never pop the same item. Items are ordered task by task, then pair by
 pair, then arm by arm, so every arm advances together and a run cut
 short still holds the same pairs under every arm, which the paired tests
 need.
+
+The arms of a pair go in the order --arms gives unless --order-seed, or
+shuffle on a queue already filled, puts them in an order drawn for each
+pair from the seed and the pair: with one fixed order the same arm would
+always meet a lane's first minutes, the load of the arm before it and a
+usage window's end, and its times and failures would carry them. The
+draw depends on nothing else, so it is the same on every machine and in
+every repetition of an add.
+
+requeue --harness-only takes back only the failed items whose finish found
+that the run measured the harness rather than the arm (harness_error: an
+agent the harness lost, a full disk, an agent spawned twice); an agent
+that ran out of time is the arm's result and stays failed.
 """
 
 import argparse
@@ -36,6 +53,7 @@ import fcntl
 import hashlib
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -47,7 +65,7 @@ ARMS_DEFAULT = ("solo", "coop", "sdlc", "coop-git", "team")
 # What a prepare or a finish wrote on an item, cleared when the item is
 # taken again, so a requeued item is not read as prepared already.
 RUN_KEYS = ("worker", "taken_at", "run_dir", "prepared_at", "finishing_at", "finished_at", "verdict",
-            "error", "note", "image_waits")
+            "error", "note", "image_waits", "disk_waits", "harness_error")
 
 
 def locked(path):
@@ -114,9 +132,24 @@ def sampled_pairs(args):
     return [(r["repo"], r["task"], [int(f) for f in r["pair"].replace("f", "").split("_")]) for r in order[:args.sample]]
 
 
+def pair_key(repo, task, features):
+    return f"{repo}/{task}/{features}"
+
+
+def arm_order(arms, seed, key):
+    """The arms in the order the seed draws for this pair, from the arms
+    sorted by label, so the draw does not depend on the order they were
+    given in: a generator seeded by text, which Python seeds the same way
+    on every run."""
+    order = sorted(arms, key=arm_label)
+    random.Random(f"{seed}:{key}").shuffle(order)
+    return order
+
+
 def command_add(args):
     arms = args.arms.split(",")
     skip = set(args.skip or [])
+    options = dict(args.option or [])
     record = sampling_record(args) if args.sample else None
     pairs = sampled_pairs(args) if args.sample else strata.flash_pairs(Path(args.dataset_dir), args.pairs)
     # The order is the pair list's, or the nested stratified order under
@@ -132,16 +165,23 @@ def command_add(args):
         for repo, task, pair in pairs:
             if f"{repo}/{task}" in skip:
                 continue
-            for arm in arms:
+            features = f"{pair[0]},{pair[1]}"
+            order = arms if args.order_seed is None else arm_order(arms, args.order_seed,
+                                                                   pair_key(repo, task, features))
+            for arm in order:
                 ident = item_id(args.tag, arm, repo, task, pair)
                 if ident in known:
                     continue
                 item = {"id": ident, "tag": args.tag, "arm": arm, "repo": repo, "task": task,
-                        "features": f"{pair[0]},{pair[1]}", "run_name": f"{args.tag}-{arm_label(arm)}",
+                        "features": features, "run_name": f"{args.tag}-{arm_label(arm)}",
                         "timeout_min": args.timeout_min, "model": args.model, "status": "pending",
                         "added_at": time.time()}
                 if record:
                     item["sample"] = record
+                if args.order_seed is not None:
+                    item["order_seed"] = args.order_seed
+                if options:
+                    item["options"] = options
                 items.append(item)
                 added += 1
         write_items(args.queue, items)
@@ -241,11 +281,37 @@ def command_resume(args):
     print(f"resumed {changed} items")
 
 
+def command_shuffle(args):
+    """Put the arms of each pair of the tag that no lane has taken yet
+    (pending or paused) in the order the seed draws for the pair, in the
+    places those items hold, so the pairs' order and every other item
+    stay where they are."""
+    open_states = ("pending", "paused")
+    with locked(args.queue):
+        items = read_items(args.queue)
+        places = {}
+        for index, item in enumerate(items):
+            if item["tag"] == args.tag and item["status"] in open_states:
+                places.setdefault(pair_key(item["repo"], item["task"], item["features"]), []).append(index)
+        moved = 0
+        for key, indexes in places.items():
+            held = {arm_label(items[i]["arm"]): items[i] for i in indexes}
+            order = arm_order(held, args.seed, key)
+            for index, label in zip(indexes, order):
+                if items[index] is not held[label]:
+                    moved += 1
+                items[index] = dict(held[label], order_seed=args.seed)
+        write_items(args.queue, items)
+    print(f"ordered {sum(len(i) for i in places.values())} items of {len(places)} pairs; {moved} moved")
+
+
 def command_requeue(args):
     with locked(args.queue):
         items = read_items(args.queue)
         n = 0
         for item in items:
+            if args.harness_only and not item.get("harness_error"):
+                continue
             if item["status"] == args.status and (not args.ids or item["id"] in args.ids):
                 for key in RUN_KEYS:
                     item.pop(key, None)
@@ -254,6 +320,18 @@ def command_requeue(args):
                 n += 1
         write_items(args.queue, items)
     print(f"requeued {n}")
+
+
+def parse_option(text):
+    """KEY=VALUE as run.py's --option reads it: the value as JSON when it
+    is JSON, else as the text."""
+    key, equals, value = text.partition("=")
+    if not equals or not key:
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got {text!r}")
+    try:
+        return key, json.loads(value)
+    except ValueError:
+        return key, value
 
 
 def main(argv=None):
@@ -274,6 +352,9 @@ def main(argv=None):
     add.add_argument("--timeout-min", type=int, default=45)
     add.add_argument("--model", default="claude-sonnet-5-5")
     add.add_argument("--skip", nargs="*")
+    add.add_argument("--order-seed", type=int, help="put each pair's arms in an order drawn from this seed")
+    add.add_argument("--option", action="append", type=parse_option, metavar="KEY=VALUE",
+                     help="a run option every item passes to run.py prepare (--option); repeat for more")
     add.set_defaults(func=command_add)
     nxt = sub.add_parser("next")
     nxt.add_argument("queue")
@@ -292,7 +373,14 @@ def main(argv=None):
     req.add_argument("queue")
     req.add_argument("--status", default="failed")
     req.add_argument("--ids", nargs="*")
+    req.add_argument("--harness-only", action="store_true",
+                     help="only items whose run measured the harness rather than the arm")
     req.set_defaults(func=command_requeue)
+    shuffle = sub.add_parser("shuffle")
+    shuffle.add_argument("queue")
+    shuffle.add_argument("--tag", required=True)
+    shuffle.add_argument("--seed", type=int, required=True)
+    shuffle.set_defaults(func=command_shuffle)
     pause = sub.add_parser("pause")
     pause.add_argument("queue")
     pause.set_defaults(func=command_pause)
