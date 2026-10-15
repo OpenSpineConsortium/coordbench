@@ -2339,11 +2339,12 @@ class SessionTranscripts(unittest.TestCase):
         self.assertEqual(drivers.find_transcripts(token, [self.root], 0), [replied, prompted])
 
     def test_an_agent_that_never_echoed_its_token_is_found_by_the_prompt_file_its_prompt_names(self):
-        """Six agents of the curse-1 step read their prompt file only after
-        their first reply and never echoed the token: the file's path,
-        named in the agent's own prompt, finds them, after every
-        transcript that carries the token, and never an orchestrator's
-        or another agent's."""
+        """Six agents of the curse-1 step opened their prompt file with a
+        tool call and never wrote the token in a text reply: the file's
+        path, named in the agent's own prompt, finds them, after every
+        transcript that carries the token, and never an orchestrator's,
+        another agent's or an earlier attempt's, whose prompt names the
+        same path."""
         token = drivers.run_token("run-3", "agent1")
         prompt_file = self.tmp / "logs" / "f1_f2" / "agent1.session-prompt.md"
         subagents = self.root / "p" / "s" / "subagents"
@@ -2368,6 +2369,18 @@ class SessionTranscripts(unittest.TestCase):
                 {"type": "text", "text": drivers.run_token("run-old", "agent1")}]}}])
         self.assertIsNone(drivers.carries_token(echoed, token, str(prompt_file)),
                           "an agent that echoed another run's token is that run's, though its file has the same path")
+        old_token = drivers.run_token("run-old", "agent1")
+        earlier = write_lines(subagents / "agent-earlier.jsonl", [
+            user_line(f"Your complete task is the file {prompt_file}. Read it in full first."), reply,
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": f"# coordbench\nBegin with {old_token}."}]}}])
+        self.assertIsNone(drivers.carries_token(earlier, token, str(prompt_file)),
+                          "an earlier attempt that read its own token back is that attempt's agent")
+        prompted = write_lines(subagents / "agent-prompted.jsonl", [
+            user_line(f"{old_token}\nYour complete task is the file {prompt_file}."), reply])
+        self.assertIsNone(drivers.carries_token(prompted, token, str(prompt_file)),
+                          "a prompt that carries another run's token is that run's")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, str(prompt_file)), [replied, mine])
         planner = write_lines(subagents / "agent-planner.jsonl", [
             user_line("Run lane.py prepare."), {"type": "assistant", "message": {"role": "assistant", "content": [
                 {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "lane.py prepare"}}]}},

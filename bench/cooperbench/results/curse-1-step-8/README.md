@@ -113,13 +113,17 @@ by hand; and six agents' token counts were filled in after the run.
   usage window had reset at 14:10.
 - Six agents' transcripts were not found when their runs finished
   (coop and coop-git on outlines 1655 and datasets 6252, sdlc on jinja
-  1559, team on jinja 1621): each read its prompt file only after its
-  first reply and never echoed the run token by which finish finds an
-  agent's transcript, so result.json had no token counts for it and
+  1559, team on jinja 1621): each opened its prompt file with a tool
+  call, five as their very first act, and none wrote the run token in a
+  text reply, the only place finish looked for it (sdlc's jinja 1559
+  agent echoed it only through a shell command), so result.json had no
+  token counts for it and
   summary.py counted them as zero, halving those pairs. This pull
   request's driver also finds an agent by the prompt file its own
-  prompt names, ranked after the token; each of the six had exactly one
-  such transcript, and at 17:14 UTC each was copied and counted with
+  prompt names, ranked after the token and refused to a transcript that
+  carries any other run's token, since every attempt of a pair shares
+  that path; each of the six had exactly one such transcript, and at
+  17:14 UTC each was copied and counted with
   the driver's own code into its result.json (the session outcome
   beside it, outside the repository, keeps the earlier record). summary.py
   now leaves a pair with an unmeasured agent out of the token and cost
@@ -179,10 +183,14 @@ harness's board: 16 tasks, 16 done, 31 seconds to the first claim.
 
 The naive merge of the two agents' final patches conflicted in 0 of 8
 pairs under coop, 0 under sdlc, 1 under coop-git and 4 under team
-(report.md, Naive-merge conflicts). sdlc's and coop-git's zeros and ones
-are not comparable with coop's: both arms tell each agent to submit the
-integrated main as its patch once its work has merged, so 7 of their 8
-pairs submitted identical patches, which cannot conflict. For the same
+(report.md, Naive-merge conflicts; pairs.csv's merge_conflict column,
+which this pull request's summary.py reads from the merge status that
+CooperBench's eval.json records). sdlc's and coop-git's zeros and ones
+are not comparable with coop's: sdlc tells each agent to submit the
+integrated main once its pull request has merged, and coop-git tells
+each agent to merge its peers' branches into its own before it writes
+its patch, so 7 of their 8 pairs submitted identical patches, which
+cannot conflict. For the same
 reason each agent's patch alone passed both features' tests in many
 pairs (sdlc: the first agent's in 6, the second's in 5; coop-git: 6 and
 6; coop: 1 and 1 of 7): the counts measure that submission rule, not
@@ -195,7 +203,7 @@ The cost of talking (report.md, Communication): coop 6.1 messages per
 pair and 17.6% of its tool calls spent sending, coop-git 5.6 and 12.5%,
 team 4.1 and 10.0%, sdlc 3.8 and 8.8%. These count message sends only:
 sdlc's agents also made about 13 protocol calls per pair (board, claim,
-pull request, status, ready) and team's about 10 task-board calls, which
+pull request, status, ready) and team's about 11 task-board calls, which
 the percentages do not count as coordination.
 
 ### Latency, tokens and cost
@@ -273,15 +281,21 @@ which the medians above do not move with.
   this repository over 34 two-agent runs that predates the last typst
   runs (/mnt/project-files/experiments/curse-of-coordination/xblossom/
   in the project).
-- The same code and the same queue grow the run: `queue.py add --sample
-  16 ...` adds the next 8 pairs of the order, `--sample 43` the rest.
+- The same code and the same queue grow the run, the way this step was
+  released: `strata.py ... sample 16` with this step's skip list and
+  seed prints the next 8 pairs of the order, and `queue.py resume
+  --pairs` with those pairs releases them, since the queue already holds
+  them paused and `add --sample` adds only pairs a queue lacks (it is for
+  a fresh tag or queue).
   By this step's record the next 8 would take about two of this
   account's five-hour windows at four lanes: the 34 runs of its first
   seven pairs (the 35th is the pilot's) went from 10:38 to 12:59 UTC in
   one window and the typst pair's five in the next, each
   two-agent run reading 1.9 to 7.6 million tokens (the arms' means 3.4
   to 4.4 million) and taking 3 to 14 minutes of wall time (typst's 10
-  to 14). PLAN.md's power note puts the detectable gap at about 25
+  to 14), apart from sdlc on click 2068 f5_f11, the run that also sets
+  the 1.9 million floor, whose agents ran about 15 minutes before its
+  finish died. PLAN.md's power note puts the detectable gap at about 25
   points over 50 pairs at the paper's rates, about a third of pairs
   discordant; at this step's one discordant pair in eight, even the 43
   gradable pairs would detect less. The pilot's README has the sizes

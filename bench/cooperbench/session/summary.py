@@ -146,7 +146,7 @@ def pair_row(tag, arm, pair_dir):
         "passed": bool(evaluation.get("both_passed")), "evaluated": bool(evaluation),
         "feature1_passed": bool((evaluation.get("feature1") or {}).get("passed")),
         "feature2_passed": bool((evaluation.get("feature2") or {}).get("passed")),
-        "merge_conflict": bool(merge.get("conflict") or merge.get("has_conflict")) if merge else None,
+        "merge_conflict": merge.get("status") == "conflicts" if merge else None,
         "agent_errors": len(errors), "error": "; ".join(errors)[:200] or None,
         "agents": len(agents),
         "wall_seconds": result.get("duration_seconds"),

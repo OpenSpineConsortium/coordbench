@@ -1050,27 +1050,36 @@ def carries_token(path, token, prompt_file=None):
     another agent's token of the same run anywhere in what is read is
     such an orchestrator's, and none of the agents'.
 
-    "named" is for an agent that read its prompt file only after its
-    first reply and never echoed the token (six of 72 agents in the
-    curse-1 step): the file's path is the agent's own, run directory and
-    name, and an orchestrator's prompt never names it. A transcript whose
-    reply carries any run token is some run's agent, and is "named" for
-    none."""
-    found, replied, prompt, echoed = None, False, [], False
+    "named" is for an agent that opened its prompt file with a tool call
+    and never wrote the token in a text reply (six of 72 agents in the
+    curse-1 step; one echoed it only through a shell command): its prompt
+    names the file, and an orchestrator's prompt never does. The file's
+    path is the pair's, shared by every attempt of the pair, so a
+    transcript that carries any other run token anywhere in what is read,
+    prompt, reply or tool result, is an earlier attempt's agent or some
+    other run's, and is "named" for none."""
+    found, replied, prompt, foreign = None, False, [], False
     for kind, message in opening_messages(path):
         text = content_blocks_to_text(message.get("content"))
         if names_another_agent(text, token):
             return None
+        foreign = foreign or carries_other_token(text, token)
         if kind == "assistant":
             replied = True
-            echoed = echoed or bool(RUN_TOKEN.search(reply_text(message)))
             found = "reply" if holds_token(reply_text(message), token) else found
         elif kind == "user" and not replied:
             prompt.append(text)
             found = found or ("prompt" if holds_token(text, token) else None)
-    if found or echoed or not prompt_file:
+    if found or foreign or not prompt_file:
         return found
     return "named" if names_file(" ".join(prompt), prompt_file) else None
+
+
+def carries_other_token(text, token):
+    """Whether the text holds a run token that is not this one."""
+    wanted = RUN_TOKEN.fullmatch(token)
+    own = wanted.groups() if wanted else None
+    return any(found != own for found in RUN_TOKEN.findall(text))
 
 
 def names_file(text, path):

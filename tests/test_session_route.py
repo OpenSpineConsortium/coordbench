@@ -282,20 +282,22 @@ UNMEASURED = dict.fromkeys(("input_tokens", "cache_read_tokens", "cache_write_to
                             "output_tokens_lower_bound", "model"))
 
 
-def write_pair(logs, arm, task, agents, both_passed=True):
+def write_pair(logs, arm, task, agents, both_passed=True, merge=None):
     folder = Path(logs) / f"curse-1-{arm}" / "coop" / "repo_task" / str(task) / "f1_f2"
     folder.mkdir(parents=True)
     result = {"repo": "repo_task", "task_id": task, "features": [1, 2], "model": "claude-sonnet-5-5",
               "duration_seconds": 300.0, "agents": agents}
     (folder / "result.json").write_text(json.dumps(result))
-    (folder / "eval.json").write_text(json.dumps({"both_passed": both_passed}))
+    evaluation = {"both_passed": both_passed, **({"merge": merge} if merge else {})}
+    (folder / "eval.json").write_text(json.dumps(evaluation))
     return folder
 
 
 class SummaryCountsWhatWasMeasured(unittest.TestCase):
-    """summary.py's token and cost figures: an agent with no counts at all
-    leaves its pair out of them, and a paired ratio is taken from the
-    medians before rounding."""
+    """summary.py's figures: an agent with no counts at all leaves its
+    pair out of the token and cost figures, a merge conflict is read from
+    the status CooperBench's eval.json gives the merge, and a paired ratio
+    is taken from the medians before rounding."""
 
     def setUp(self):
         self.logs = tempfile.mkdtemp(prefix="coordbench-summary-")
@@ -319,6 +321,17 @@ class SummaryCountsWhatWasMeasured(unittest.TestCase):
                                   "output_tokens": 0})
         self.assertEqual(zero["input"] + zero["output"], 0)
         self.assertIsNone(summary.tokens_of(dict(UNMEASURED)))
+
+    def test_a_merge_conflict_is_read_from_the_merge_status_cooperbench_writes(self):
+        agents = {"agent1": measured_agent(1), "agent2": measured_agent(1)}
+        rows = [summary.pair_row("curse-1", "team", write_pair(self.logs, "team", task, agents, merge=merge))
+                for task, merge in ((1, {"status": "conflicts", "strategy": "solo-agent1"}),
+                                    (2, {"status": "conflicts", "strategy": "naive"}),
+                                    (3, {"status": "clean", "strategy": "naive"}),
+                                    (4, {"status": "identical", "strategy": "skip-merge-identical"}),
+                                    (5, None))]
+        self.assertEqual([row["merge_conflict"] for row in rows], [True, True, False, False, None])
+        self.assertEqual(summary.summarize_arm(rows)["merge_conflict_pairs"], 2)
 
     def test_ratios_come_from_the_medians_before_rounding(self):
         def row(task, cost, tokens=None):
