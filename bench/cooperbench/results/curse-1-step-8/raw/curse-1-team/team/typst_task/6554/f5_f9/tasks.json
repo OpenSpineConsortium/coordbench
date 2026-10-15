@@ -1,0 +1,29 @@
+[
+  {
+    "id": "61bb1b4341",
+    "title": "Lead-only: integrate and submit feature 5",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792081845.1036518,
+    "last_note": "merged strip (agent2) and count (agent1) into one first/last; builds, tests pass; patch.txt written",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "c2028a5070",
+    "title": "Implement feature 9",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792081845.1035738,
+    "last_note": "patch at /workspace/shared/agent2.patch (only crates/typst/src/foundations/str.rs: str.first/last strip param; tests pass)",
+    "metadata": {
+      "feature_id": 9,
+      "assigned_to": "agent2"
+    }
+  }
+]

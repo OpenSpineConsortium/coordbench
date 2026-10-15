@@ -1,0 +1,59 @@
+commit 8bb747278ba767f14bcd023fb66f76a0fe5e3dc7 (main)
+Merge: 2007d036 ed4a4813
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 16:00:53 2026 +0000
+
+    Merge claude/9: closes #9
+
+commit ed4a48132c4cce834cea96d88f0dd581bbcf33ca (claude/9)
+Merge: 61237813 2007d036
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 16:00:44 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/9
+    
+    # Conflicts:
+    #       crates/typst/src/foundations/str.rs
+
+commit 2007d0362546b89a72308445c0631d4b2b61bd67
+Merge: b8034a34 aefaf762
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 15:57:01 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit aefaf762d0f4f6febc12e628e294139c27af844f (claude/5)
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 15:56:57 2026 +0000
+
+    Add count parameter to str.first and str.last
+    
+    With a count, both methods return an array of that many grapheme
+    clusters instead of a single string, so callers can take several
+    characters apart in one call. Without it they behave as before.
+    A count of zero and a count larger than the string are errors.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01GVAX6T56bQavX89vmsnCFg
+
+ crates/typst/src/foundations/str.rs | 83 +++++++++++++++++++++++++++++++------
+ tests/suite/foundations/str.typ     | 57 +++++++++++++++++++++++++
+ 2 files changed, 128 insertions(+), 12 deletions(-)
+
+commit 6123781396b340741ff98dcd768381a44c781e85
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 15:52:32 2026 +0000
+
+    Add strip parameter to str.first and str.last
+    
+    An optional named strip argument names a set of characters to remove from
+    the start (first) or the end (last) of the string before the first or last
+    grapheme cluster is taken, so callers can skip punctuation or wrapping
+    quotes without pre-trimming. An empty set or an omitted argument changes
+    nothing, and a string that is empty after stripping gives the existing
+    "string is empty" error.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ crates/typst/src/foundations/str.rs | 34 ++++++++++++++++++++++++++++------
+ 1 file changed, 28 insertions(+), 6 deletions(-)

@@ -1,0 +1,116 @@
+diff --cc crates/typst/src/foundations/str.rs
+index ab9bb52b6,85d7897c6..000000000
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@@ -181,6 -181,10 +181,13 @@@ impl Str 
+      ///
+      /// If `strip` is given, all leading characters that occur in it are
+      /// ignored first. Fails with an error if nothing is left afterwards.
+++<<<<<<< HEAD
+++=======
++     ///
++     /// If `count` is given, returns an array of the first `count` grapheme
++     /// clusters instead, each as its own string. Fails with an error if the
++     /// string has fewer than `count` grapheme clusters.
+++>>>>>>> agent1
+      #[func]
+      pub fn first(
+          &self,
+@@@ -188,18 -192,28 +195,40 @@@
+          /// extracting the first grapheme cluster.
+          #[named]
+          strip: Option<Str>,
+++<<<<<<< HEAD
+ +    ) -> StrResult<Str> {
+++=======
++         /// The number of grapheme clusters to return as an array. If omitted,
++         /// returns a single string.
++         #[named]
++         count: Option<usize>,
++     ) -> StrResult<Value> {
+++>>>>>>> agent1
+          let trimmed = match &strip {
+              Some(set) if !set.is_empty() => {
+                  self.0.trim_start_matches(|c: char| set.as_str().contains(c))
+              }
+              _ => self.0.as_str(),
+          };
+++<<<<<<< HEAD
+ +        trimmed
+ +            .graphemes(true)
+ +            .next()
+ +            .map(Into::into)
+ +            .ok_or_else(string_is_empty)
+++=======
++         match count {
++             None => trimmed
++                 .graphemes(true)
++                 .next()
++                 .map(|cluster| cluster.into_value())
++                 .ok_or_else(string_is_empty),
++             Some(count) => {
++                 let clusters = clusters_for_count(trimmed, count)?;
++                 Ok(cluster_array(&clusters[..count]))
++             }
++         }
+++>>>>>>> agent1
+      }
+  
+      /// Extracts the last grapheme cluster of the string.
+@@@ -207,6 -221,11 +236,14 @@@
+      ///
+      /// If `strip` is given, all trailing characters that occur in it are
+      /// ignored first. Fails with an error if nothing is left afterwards.
+++<<<<<<< HEAD
+++=======
++     ///
++     /// If `count` is given, returns an array of the last `count` grapheme
++     /// clusters instead, each as its own string and in their original order.
++     /// Fails with an error if the string has fewer than `count` grapheme
++     /// clusters.
+++>>>>>>> agent1
+      #[func]
+      pub fn last(
+          &self,
+@@@ -214,18 -233,29 +251,41 @@@
+          /// extracting the last grapheme cluster.
+          #[named]
+          strip: Option<Str>,
+++<<<<<<< HEAD
+ +    ) -> StrResult<Str> {
+++=======
++         /// The number of grapheme clusters to return as an array. If omitted,
++         /// returns a single string.
++         #[named]
++         count: Option<usize>,
++     ) -> StrResult<Value> {
+++>>>>>>> agent1
+          let trimmed = match &strip {
+              Some(set) if !set.is_empty() => {
+                  self.0.trim_end_matches(|c: char| set.as_str().contains(c))
+              }
+              _ => self.0.as_str(),
+          };
+++<<<<<<< HEAD
+ +        trimmed
+ +            .graphemes(true)
+ +            .next_back()
+ +            .map(Into::into)
+ +            .ok_or_else(string_is_empty)
+++=======
++         match count {
++             None => trimmed
++                 .graphemes(true)
++                 .next_back()
++                 .map(|cluster| cluster.into_value())
++                 .ok_or_else(string_is_empty),
++             Some(count) => {
++                 let clusters = clusters_for_count(trimmed, count)?;
++                 let start = clusters.len() - count;
++                 Ok(cluster_array(&clusters[start..]))
++             }
++         }
+++>>>>>>> agent1
+      }
+  
+      /// Extracts the first grapheme cluster after the specified index. Returns
