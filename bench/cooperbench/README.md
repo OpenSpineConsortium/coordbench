@@ -159,10 +159,12 @@ whole), where no format that accounts for all of the bytes opens them
 by ustar's magic or by a later header, is a weak sign too: looked for
 after the end record, and not at all where the zip that record ends
 has its first member in the first block, as a zipapp has after its
-interpreter line, since text that happens to put a header's fields
-where a tar has them is a zip first of all; it never refuses a file it
-does not open, and the scrub's pass leaves it whole once it opens, as
-it leaves a tar): a stream that starts partway
+interpreter line, or holds within it the later header the tar was
+found by, a tar stored in the zip, as a zipapp whose interpreter line
+runs past the first block has, since text that happens to put a
+header's fields where a tar has them is a zip first of all; it never
+refuses a file it does not open, and the scrub's pass leaves it whole
+once it opens, as it leaves a tar): a stream that starts partway
 through other bytes (after a line of text, a zip's end, or a zlib or
 lzma stream) is outside it, as base64 is, and so are a zip after a git
 object or a pack, which git refuses with bytes after them, a v7 tar
