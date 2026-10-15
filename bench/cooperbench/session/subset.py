@@ -11,11 +11,13 @@ not as smaller. Each arm gets its config.json and a summary.json rebuilt
 from the copied pairs alone, by the runner's own refresh_summary, so the
 report's summary column counts the sample and not the tag, and OUT gets
 the sample's lines of the queue under the queue's own name, where
-bundle.py looks for it.
+bundle.py looks for it. OUT must be new or empty, so nothing an earlier
+pass copied is read as part of this one.
     python3 subset.py QUEUE LOGS OUT
 """
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -35,13 +37,13 @@ def sampled(queue):
 def copy_runs(items, logs, out):
     """Each finished item's run directory under out, at its path under
     logs; what was left out is returned by reason, not raised."""
-    logs = Path(logs).resolve()
+    logs = plain_path(logs)
     left = {"unfinished": [], "no_run_dir": [], "outside_logs": []}
     for item in items:
         if item.get("status") not in FINISHED:
             left["unfinished"].append(item["id"])
             continue
-        source = Path(item.get("run_dir") or "").resolve()
+        source = plain_path(item.get("run_dir") or "")
         if not item.get("run_dir") or not source.is_dir():
             left["no_run_dir"].append(item["id"])
             continue
@@ -53,6 +55,12 @@ def copy_runs(items, logs, out):
             shutil.rmtree(target)
         shutil.copytree(source, target, ignore=shutil.ignore_patterns(*LEFT_BEHIND))
     return left
+
+
+def plain_path(path):
+    """An absolute path with . and .. taken out but symlinks kept, so an
+    arm directory linked in from another disk still lies under LOGS."""
+    return Path(os.path.abspath(path))
 
 
 def write_queue(items, queue, out):
@@ -82,11 +90,16 @@ def load_runner():
 
 
 def refuse(out, logs):
-    """Why OUT may not be used, or None: OUT that is LOGS or lies in it
-    would have the copy delete or mix with the runs it copies."""
+    """Why OUT may not be used, or None. OUT that is LOGS or lies in it
+    would have the copy delete or mix with the runs it copies; OUT that
+    holds anything already would keep an earlier pass's copy of a run
+    since requeued, or hold LOGS or the queue itself, so it must be new
+    or empty."""
     out, logs = Path(out).resolve(), Path(logs).resolve()
     if out == logs or logs in out.parents:
         return f"OUT {out} is LOGS or inside it; give a directory beside LOGS"
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        return f"OUT {out} is not a new or empty directory; remove it or name another"
     return None
 
 

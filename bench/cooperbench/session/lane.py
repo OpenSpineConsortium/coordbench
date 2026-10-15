@@ -293,10 +293,13 @@ def command_wait(args):
 
 def finish_pair(args):
     notes = place_missing_markers(args.run_dir, set(args.returned or ()), set(args.dead or ()))
-    if notes["gone_workspaces"]:
-        # run.py finish would find no marker and no patch in a gone
-        # workspace, call the agents failed and write their empty patches
-        # and a fresh score over the only copy an earlier finish left.
+    if notes["gone_workspaces"] and (Path(args.run_dir) / "result.json").exists():
+        # An earlier finish wrote its outputs and tore the run down;
+        # run.py finish would find no marker and no patch in the gone
+        # workspaces, call the agents failed and write their empty
+        # patches and a fresh score over the only copy that finish left.
+        # A workspace gone with no result.json is no earlier finish's
+        # doing, and run.py finish records that agent and tears down.
         return {"verdict": "error", "harness": notes,
                 "note": "the agents' workspaces are gone, so an earlier finish tore the run down; "
                         "its patches and score are left as they are, to be recorded by hand"}

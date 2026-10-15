@@ -101,6 +101,7 @@ class FinishAfterTeardown(unittest.TestCase):
             lane.write_plan(run_dir, plan_with({"agent1": run_dir / "gone1", "agent2": run_dir / "gone2"},
                                                time.time() + 600))
             (run_dir / "agent1.patch").write_text("diff --git a/x b/x\n")
+            (run_dir / "result.json").write_text("{}\n")
             args = SimpleNamespace(run_dir=str(run_dir), returned=["agent1", "agent2"], dead=None)
             with mock.patch.object(lane.subprocess, "run", side_effect=AssertionError("run.py was called")):
                 verdict = lane.finish_pair(args)
@@ -114,10 +115,24 @@ class FinishAfterTeardown(unittest.TestCase):
             (run_dir / "here").mkdir()
             lane.write_plan(run_dir, plan_with({"agent1": run_dir / "here", "agent2": run_dir / "gone"},
                                                time.time() + 600))
+            (run_dir / "result.json").write_text("{}\n")
             args = SimpleNamespace(run_dir=str(run_dir), returned=["agent1"], dead=None)
             with mock.patch.object(lane.subprocess, "run", side_effect=AssertionError("run.py was called")):
                 verdict = lane.finish_pair(args)
             self.assertEqual(verdict["harness"]["gone_workspaces"], ["agent2"])
+
+    def test_a_gone_workspace_with_no_outputs_yet_still_reaches_run_py(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            (run_dir / "here").mkdir()
+            lane.write_plan(run_dir, plan_with({"agent1": run_dir / "here", "agent2": run_dir / "gone"},
+                                               time.time() + 600))
+            args = SimpleNamespace(run_dir=str(run_dir), returned=["agent1"], dead=["agent2"])
+            done = SimpleNamespace(stdout='{"verdict": "fail"}\n', stderr="", returncode=0)
+            with mock.patch.object(lane.subprocess, "run", return_value=done) as called:
+                verdict = lane.finish_pair(args)
+            self.assertEqual(verdict["verdict"], "fail")
+            self.assertIn("finish", called.call_args_list[0][0][0])
 
 
 class BundleWanted(unittest.TestCase):
@@ -223,6 +238,29 @@ class SubsetCopiesTheSample(unittest.TestCase):
         self.assertTrue((out / "t-solo" / "config.json").exists())
         plan = runner.refresh_summary.call_args[0][0]
         self.assertEqual(Path(plan["run_dir"]), out / "t-solo" / "solo" / "repo" / "1" / "f1_f2")
+
+    def test_an_out_that_holds_anything_is_refused(self):
+        run = self.run_dir(1)
+        self.write_queue([{"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(run)}])
+        stale = self.base / "out" / "t-solo" / "solo" / "repo" / "9" / "f1_f2"
+        stale.mkdir(parents=True)
+        for out in (self.base / "out", self.base):
+            with mock.patch("sys.stderr"):
+                self.assertEqual(subset.main([str(self.queue), str(self.logs), str(out)]), 2)
+        self.assertEqual(len(self.queue.read_text().splitlines()), 1)
+        self.assertTrue(stale.exists())
+
+    def test_an_arm_linked_in_from_another_disk_is_copied(self):
+        elsewhere = self.base / "disk2" / "t-solo" / "solo" / "repo" / "1" / "f1_f2"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "result.json").write_text("{}\n")
+        self.logs.mkdir()
+        (self.logs / "t-solo").symlink_to(self.base / "disk2" / "t-solo")
+        run = self.logs / "t-solo" / "solo" / "repo" / "1" / "f1_f2"
+        self.write_queue([{"id": "a", "sample": {"sample": 8}, "status": "done", "run_dir": str(run)}])
+        left = subset.copy_runs(subset.sampled(self.queue), self.logs, self.base / "out")
+        self.assertEqual(left["outside_logs"], [])
+        self.assertTrue((self.base / "out" / "t-solo" / "solo" / "repo" / "1" / "f1_f2" / "result.json").exists())
 
     def test_the_runner_loads_with_the_standard_librarys_queue(self):
         probe = ("import sys; sys.path.insert(0, sys.argv[1]); import subset; subset.load_runner(); "

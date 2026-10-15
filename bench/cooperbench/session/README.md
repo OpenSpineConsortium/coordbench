@@ -84,7 +84,7 @@ much of the benchmark a run takes, and the readers of what came out.
   record. Only finished runs are copied, transcripts included, and the
   sample's lines of the queue go beside them, where bundle.py looks;
   runs not finished are named, so a sample still running reads as
-  incomplete.
+  incomplete, and OUT must be new or empty.
 
 What differs from a run on the runners is in coordbench/README.md's
 session-driver section and in each pair's result.json (driver: session,

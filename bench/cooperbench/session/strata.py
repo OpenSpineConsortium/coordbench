@@ -4,8 +4,9 @@ sample of them, so a run can start small and grow without redrawing.
     python3 strata.py [--pairs @file|flash] [--published coop/index.json] [--by language,conflict,published] table [--md]
     python3 strata.py [the same options] sample N [--allocation equal|proportional] [--seed 0]
 
-Both take --skip REPO/TASK,REPO/TASK, the tasks queue.py add --skip leaves
-out before its draw, so the same skip reproduces the queue's order.
+Both take --skip REPO/TASK,REPO/TASK: the tasks queue.py add --skip leaves
+out before its draw, there given as separate words, so the same tasks
+reproduce the queue's order.
 
 Each pair has, from the dataset alone: its repository and the language
 of the code the features change (by repository), whether the two gold
