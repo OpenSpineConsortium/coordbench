@@ -1,0 +1,82 @@
+diff --cc src/click/_termui_impl.py
+index 044e337,ea74d35..0000000
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@@ -563,7 -563,7 +563,11 @@@ class Editor
+  
+          return {"preexec_fn": set_priority}
+  
+++<<<<<<< HEAD
+ +    def edit_file(self, filename: str) -> None:
+++=======
++     def edit_files(self, filenames: cabc.Iterable[str]) -> None:
+++>>>>>>> agent1
+          import subprocess
+  
+          editor = self.get_editor()
+@@@ -573,9 -573,11 +577,15 @@@
+              environ = os.environ.copy()
+              environ.update(self.env)
+  
++         quoted_filenames = " ".join(f'"{filename}"' for filename in filenames)
++ 
+          try:
+              c = subprocess.Popen(
+++<<<<<<< HEAD
+ +                f'{editor} "{filename}"',
+++=======
++                 args=f"{editor} {quoted_filenames}",
+++>>>>>>> agent1
+                  env=environ,
+                  shell=True,
+                  **self._priority_popen_kwargs(),
+diff --cc src/click/termui.py
+index c2bc35a,8b4b485..0000000
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@@ -649,7 -688,7 +688,11 @@@ def edit
+      env: cabc.Mapping[str, str] | None = None,
+      require_save: bool = True,
+      extension: str = ".txt",
+++<<<<<<< HEAD
+ +    filename: str | None = None,
+++=======
++     filename: str | cabc.Iterable[str] | None = None,
+++>>>>>>> agent1
+      process_priority: str | None = None,
+  ) -> t.AnyStr | None:
+      r"""Edits the given text in the defined editor.  If an editor is given
+@@@ -677,7 -716,12 +720,16 @@@
+                        highlighting.
+      :param filename: if provided it will edit this file instead of the
+                       provided text contents.  It will not use a temporary
+++<<<<<<< HEAD
+ +                     file as an indirection in that case.
+++=======
++                      file as an indirection in that case.  If the editor
++                      supports editing multiple files at once, an iterable
++                      of file names may be passed as well.  Call
++                      :func:`edit` once per file instead if the editor
++                      cannot handle several files at once or if editing
++                      the files one after the other is wanted.
+++>>>>>>> agent1
+      :param process_priority: optionally the CPU priority to start the
+          editor process with: ``"low"``, ``"below_normal"``,
+          ``"normal"``, ``"above_normal"`` or ``"high"``. Defaults to
+@@@ -687,7 -731,12 +739,16 @@@
+          raising the priority without the privileges for it, the editor
+          still starts with its default priority.
+  
+++<<<<<<< HEAD
+ +    .. versionchanged:: 8.2
+++=======
++     .. versionchanged:: 8.2.0
++         ``filename`` now accepts any iterable of strings in addition to
++         a single string, if the ``editor`` supports editing multiple
++         files at once.
++ 
++     .. versionchanged:: 8.2.0
+++>>>>>>> agent1
+          Added the ``process_priority`` parameter.
+      """
+      from ._termui_impl import Editor

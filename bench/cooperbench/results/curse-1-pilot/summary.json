@@ -1,0 +1,364 @@
+{
+  "tag": "curse-1",
+  "prices_usd_per_mtok": {
+    "claude-sonnet-5-5": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "claude-haiku-5-5": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125
+    }
+  },
+  "arms": {
+    "solo": {
+      "attempts": 5,
+      "attempts_passed": 3,
+      "pass_rate_errors_as_failures": 0.6,
+      "wilson_95_errors_as_failures": [
+        0.2307,
+        0.8824
+      ],
+      "pairs": 4,
+      "passed": 3,
+      "pass_rate": 0.75,
+      "wilson_95": [
+        0.3006,
+        0.9544
+      ],
+      "agent_errors": 1,
+      "wall_seconds_median": 126.6,
+      "wall_seconds_mean": 150.74,
+      "agents_wall_seconds_median": 112.9,
+      "agent_seconds_sum_median": 112.9,
+      "agent_seconds_sum_mean": 138.32,
+      "tokens_per_pair_mean": {
+        "input": 26.0,
+        "cache_read": 1191956.5,
+        "cache_write": 63228.5,
+        "output": 2679.5,
+        "total": 1257890.5
+      },
+      "tokens_per_pair_median": {
+        "input": 26.0,
+        "cache_read": 1156430.5,
+        "cache_write": 61555.5,
+        "output": 1327.0,
+        "total": 1217849.0
+      },
+      "output_lower_bound_pairs": 4,
+      "cost_usd_total": 1.69,
+      "priced_pairs": 4,
+      "cost_usd_per_pair_mean": 0.42,
+      "cost_usd_per_pair_median": 0.4,
+      "cost_usd_per_passing_pair": 0.56,
+      "tool_calls_per_pair_mean": 14.75,
+      "messages_per_pair_mean": 0.0,
+      "message_words_per_pair_mean": 0.0,
+      "merge_conflict_pairs": 0,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null
+    },
+    "coop": {
+      "attempts": 4,
+      "attempts_passed": 2,
+      "pass_rate_errors_as_failures": 0.5,
+      "wilson_95_errors_as_failures": [
+        0.15,
+        0.85
+      ],
+      "pairs": 3,
+      "passed": 2,
+      "pass_rate": 0.6667,
+      "wilson_95": [
+        0.2077,
+        0.9385
+      ],
+      "agent_errors": 1,
+      "wall_seconds_median": 261.1,
+      "wall_seconds_mean": 253.79,
+      "agents_wall_seconds_median": 246.9,
+      "agent_seconds_sum_median": 490.9,
+      "agent_seconds_sum_mean": 439.48,
+      "tokens_per_pair_mean": {
+        "input": 69.33,
+        "cache_read": 3297450.0,
+        "cache_write": 130086.0,
+        "output": 6617.67,
+        "total": 3434223.0
+      },
+      "tokens_per_pair_median": {
+        "input": 78,
+        "cache_read": 3746297,
+        "cache_write": 138761,
+        "output": 2999,
+        "total": 3888135
+      },
+      "output_lower_bound_pairs": 3,
+      "cost_usd_total": 3.15,
+      "priced_pairs": 3,
+      "cost_usd_per_pair_mean": 1.05,
+      "cost_usd_per_pair_median": 1.1,
+      "cost_usd_per_passing_pair": 1.58,
+      "tool_calls_per_pair_mean": 36.67,
+      "messages_per_pair_mean": 8.67,
+      "message_words_per_pair_mean": 884.33,
+      "merge_conflict_pairs": 0,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null
+    },
+    "sdlc": {
+      "attempts": 4,
+      "attempts_passed": 2,
+      "pass_rate_errors_as_failures": 0.5,
+      "wilson_95_errors_as_failures": [
+        0.15,
+        0.85
+      ],
+      "pairs": 3,
+      "passed": 2,
+      "pass_rate": 0.6667,
+      "wilson_95": [
+        0.2077,
+        0.9385
+      ],
+      "agent_errors": 1,
+      "wall_seconds_median": 212.6,
+      "wall_seconds_mean": 272.17,
+      "agents_wall_seconds_median": 198.9,
+      "agent_seconds_sum_median": 361.3,
+      "agent_seconds_sum_mean": 432.84,
+      "tokens_per_pair_mean": {
+        "input": 71.33,
+        "cache_read": 3356928.33,
+        "cache_write": 127712.67,
+        "output": 5454.67,
+        "total": 3490167.0
+      },
+      "tokens_per_pair_median": {
+        "input": 72,
+        "cache_read": 3393155,
+        "cache_write": 128379,
+        "output": 5731,
+        "total": 3525814
+      },
+      "output_lower_bound_pairs": 3,
+      "cost_usd_total": 3.14,
+      "priced_pairs": 3,
+      "cost_usd_per_pair_mean": 1.05,
+      "cost_usd_per_pair_median": 1.0,
+      "cost_usd_per_passing_pair": 1.57,
+      "tool_calls_per_pair_mean": 38.67,
+      "messages_per_pair_mean": 4.33,
+      "message_words_per_pair_mean": 300.0,
+      "merge_conflict_pairs": 0,
+      "claims": 6,
+      "prs_opened": 6,
+      "merges": 6,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": 84.1
+    },
+    "coop-git": {
+      "attempts": 4,
+      "attempts_passed": 2,
+      "pass_rate_errors_as_failures": 0.5,
+      "wilson_95_errors_as_failures": [
+        0.15,
+        0.85
+      ],
+      "pairs": 3,
+      "passed": 2,
+      "pass_rate": 0.6667,
+      "wilson_95": [
+        0.2077,
+        0.9385
+      ],
+      "agent_errors": 1,
+      "wall_seconds_median": 239.4,
+      "wall_seconds_mean": 227.65,
+      "agents_wall_seconds_median": 223.1,
+      "agent_seconds_sum_median": 431.4,
+      "agent_seconds_sum_mean": 406.27,
+      "tokens_per_pair_mean": {
+        "input": 75.33,
+        "cache_read": 3572367.0,
+        "cache_write": 127621.0,
+        "output": 7779.0,
+        "total": 3707842.33
+      },
+      "tokens_per_pair_median": {
+        "input": 66,
+        "cache_read": 2946225,
+        "cache_write": 121664,
+        "output": 6370,
+        "total": 3066855
+      },
+      "output_lower_bound_pairs": 3,
+      "cost_usd_total": 3.33,
+      "priced_pairs": 3,
+      "cost_usd_per_pair_mean": 1.11,
+      "cost_usd_per_pair_median": 1.0,
+      "cost_usd_per_passing_pair": 1.67,
+      "tool_calls_per_pair_mean": 39.0,
+      "messages_per_pair_mean": 6.33,
+      "message_words_per_pair_mean": 324.0,
+      "merge_conflict_pairs": 0,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null
+    },
+    "team": {
+      "attempts": 4,
+      "attempts_passed": 2,
+      "pass_rate_errors_as_failures": 0.5,
+      "wilson_95_errors_as_failures": [
+        0.15,
+        0.85
+      ],
+      "pairs": 3,
+      "passed": 2,
+      "pass_rate": 0.6667,
+      "wilson_95": [
+        0.2077,
+        0.9385
+      ],
+      "agent_errors": 1,
+      "wall_seconds_median": 210.8,
+      "wall_seconds_mean": 198.78,
+      "agents_wall_seconds_median": 197.8,
+      "agent_seconds_sum_median": 335.0,
+      "agent_seconds_sum_mean": 314.09,
+      "tokens_per_pair_mean": {
+        "input": 69.33,
+        "cache_read": 3196399.33,
+        "cache_write": 124039.67,
+        "output": 11091.0,
+        "total": 3331599.33
+      },
+      "tokens_per_pair_median": {
+        "input": 66,
+        "cache_read": 3060072,
+        "cache_write": 126393,
+        "output": 8668,
+        "total": 3203224
+      },
+      "output_lower_bound_pairs": 3,
+      "cost_usd_total": 3.18,
+      "priced_pairs": 3,
+      "cost_usd_per_pair_mean": 1.06,
+      "cost_usd_per_pair_median": 1.1,
+      "cost_usd_per_passing_pair": 1.59,
+      "tool_calls_per_pair_mean": 37.33,
+      "messages_per_pair_mean": 4.0,
+      "message_words_per_pair_mean": 310.67,
+      "merge_conflict_pairs": 0,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null
+    }
+  },
+  "paired": {
+    "solo vs coop": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 2.288,
+      "agent_seconds_sum_ratio_b_over_a": 4.899,
+      "total_tokens_ratio_b_over_a": 3.571,
+      "cost_ratio_b_over_a": 2.75
+    },
+    "solo vs sdlc": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 1.863,
+      "agent_seconds_sum_ratio_b_over_a": 3.606,
+      "total_tokens_ratio_b_over_a": 3.238,
+      "cost_ratio_b_over_a": 2.5
+    },
+    "solo vs coop-git": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 2.098,
+      "agent_seconds_sum_ratio_b_over_a": 4.305,
+      "total_tokens_ratio_b_over_a": 2.817,
+      "cost_ratio_b_over_a": 2.5
+    },
+    "solo vs team": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 1.848,
+      "agent_seconds_sum_ratio_b_over_a": 3.343,
+      "total_tokens_ratio_b_over_a": 2.942,
+      "cost_ratio_b_over_a": 2.75
+    },
+    "coop vs solo": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 0.437,
+      "agent_seconds_sum_ratio_b_over_a": 0.204,
+      "total_tokens_ratio_b_over_a": 0.28,
+      "cost_ratio_b_over_a": 0.364
+    },
+    "coop vs sdlc": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 0.814,
+      "agent_seconds_sum_ratio_b_over_a": 0.736,
+      "total_tokens_ratio_b_over_a": 0.907,
+      "cost_ratio_b_over_a": 0.909
+    },
+    "coop vs coop-git": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 0.917,
+      "agent_seconds_sum_ratio_b_over_a": 0.879,
+      "total_tokens_ratio_b_over_a": 0.789,
+      "cost_ratio_b_over_a": 0.909
+    },
+    "coop vs team": {
+      "shared_pairs": 3,
+      "both": 2,
+      "only_a": 0,
+      "only_b": 0,
+      "neither": 1,
+      "wall_seconds_ratio_b_over_a": 0.807,
+      "agent_seconds_sum_ratio_b_over_a": 0.682,
+      "total_tokens_ratio_b_over_a": 0.824,
+      "cost_ratio_b_over_a": 1.0
+    }
+  }
+}

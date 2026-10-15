@@ -1,0 +1,105 @@
+diff --cc src/click/_termui_impl.py
+index e186019,d744de9..0000000
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@@ -485,12 -485,19 +485,25 @@@ class Editor
+          env: cabc.Mapping[str, str] | None = None,
+          require_save: bool = True,
+          extension: str = ".txt",
+++<<<<<<< HEAD
+++=======
++         timeout: int | None = None,
+++>>>>>>> agent1
+          working_dir: str | os.PathLike[str] | None = None,
+      ) -> None:
++         if timeout is not None and (
++             isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
++         ):
++             raise ValueError("timeout must be a positive integer or None.")
++ 
+          self.editor = editor
+          self.env = env
+          self.require_save = require_save
+          self.extension = extension
+++<<<<<<< HEAD
+++=======
++         self.timeout = timeout
+++>>>>>>> agent1
+          self.working_dir = working_dir
+  
+      def get_editor(self) -> str:
+@@@ -524,7 -548,17 +554,21 @@@
+                  shell=True,
+                  cwd=self.working_dir,
+              )
+++<<<<<<< HEAD
+ +            exit_code = c.wait()
+++=======
++ 
++             try:
++                 exit_code = c.wait(timeout=self.timeout)
++             except subprocess.TimeoutExpired:
++                 self._stop_editor(c)
++                 raise ClickException(
++                     _("{editor}: Editing timed out after {timeout} seconds").format(
++                         editor=editor, timeout=self.timeout
++                     )
++                 ) from None
++ 
+++>>>>>>> agent1
+              if exit_code != 0:
+                  raise ClickException(
+                      _("{editor}: Editing failed").format(editor=editor)
+diff --cc src/click/termui.py
+index 62b9883,3ff4d1f..0000000
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@@ -652,6 -652,7 +652,10 @@@ def edit
+      require_save: bool = True,
+      extension: str = ".txt",
+      filename: str | None = None,
+++<<<<<<< HEAD
+++=======
++     timeout: int | None = None,
+++>>>>>>> agent1
+      working_dir: str | os.PathLike[str] | None = None,
+  ) -> t.AnyStr | None:
+      r"""Edits the given text in the defined editor.  If an editor is given
+@@@ -680,6 -684,11 +687,14 @@@
+      :param filename: if provided it will edit this file instead of the
+                       provided text contents.  It will not use a temporary
+                       file as an indirection in that case.
+++<<<<<<< HEAD
+++=======
++     :param timeout: the maximum number of seconds to wait for the editor
++                     to exit.  When it is exceeded the editor is terminated
++                     and a :exc:`ClickException` is raised.  Must be a
++                     positive integer, otherwise :exc:`ValueError` is
++                     raised.  Defaults to ``None``, which waits forever.
+++>>>>>>> agent1
+      :param working_dir: if provided, the editor process is started with
+                          this directory as its current working directory.
+                          A relative ``filename`` is then resolved against
+@@@ -688,7 -697,7 +703,11 @@@
+                          and a :exc:`ClickException` is raised.
+  
+      .. versionchanged:: 8.2
+++<<<<<<< HEAD
+ +        Added the ``working_dir`` parameter.
+++=======
++         Added the ``timeout`` and ``working_dir`` parameters.
+++>>>>>>> agent1
+      """
+      from ._termui_impl import Editor
+  
+@@@ -697,6 -706,7 +716,10 @@@
+          env=env,
+          require_save=require_save,
+          extension=extension,
+++<<<<<<< HEAD
+++=======
++         timeout=timeout,
+++>>>>>>> agent1
+          working_dir=working_dir,
+      )
+  

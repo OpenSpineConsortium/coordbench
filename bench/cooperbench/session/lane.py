@@ -44,9 +44,12 @@ def say(text):
 
 
 def queue(*args):
+    """queue.py's stdout, or None when it failed, which a caller never
+    reads as an empty queue."""
     out = subprocess.run([sys.executable, str(QUEUE_PY), *args], capture_output=True, text=True)
     if out.returncode != 0:
         say(out.stderr.strip())
+        return None
     return out.stdout.strip()
 
 
@@ -105,16 +108,54 @@ def prepare_item(item, log_dir):
     return plan, None
 
 
+MAX_IMAGE_WAITS = 6
+
+
+def plan_from_disk(item):
+    """The plan a prepare printed earlier, rebuilt from the run directory,
+    so a lane that lost the printed plan (a relay that dropped it, a
+    restart) takes the same item up again instead of leaving it running
+    with its containers and preparing another."""
+    run_dir = item["run_dir"]
+    plan = read_plan(run_dir)
+    agents = []
+    for agent in plan["agents"]:
+        prompt_file = str(Path(run_dir) / f"{agent['id']}.session-prompt.md")
+        agents.append({"id": agent["id"], "prompt_file": prompt_file, "model": item["model"],
+                       "token": run_token(prompt_file)})
+    return {"run_dir": run_dir, "agents": agents}
+
+
+def announce(plan, item):
+    plan.update({"done": False, "item": item["id"], "arm": item["arm"], "repo": item["repo"],
+                 "task": item["task"], "features": item["features"], "timeout_min": item["timeout_min"]})
+    print(json.dumps(plan))
+
+
 def command_prepare(args):
     for _ in range(5):
         raw = queue("next", args.queue, "--worker", args.worker)
+        if raw is None:
+            print(json.dumps({"done": False, "error": "the queue could not be read or written"}))
+            return 1
         item = json.loads(raw) if raw else {"done": True}
         if item.get("done"):
             print(json.dumps({"done": True}))
             return 0
+        if item.get("prepared_at") and item.get("run_dir"):
+            announce(plan_from_disk(item), item)
+            return 0
         if not wait_for_image(item, args.wait_image_min):
             # The item stays the worker's; the next call takes it up again,
-            # so a caller with a short command timeout can wait in steps.
+            # so a caller with a short command timeout can wait in steps,
+            # up to a limit, after which the item fails rather than hold
+            # the lane for an image that never comes.
+            waits = int(item.get("image_waits") or 0) + 1
+            if waits >= MAX_IMAGE_WAITS:
+                queue("set", args.queue, item["id"], "status=failed",
+                      f"error={json.dumps('no task image after ' + str(waits) + ' waits')}")
+                continue
+            queue("set", args.queue, item["id"], f"image_waits={waits}")
             print(json.dumps({"done": False, "waiting": True, "item": item["id"],
                               "image": image_name(item["repo"], item["task"])}))
             return 0
@@ -125,9 +166,7 @@ def command_prepare(args):
             continue
         queue("set", args.queue, item["id"], f"run_dir={json.dumps(plan['run_dir'])}",
               f"prepared_at={time.time()}")
-        plan.update({"done": False, "item": item["id"], "arm": item["arm"], "repo": item["repo"],
-                     "task": item["task"], "features": item["features"], "timeout_min": item["timeout_min"]})
-        print(json.dumps(plan))
+        announce(plan, item)
         return 0
     print(json.dumps({"done": True, "note": "five items in a row failed to prepare"}))
     return 0
@@ -144,10 +183,12 @@ def write_plan(run_dir, plan):
 
 
 def place_missing_markers(run_dir, returned, dead):
-    """Give a returned subagent its marker when it left none, and bring a
-    lost one's deadline forward; say what was done in harness.json."""
+    """Give a returned subagent its marker when it left none, unless its
+    deadline has passed, when it overran and is left to expire as the
+    driver expires it; bring a lost one's deadline forward; say what was
+    done in harness.json."""
     plan = read_plan(run_dir)
-    notes = {"placed_markers": [], "expired": [], "at": time.time()}
+    notes = {"placed_markers": [], "overran": [], "expired": [], "at": time.time()}
     changed = False
     for agent in plan["agents"]:
         handle = agent.get("handle") or {}
@@ -156,8 +197,11 @@ def place_missing_markers(run_dir, returned, dead):
             continue
         marker = Path(workspace) / MARKER
         if agent["id"] in returned and not marker.exists():
-            marker.touch()
-            notes["placed_markers"].append(agent["id"])
+            if time.time() > float(handle.get("deadline") or 0):
+                notes["overran"].append(agent["id"])
+            else:
+                marker.touch()
+                notes["placed_markers"].append(agent["id"])
         if agent["id"] in dead:
             handle["deadline"] = time.time() - 1
             notes["expired"].append(agent["id"])
@@ -168,10 +212,28 @@ def place_missing_markers(run_dir, returned, dead):
     return notes
 
 
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 def detach(args):
     """Run the finish in a process of its own, so a caller whose command
     is cut short (a tool's timeout) does not cut the scoring short; the
-    verdict lands in <run_dir>/finish.verdict.json, which wait reads."""
+    verdict lands in <run_dir>/finish.verdict.json, which wait reads, and
+    finish.pid says which process is at it, so a second detach of the
+    same run, a retry after a timeout, starts nothing."""
+    run_dir = Path(args.run_dir)
+    pid_file = run_dir / "finish.pid"
+    if (run_dir / "finish.verdict.json").exists():
+        print(json.dumps({"detached": False, "run_dir": args.run_dir, "note": "a verdict exists already"}))
+        return 0
+    if pid_file.exists() and pid_alive(int(pid_file.read_text().strip() or 0)):
+        print(json.dumps({"detached": False, "run_dir": args.run_dir, "note": "a finish is running already"}))
+        return 0
     command = [sys.executable, str(Path(__file__).resolve()), "finish", args.run_dir]
     if args.item:
         command += ["--item", args.item]
@@ -181,18 +243,29 @@ def detach(args):
         command += ["--returned", *args.returned]
     if args.dead:
         command += ["--dead", *args.dead]
-    log = open(Path(args.run_dir) / "finish.out", "a")
-    subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                     start_new_session=True, cwd=str(ROOT))
-    print(json.dumps({"detached": True, "run_dir": args.run_dir}))
+    with open(run_dir / "finish.out", "a") as log:
+        child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 start_new_session=True, cwd=str(ROOT))
+    pid_file.write_text(f"{child.pid}\n")
+    print(json.dumps({"detached": True, "run_dir": args.run_dir, "pid": child.pid}))
     return 0
 
 
 def command_wait(args):
-    """Poll for the detached finish's verdict for up to --seconds."""
-    path = Path(args.run_dir) / "finish.verdict.json"
+    """Poll for the detached finish's verdict for up to --seconds; a
+    finish whose process is gone with no verdict is reported dead, so
+    the caller does not wait on it again."""
+    run_dir = Path(args.run_dir)
+    path = run_dir / "finish.verdict.json"
+    pid_file = run_dir / "finish.pid"
     deadline = time.time() + args.seconds
     while not path.exists() and time.time() < deadline:
+        if pid_file.exists() and not pid_alive(int(pid_file.read_text().strip() or 0)):
+            time.sleep(2)
+            if not path.exists():
+                print(json.dumps({"verdict": "error", "dead": True, "run_dir": args.run_dir,
+                                  "note": "the detached finish ended without a verdict; see finish.out"}))
+                return 0
         time.sleep(10)
     if path.exists():
         print(path.read_text().strip())
@@ -201,9 +274,7 @@ def command_wait(args):
     return 0
 
 
-def command_finish(args):
-    if args.detach:
-        return detach(args)
+def finish_pair(args):
     notes = place_missing_markers(args.run_dir, set(args.returned or ()), set(args.dead or ()))
     out = subprocess.run([sys.executable, str(RUN_PY), "finish", "--run-dir", args.run_dir],
                          capture_output=True, text=True, env=clean_environment(), cwd=str(ROOT))
@@ -218,6 +289,23 @@ def command_finish(args):
     verdict["harness"] = notes
     verdict["finish_exit"] = out.returncode
     verdict["summary"] = [line for line in out.stderr.splitlines() if "timings:" in line][-1:]
+    return verdict
+
+
+def command_finish(args):
+    """Score the pair and record the verdict in the run directory and the
+    queue; a finish that fails for any reason still leaves a verdict of
+    error and a failed item, so no run waits on it forever."""
+    if args.detach:
+        return detach(args)
+    if args.queue and args.item:
+        queue("set", args.queue, args.item, f"finishing_at={time.time()}")
+    try:
+        verdict = finish_pair(args)
+    except BaseException as error:  # noqa: BLE001 - the verdict must land whatever failed
+        import traceback
+        verdict = {"verdict": "error", "note": f"finish raised {type(error).__name__}: {error}",
+                   "traceback": traceback.format_exc()[-2000:]}
     if args.queue and args.item:
         status = "done" if verdict.get("verdict") in ("pass", "fail") else "failed"
         queue("set", args.queue, args.item, f"status={status}", f"verdict={json.dumps(verdict.get('verdict'))}",

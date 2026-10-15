@@ -1,0 +1,57 @@
+commit 714d2048d021daadadd2cde862600a049da2bab9 (main)
+Merge: 4cc7082 6360dc8
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 05:49:32 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 6360dc8f654155a6cf1363583381e0814475e45e (claude/6)
+Merge: aa7f0ab 4cc7082
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 05:49:28 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/6
+    
+    # Conflicts:
+    #       src/click/_termui_impl.py
+    #       src/click/termui.py
+
+commit aa7f0ab19d481a28e485fddba654430158cb56de
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 05:48:52 2026 +0000
+
+    Add process_priority to click.edit and Editor
+    
+    The editor can be started at a low, below normal, normal, above normal or
+    high CPU priority. On Unix the niceness is set in the child between fork
+    and exec, so the editor and what its shell starts inherit it; on Windows
+    the matching priority class goes in the creation flags. An unknown value
+    is ignored and a refused priority leaves the editor at its inherited one,
+    so the edit never fails because of it. The default, None, changes nothing.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01GVAX6T56bQavX89vmsnCFg
+
+ src/click/_termui_impl.py | 64 ++++++++++++++++++++++++++++++++++++++++++++++-
+ src/click/termui.py       | 18 ++++++++++++-
+ 2 files changed, 80 insertions(+), 2 deletions(-)
+
+commit 4cc7082101d6a93969bb2b4cb569d267b6876b46
+Merge: d791537 24babbc
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 05:48:01 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 24babbcd9fcd1cb3696fc036997969b5320a5b63 (claude/1)
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 05:47:53 2026 +0000
+
+    Support editing multiple files with click.edit
+    
+    filename now accepts a string or an iterable of strings; Editor.edit_file
+    becomes Editor.edit_files and passes each quoted name to the editor.
+
+ src/click/_termui_impl.py |  8 +++++---
+ src/click/termui.py       | 38 +++++++++++++++++++++++++++++++++++---
+ 2 files changed, 40 insertions(+), 6 deletions(-)

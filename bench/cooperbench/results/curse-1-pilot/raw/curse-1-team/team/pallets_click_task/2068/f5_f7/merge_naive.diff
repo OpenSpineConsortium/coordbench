@@ -1,0 +1,81 @@
+diff --cc src/click/_termui_impl.py
+index ebd6753,2ccf500..0000000
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@@ -485,12 -485,14 +485,20 @@@ class Editor
+          env: cabc.Mapping[str, str] | None = None,
+          require_save: bool = True,
+          extension: str = ".txt",
+++<<<<<<< HEAD
+++=======
++         lock_files: bool = False,
+++>>>>>>> agent1
+          escape_shell: bool = False,
+      ) -> None:
+          self.editor = editor
+          self.env = env
+          self.require_save = require_save
+          self.extension = extension
+++<<<<<<< HEAD
+++=======
++         self.lock_files = lock_files
+++>>>>>>> agent1
+          self.escape_shell = escape_shell
+  
+      def get_editor(self) -> str:
+diff --cc src/click/termui.py
+index 2cf7375,f293f37..0000000
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@@ -650,6 -650,7 +650,10 @@@ def edit
+      require_save: bool = True,
+      extension: str = ".txt",
+      filename: str | None = None,
+++<<<<<<< HEAD
+++=======
++     lock_files: bool = False,
+++>>>>>>> agent1
+      escape_shell: bool = False,
+  ) -> t.AnyStr | None:
+      r"""Edits the given text in the defined editor.  If an editor is given
+@@@ -678,6 -679,14 +682,17 @@@
+      :param filename: if provided it will edit this file instead of the
+                       provided text contents.  It will not use a temporary
+                       file as an indirection in that case.
+++<<<<<<< HEAD
+++=======
++     :param lock_files: if this is true, a lock file named
++                        ``.{filename}.lock`` is created next to the edited
++                        file before the editor starts, and removed when it
++                        exits, even on an error or an interrupt. If the lock
++                        file already exists, because another edit is in
++                        progress, a :exc:`ClickException` is raised. The lock
++                        file holds the process id and the time. Defaults to
++                        false.
+++>>>>>>> agent1
+      :param escape_shell: if this is true, the filename and the words of the
+                           editor command are quoted with :func:`shlex.quote`
+                           before they are passed to the shell, so characters
+@@@ -686,7 -695,7 +701,11 @@@
+                           Defaults to false, which keeps the old behavior.
+  
+      .. versionchanged:: 8.2
+++<<<<<<< HEAD
+ +        Added the ``escape_shell`` parameter.
+++=======
++         Added the ``lock_files`` and ``escape_shell`` parameters.
+++>>>>>>> agent1
+      """
+      from ._termui_impl import Editor
+  
+@@@ -695,6 -704,7 +714,10 @@@
+          env=env,
+          require_save=require_save,
+          extension=extension,
+++<<<<<<< HEAD
+++=======
++         lock_files=lock_files,
+++>>>>>>> agent1
+          escape_shell=escape_shell,
+      )
+  

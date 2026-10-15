@@ -1,0 +1,191 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..cca6ed7 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -485,11 +485,15 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        lock_files: bool = False,
++        escape_shell: bool = False,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.lock_files = lock_files
++        self.escape_shell = escape_shell
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,6 +509,98 @@ class Editor:
+                 return editor
+         return "vi"
+ 
++    def _get_lock_filename(self, filename: str) -> str:
++        """Return the path of the lock file for ``filename``: a hidden
++        file named ``.{name}.lock`` in the same directory.
++        """
++        directory, name = os.path.split(filename)
++        return os.path.join(directory, f".{name}.lock")
++
++    def _create_lock_file(self, filename: str) -> str:
++        """Create the lock file for ``filename`` and return its path.
++
++        The file is created with ``O_CREAT | O_EXCL``, so the check for
++        an existing lock and the creation are one atomic step, on
++        Windows as well as on POSIX. If another edit session holds the
++        lock, a :exc:`ClickException` is raised and that lock is left
++        untouched. The lock records the process ID and the time to help
++        debugging.
++        """
++        import datetime
++
++        lock_filename = self._get_lock_filename(filename)
++
++        try:
++            fd = os.open(lock_filename, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
++        except FileExistsError:
++            raise ClickException(
++                _(
++                    "{filename}: File is already being edited."
++                    " Lock file exists: {lock_filename}"
++                ).format(filename=filename, lock_filename=lock_filename)
++            ) from None
++        except OSError as e:
++            raise ClickException(
++                _("{filename}: Could not create lock file: {e}").format(
++                    filename=filename, e=e
++                )
++            ) from e
++
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as f:
++                f.write(
++                    f"PID: {os.getpid()}\n"
++                    f"Time: {datetime.datetime.now().isoformat()}"
++                )
++        except BaseException:
++            # Do not leave a half written lock behind that would block
++            # every later edit of the file.
++            self._remove_lock_file(lock_filename)
++            raise
++
++        return lock_filename
++
++    def _remove_lock_file(self, lock_filename: str) -> None:
++        """Remove a lock file made by :meth:`_create_lock_file`. A lock
++        that is already gone is not an error.
++        """
++        try:
++            os.unlink(lock_filename)
++        except OSError:
++            pass
++
++    def _quote_editor(self, editor: str) -> str:
++        """Escape an editor command for the shell, keeping its arguments.
++
++        An editor such as ``vim -u NONE`` is a command and its
++        arguments, so each word is quoted on its own. A value that is
++        an existing path as a whole, like ``/opt/my editor/bin/vim``, is
++        quoted as one word instead.
++        """
++        import shlex
++
++        if os.path.exists(editor):
++            return shlex.quote(editor)
++
++        try:
++            parts = shlex.split(editor)
++        except ValueError:
++            # Unbalanced quotes: treat the whole value as one word.
++            return shlex.quote(editor)
++
++        if not parts:
++            return shlex.quote(editor)
++
++        return " ".join(shlex.quote(part) for part in parts)
++
++    def _build_command(self, editor: str, filename: str) -> str:
++        if not self.escape_shell:
++            return f'{editor} "{filename}"'
++
++        import shlex
++
++        return f"{self._quote_editor(editor)} {shlex.quote(filename)}"
++
+     def edit_file(self, filename: str) -> None:
+         import subprocess
+ 
+@@ -515,8 +611,14 @@ class Editor:
+             environ = os.environ.copy()
+             environ.update(self.env)
+ 
++        # The lock is made before the editor opens. The finally below
++        # removes it however editing ends, so a failed or interrupted
++        # editor never leaves a stale lock behind.
++        lock_filename = self._create_lock_file(filename) if self.lock_files else None
++
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
++            cmd = self._build_command(editor, filename)
++            c = subprocess.Popen(cmd, env=environ, shell=True)
+             exit_code = c.wait()
+             if exit_code != 0:
+                 raise ClickException(
+@@ -526,6 +628,9 @@ class Editor:
+             raise ClickException(
+                 _("{editor}: Editing failed: {e}").format(editor=editor, e=e)
+             ) from e
++        finally:
++            if lock_filename is not None:
++                self._remove_lock_file(lock_filename)
+ 
+     def edit(self, text: t.AnyStr | None) -> t.AnyStr | None:
+         import tempfile
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..448625f 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,8 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    lock_files: bool = False,
++    escape_shell: bool = False,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +679,31 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param lock_files: if this is true, a lock file named
++                       ``.{filename}.lock`` is created next to the edited
++                       file before the editor opens and removed when it
++                       closes, even if editing fails or is interrupted.
++                       If the lock file exists already, another edit
++                       session is active and a :exc:`ClickException` is
++                       raised.  The lock file holds the process ID and
++                       the time it was made.  Defaults to ``False``.
++    :param escape_shell: if this is true, special shell characters in the
++                         filename and in the editor command are escaped
++                         with :func:`shlex.quote` before the command is
++                         run by the shell, so a name like ``a; rm -rf /``
++                         is passed to the editor as a literal name.
++                         Defaults to false to keep the old behavior.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        lock_files=lock_files,
++        escape_shell=escape_shell,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

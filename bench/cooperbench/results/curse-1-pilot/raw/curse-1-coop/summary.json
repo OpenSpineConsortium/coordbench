@@ -1,0 +1,71 @@
+{
+  "run_name": "curse-1-coop",
+  "completed_at": "2026-10-15T09:15:23.511733",
+  "pass_rate": 0.5,
+  "total_tasks": 4,
+  "completed": 4,
+  "skipped": 0,
+  "failed": 0,
+  "total_cost": null,
+  "total_time_seconds": 12477.676113,
+  "results": [
+    {
+      "task": "pallets_click_task/2068/1,6",
+      "status": "done",
+      "cost": null,
+      "eval": "pass"
+    },
+    {
+      "task": "pallets_click_task/2068/2,10",
+      "status": "done",
+      "cost": null,
+      "eval": "fail"
+    },
+    {
+      "task": "pallets_click_task/2068/5,11",
+      "status": "done",
+      "cost": null,
+      "error_kind": "agent",
+      "eval": "fail"
+    },
+    {
+      "task": "pallets_click_task/2068/5,7",
+      "status": "done",
+      "cost": null,
+      "eval": "pass"
+    }
+  ],
+  "infrastructure_errors": 0,
+  "eval": {
+    "total_evaluated": 4,
+    "passed": 2,
+    "failed": 2,
+    "errors": 0,
+    "skipped": 0,
+    "pass_rate": 0.5
+  },
+  "pass_rate_over_evaluated": 0.5,
+  "run_totals": {
+    "wall_time": 12477.676113,
+    "run_time": 12210.39265,
+    "total_cost": 0.0,
+    "task_count": 4
+  },
+  "arm": "coop",
+  "driver": "session",
+  "model": "claude-sonnet-5-5",
+  "setting": "coop",
+  "total_time_source": "run_totals wall_time",
+  "claude_code": {
+    "claude_code_versions": [
+      "2.1.300"
+    ],
+    "models": [
+      "claude-sonnet-5-5"
+    ],
+    "tools": [],
+    "mcp_servers": [],
+    "cost_sources": [],
+    "model_mismatches": 0
+  }
+}

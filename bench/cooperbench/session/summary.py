@@ -30,6 +30,9 @@ from pathlib import Path
 # model every agent ran as. A cache write is priced as a five-minute
 # cache entry, 1.25 times the input price; a one-hour entry would be
 # twice the input price, which the report notes as the upper figure.
+# Haiku's are the prices below the long-prompt tier. A pair whose agent
+# ran a model outside this table has no cost and is left out of the
+# cost sums, which say how many pairs they cover (priced_pairs).
 PRICES = {
     "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_read": 0.20, "cache_write": 2.50},
     "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "cache_write": 0.125},
@@ -181,15 +184,29 @@ def mean(values):
     return round(statistics.fmean(values), 2) if values else None
 
 
-def summarize_arm(rows):
+def summarize_arm(attempts):
+    """The arm's rates over every attempt, an agent error counting as a
+    failure as the paper counts it, and over the complete attempts (no
+    agent in Error); the latency, token and cost figures over the
+    complete attempts only, since a cut run's clock ran to its deadline
+    and its agents' work is partial."""
+    rows = [r for r in attempts if not r["agent_errors"]]
     n = len(rows)
     k = sum(1 for r in rows if r["passed"])
     low, high = wilson(k, n)
-    total_cost = sum(r["cost_usd"] or 0 for r in rows)
+    priced = [r for r in rows if r["cost_usd"] is not None]
+    total_cost = sum(r["cost_usd"] for r in priced)
+    priced_passed = sum(1 for r in priced if r["passed"])
+    all_n = len(attempts)
+    all_k = sum(1 for r in attempts if r["passed"] and not r["agent_errors"])
+    all_low, all_high = wilson(all_k, all_n)
     return {
+        "attempts": all_n, "attempts_passed": all_k,
+        "pass_rate_errors_as_failures": round(all_k / all_n, 4) if all_n else None,
+        "wilson_95_errors_as_failures": [round(all_low, 4), round(all_high, 4)],
         "pairs": n, "passed": k, "pass_rate": round(k / n, 4) if n else None,
         "wilson_95": [round(low, 4), round(high, 4)],
-        "agent_errors": sum(r["agent_errors"] for r in rows),
+        "agent_errors": sum(1 for r in attempts if r["agent_errors"]),
         "wall_seconds_median": median([r["wall_seconds"] for r in rows]),
         "wall_seconds_mean": mean([r["wall_seconds"] for r in rows]),
         "agents_wall_seconds_median": median([r["agents_wall_seconds"] for r in rows]),
@@ -200,10 +217,10 @@ def summarize_arm(rows):
         "tokens_per_pair_median": {kind: median([r[f"{kind}_tokens"] for r in rows])
                                    for kind in ("input", "cache_read", "cache_write", "output", "total")},
         "output_lower_bound_pairs": sum(1 for r in rows if r["output_is_lower_bound"]),
-        "cost_usd_total": round(total_cost, 2),
+        "cost_usd_total": round(total_cost, 2), "priced_pairs": len(priced),
         "cost_usd_per_pair_mean": mean([r["cost_usd"] for r in rows]),
         "cost_usd_per_pair_median": median([r["cost_usd"] for r in rows]),
-        "cost_usd_per_passing_pair": round(total_cost / k, 2) if k else None,
+        "cost_usd_per_passing_pair": round(total_cost / priced_passed, 2) if priced_passed else None,
         "tool_calls_per_pair_mean": mean([r["tool_calls"] for r in rows]),
         "messages_per_pair_mean": mean([r["messages_sent"] for r in rows]),
         "message_words_per_pair_mean": mean([r["message_words"] for r in rows]),
@@ -216,9 +233,11 @@ def summarize_arm(rows):
 
 
 def paired(rows_a, rows_b):
-    """Pairs both arms scored: both pass, only a, only b, neither, and
-    the ratio of b's medians to a's on latency and cost."""
-    by_key = lambda rows: {(r["repo"], r["task"], r["features"]): r for r in rows}
+    """Pairs both arms completed (no agent in Error): both pass, only a,
+    only b, neither, and the ratio of b's medians to a's on latency and
+    cost."""
+    def by_key(rows):
+        return {(r["repo"], r["task"], r["features"]): r for r in rows if not r["agent_errors"]}
     a, b = by_key(rows_a), by_key(rows_b)
     shared = sorted(set(a) & set(b))
     counts = {"both": 0, "only_a": 0, "only_b": 0, "neither": 0}
@@ -235,24 +254,31 @@ def paired(rows_a, rows_b):
             "cost_ratio_b_over_a": ratio("cost_usd")}
 
 
+def num(value):
+    return "-" if value is None else f"{value:,.0f}"
+
+
 def markdown(summary, arms):
     lines = [f"# {summary['tag']}: pass, latency, tokens and cost per arm", ""]
-    lines.append("| arm | pairs | passed | rate | 95% Wilson | errors | wall s (median) | agent s sum (median) "
+    lines.append("| arm | complete pairs | passed | rate | 95% Wilson | cut runs (errors) | rate, errors as failures | wall s (median) | agent s sum (median) "
                  "| tokens per pair (mean) | output (mean, lower bound) | cost per pair (mean) | cost per pass | msgs per pair |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for arm in arms:
         s = summary["arms"].get(arm)
         if not s:
             continue
         rate = f"{100 * s['pass_rate']:.1f}%" if s["pass_rate"] is not None else "-"
         ci = f"{100 * s['wilson_95'][0]:.0f}-{100 * s['wilson_95'][1]:.0f}%"
-        lines.append(f"| {arm} | {s['pairs']} | {s['passed']} | {rate} | {ci} | {s['agent_errors']} | "
+        all_rate = (f"{100 * s['pass_rate_errors_as_failures']:.1f}% ({s['attempts_passed']}/{s['attempts']})"
+                    if s["pass_rate_errors_as_failures"] is not None else "-")
+        lines.append(f"| {arm} | {s['pairs']} | {s['passed']} | {rate} | {ci} | {s['agent_errors']} | {all_rate} | "
                      f"{s['wall_seconds_median']} | {s['agent_seconds_sum_median']} | "
-                     f"{s['tokens_per_pair_mean']['total']:,.0f} | {s['tokens_per_pair_mean']['output']:,.0f} | "
-                     f"${s['cost_usd_per_pair_mean']:.2f} | "
+                     f"{num(s['tokens_per_pair_mean']['total'])} | {num(s['tokens_per_pair_mean']['output'])} | "
+                     f"{'$' + format(s['cost_usd_per_pair_mean'], '.2f') if s['cost_usd_per_pair_mean'] is not None else '-'} | "
                      f"{'$' + format(s['cost_usd_per_passing_pair'], '.2f') if s['cost_usd_per_passing_pair'] else '-'} | "
                      f"{s['messages_per_pair_mean'] if s['messages_per_pair_mean'] is not None else '-'} |")
-    lines += ["", "## Paired against solo and coop (b over a: below 1 means b is cheaper or faster)", ""]
+    lines += ["", "## Paired against solo and coop, over the pairs both arms completed "
+              "(b over a: below 1 means b is cheaper or faster)", ""]
     lines.append("| a | b | shared | both pass | only a | only b | neither | wall ratio | agent s ratio | tokens ratio | cost ratio |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for key, p in summary["paired"].items():
@@ -287,7 +313,8 @@ def main(argv=None):
         Path(args.out).write_text(json.dumps(summary, indent=2) + "\n")
     if args.csv and rows:
         with open(args.csv, "w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+            # LF endings: the repository's check takes no carriage return.
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
     text = markdown(summary, arms)

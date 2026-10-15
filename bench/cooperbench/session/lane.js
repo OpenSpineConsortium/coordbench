@@ -7,8 +7,12 @@
 // relays its JSON, the bench agents (the pre-registered model), and a
 // small one that starts the detached finish and waits for its verdict.
 // args: {queue, worker, log_dir, max_items, bench_model, root, resume}
-// resume: a plan a prepare printed earlier (item, run_dir, arm, agents)
-// whose bench agents were never spawned, run first.
+// bench_model is the model the bench agents run as and must be the one
+// the queue's items name (the plan's model), since result.json records
+// the queue's. resume: a plan a prepare printed earlier (item, run_dir,
+// arm, agents) whose bench agents were never spawned, run first; the
+// next prepare of the same worker rebuilds such a plan itself, so
+// resume is only for a lane started under another name.
 export const meta = {
   name: 'curse-lane',
   description: 'One lane of the curse-of-coordination bench: prepare, spawn the bench agents, finish, until the queue is empty',
@@ -27,6 +31,7 @@ const PLAN = {
   properties: {
     done: { type: 'boolean' },
     waiting: { type: 'boolean' },
+    error: { type: 'string' },
     item: { type: 'string' },
     run_dir: { type: 'string' },
     arm: { type: 'string' },
@@ -35,7 +40,7 @@ const PLAN = {
       items: {
         type: 'object',
         properties: { id: { type: 'string' }, prompt_file: { type: 'string' }, token: { type: 'string' }, model: { type: 'string' } },
-        required: ['id', 'prompt_file', 'token'],
+        required: ['id'],
       },
     },
   },
@@ -49,12 +54,17 @@ const NO_HEARTH = 'Do not call any mcp__hearthbot__ tools. Do not run any other 
 function preparePrompt() {
   return `Run exactly this shell command with the Bash tool, with a timeout of 590000 milliseconds:
 cd ${ROOT} && python3 ${LANE} prepare ${QUEUE} --worker ${WORKER} --wait-image-min 8 ${LOG_DIR ? '--log-dir ' + LOG_DIR : ''}
-Its last stdout line is one JSON object. Return that object's fields exactly as printed: done, waiting, item, run_dir, arm and agents (each agent's id, prompt_file, token and model, copied character for character). ${NO_HEARTH}`
+Its last stdout line is one JSON object. Return that object's fields exactly as printed: done, waiting, error, item, run_dir, arm and agents (each agent's id and model, copied character for character). ${NO_HEARTH}`
+}
+
+function promptFile(agent, plan) {
+  // Derived from the run directory, not copied from the relay, so a
+  // mistyped path cannot send an agent to the wrong file.
+  return `${plan.run_dir}/${agent.id}.session-prompt.md`
 }
 
 function benchPrompt(agent, plan) {
-  return `You are a coding agent in a benchmark run (coordbench, arm ${plan.arm}, pair ${plan.item}). Your complete task is the file ${agent.prompt_file}. Read it in full first (cat it), then begin your very first text reply with the run token line that file states, exactly as written:
-${agent.token}
+  return `You are a coding agent in a benchmark run (coordbench, arm ${plan.arm}, pair ${plan.item}). Your complete task is the file ${promptFile(agent, plan)}. Read it in full first (cat it), then begin your very first text reply with the run token line that file states (the line that starts with coordbench-run-token), copied exactly from the file.
 
 Follow the file exactly: it tells you where your workspace is, that every command runs inside your container through docker exec, how to coordinate with the other agent of the run if the arm has coordination commands, how to write patch.txt, and which marker file to create as your very last step. The benchmark ends your run when the marker appears, so create it only when you are done.
 
@@ -77,7 +87,10 @@ let empty = 0
 for (let n = 0; n < MAX_ITEMS; n++) {
   const plan = (n === 0 && args.resume) ? args.resume
     : await agent(preparePrompt(), { label: `${WORKER}:prepare:${n}`, schema: PLAN, model: 'haiku', effort: 'low' })
-  if (!plan) { empty++; if (empty >= 3) break; continue }
+  // No plan, or a prepare that could not read the queue, three times in a
+  // row ends the lane; an item the relay lost is taken up again by the
+  // next prepare, which rebuilds its plan from disk.
+  if (!plan || plan.error) { empty++; log(`${WORKER}: no plan (${plan ? plan.error : 'no reply'})`); if (empty >= 3) break; continue }
   // The queue is empty only when the prepare printed no plan: the relaying
   // agent has flipped the done flag of a plan that had agents, so the
   // agents decide, not the flag.
@@ -92,7 +105,7 @@ for (let n = 0; n < MAX_ITEMS; n++) {
   const returned = outcomes.filter(o => o && o.result).map(o => o.id)
   const dead = plan.agents.map(a => a.id).filter(id => !returned.includes(id))
   const verdict = await agent(finishPrompt(plan, returned, dead), { label: `${WORKER}:finish:${plan.item}`, schema: VERDICT, model: 'haiku', effort: 'low' })
-  log(`${WORKER}: ${plan.item} ${verdict ? verdict.verdict : 'no verdict'}`)
+  log(`${WORKER}: ${plan.item} ${verdict ? (verdict.verdict || (verdict.pending ? 'still finishing' : 'no verdict')) : 'no verdict'}`)
   results.push({ item: plan.item, run_dir: plan.run_dir, returned, dead, verdict })
 }
 return results
