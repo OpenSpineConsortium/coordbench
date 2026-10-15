@@ -1,0 +1,103 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..d7f5646 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -485,11 +485,15 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        lock_files: bool = False,
++        escape_shell: bool = False,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.lock_files = lock_files
++        self.escape_shell = escape_shell
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,6 +509,35 @@ class Editor:
+                 return editor
+         return "vi"
+ 
++    def _build_command(self, editor: str, filename: str) -> str:
++        """Build the command line that is run through the shell to edit
++        ``filename`` with ``editor``.
++
++        Without :attr:`escape_shell` the filename is only wrapped in
++        double quotes, which still lets ``$``, backticks and ``"`` act
++        as shell syntax. With it, every word is quoted with
++        :func:`shlex.quote` so that special characters are literal.
++        """
++        if not self.escape_shell:
++            return f'{editor} "{filename}"'
++
++        import shlex
++
++        try:
++            words = shlex.split(editor)
++        except ValueError:
++            words = [editor]
++
++        # An editor such as ``code --wait`` is a program followed by
++        # plain arguments, so each word is quoted on its own. One that
++        # holds shell operators (``vim; rm -rf /``) is not a command line
++        # at all, so it is quoted whole, as one program name that cannot
++        # run anything else.
++        if any(c in word for word in words for c in ";&|<>()$`\n"):
++            words = [editor]
++
++        return " ".join(shlex.quote(word) for word in [*words, filename])
++
+     def edit_file(self, filename: str) -> None:
+         import subprocess
+ 
+@@ -516,7 +549,9 @@ class Editor:
+             environ.update(self.env)
+ 
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
++            c = subprocess.Popen(
++                self._build_command(editor, filename), env=environ, shell=True
++            )
+             exit_code = c.wait()
+             if exit_code != 0:
+                 raise ClickException(
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..d1c95b0 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,8 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    lock_files: bool = False,
++    escape_shell: bool = False,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +679,21 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param escape_shell: if true, the filename and every word of the editor
++        command are quoted with :func:`shlex.quote` before the command runs
++        through the shell, so special characters are taken literally.
++        Defaults to false.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        lock_files=lock_files,
++        escape_shell=escape_shell,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

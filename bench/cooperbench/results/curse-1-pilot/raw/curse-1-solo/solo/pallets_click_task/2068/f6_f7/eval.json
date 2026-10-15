@@ -1,0 +1,21 @@
+{
+  "repo": "pallets_click_task",
+  "task_id": 2068,
+  "features": [
+    6,
+    7
+  ],
+  "setting": "solo",
+  "merge": null,
+  "feature1": {
+    "passed": false,
+    "test_output": "HEAD is now at d791537 Merge stable into main (#2799)\nHEAD is now at d791537 Merge stable into main (#2799)\nReset to base: d791537317947448a3960662d00acf160eff2602\nEnsuring clean repository state...\nHEAD is now at d791537 Merge stable into main (#2799)\nApplying feature patch: solo.patch\nerror: No valid patches in input (allow with \"--allow-empty\")\nerror: No valid patches in input (allow with \"--allow-empty\")\nCleaning up repository...\nHEAD is now at d791537 Merge stable into main (#2799)\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "passed": false,
+    "test_output": "HEAD is now at d791537 Merge stable into main (#2799)\nHEAD is now at d791537 Merge stable into main (#2799)\nReset to base: d791537317947448a3960662d00acf160eff2602\nEnsuring clean repository state...\nHEAD is now at d791537 Merge stable into main (#2799)\nApplying feature patch: solo.patch\nerror: No valid patches in input (allow with \"--allow-empty\")\nerror: No valid patches in input (allow with \"--allow-empty\")\nCleaning up repository...\nHEAD is now at d791537 Merge stable into main (#2799)\nRepository cleaned.\n"
+  },
+  "both_passed": false,
+  "error": null,
+  "evaluated_at": "2026-10-15T09:17:24.648608"
+}

@@ -20,6 +20,11 @@ ways, each run by a workflow step through the command line (cli.py's
          claim needs work), "take <issue>" (the task it was given, else its
          share of the unclaimed blockers and todos that fit its area) or
          "none".
+  deal   for every worker of a run, from one look at the repository, the
+         same answer next gives each, as JSON by worker: the workers'
+         workflow deals once, in its first job, and hands each leg its
+         move, so no two legs looking for themselves at different moments
+         are dealt one issue (F4).
 
 Every call to GitHub goes through a Client, the small interface below that
 adapters/github.py implements over REST and a test implements in memory,
@@ -37,8 +42,9 @@ from .claims import PREFIX as CLAIM_PREFIX, issue_files, number_of
 # worker names itself with worker:<name>, and the older account:<name> and
 # agent:<name> are read as the same label.
 from .labels import (ACCOUNT_PREFIX, AGENT_PREFIX, BLOCKED as BLOCKED_LABEL,
-                     BLOCKER as BLOCKER_LABEL, EPIC as EPIC_LABEL, TODO as TODO_LABEL, WORKER_COLOUR,
-                     agent_label as agent_of, holders, label_names, worker_label)
+                     BLOCKER as BLOCKER_LABEL, CLAIMED as CLAIMED_LABEL, EPIC as EPIC_LABEL,
+                     TODO as TODO_LABEL, WORKER_COLOUR, agent_label as agent_of, holders, label_names,
+                     worker_label)
 from .workers import fits
 
 # The one check the ruleset requires and a member can fix; the board's own
@@ -50,6 +56,10 @@ EPIC_LINE = re.compile(r"^Epic: #(\d+)\s*$", re.MULTILINE)
 # A ready pull request with one of these states has fallen behind its
 # base or conflicts with it; any other state waits on checks or a merge.
 NEEDS_REBASE = {"behind", "dirty"}
+# The same, read where GitHub's word says only that something else stops
+# the merge: the standing the adapter reads through mergeable and a
+# comparison (adapters.github.standing_of), as the board does (F9).
+STANDING_NEEDS_REBASE = {"behind", "conflicting"}
 FAILED = {"failure", "timed_out"}
 # The colour a worker's label is made in; kept under team mode's name too.
 AGENT_COLOUR = WORKER_COLOUR
@@ -89,7 +99,9 @@ class Client(Protocol):
 
     def open_pull(self, branch: str) -> dict | None:
         """The open pull request from the branch, in the detail that holds
-        "mergeable_state" and the head's "sha", or None when there is none."""
+        "mergeable_state" and the head's "sha", or None when there is none;
+        where that word says only that something else stops the merge, a
+        "standing" may say how the branch stands to its base."""
 
     def check_runs(self, sha: str) -> list[dict]:
         """The check runs on one commit."""
@@ -192,11 +204,22 @@ def claim_needs_work(client, number):
     request yet, a draft, a base it has fallen behind or conflicts with, or
     a failed required check. One that is ready and only waiting for its
     checks or its merge needs nothing, and a run spent on it would be usage
-    wasted."""
+    wasted. A branch behind its base counts whether GitHub says so or the
+    pull request's standing does, where GitHub's word says only that a
+    check or a review holds it, since the board tells such a pull request
+    "main moved" (F9) and its holder should hear it from the clerk too. So
+    a ready claim whose check is still running is carried at once when its
+    branch is behind, where until F9 it waited for the check and, under a
+    rule that asks for an up-to-date branch, for GitHub to say behind; a
+    busy default branch can then take a worker in Actions round after
+    round, each push starting the check again, up to its limit of rounds.
+    integration_due reads the integration's claim the same way."""
     pull = client.open_pull(f"{CLAIM_PREFIX}{number}")
     if not pull:
         return True
     if pull.get("draft") or pull.get("mergeable_state") in NEEDS_REBASE:
+        return True
+    if pull.get("standing") in STANDING_NEEDS_REBASE:
         return True
     runs = client.check_runs(pull["head"]["sha"]) or []
     return any(run.get("name") == REQUIRED_CHECK and run.get("conclusion") in FAILED
@@ -219,17 +242,32 @@ class Snapshot:
         return self.needs_work[number]
 
     def free(self, issue):
-        return issue["number"] not in self.claimed and BLOCKED_LABEL not in label_names(issue)
+        """Whether an issue may be taken: no claim branch holds it, and it
+        is labelled neither blocked nor claimed. The board shows an issue
+        labelled claimed in neither its Queue nor Given to workers, branch
+        or no branch, as when an issue is reopened after its merged branch
+        was deleted, or a release is undone before its branch is renamed
+        back, so a worker reading the board never takes it, and the clerk
+        never deals it: a worker in Actions that leaves such an issue alone
+        would otherwise be dealt it again on every run, its share of the
+        queue held back behind it."""
+        labels = label_names(issue)
+        return (issue["number"] not in self.claimed and BLOCKED_LABEL not in labels
+                and CLAIMED_LABEL not in labels)
 
     def own_move(self, agent):
         """A member's own work: a claim of its own that needs work, else
-        the task the lead gave it; None when it has neither."""
+        the task the lead gave it, an issue its label names whether or not
+        it also carries todo, since the board shows it under Given to
+        workers either way (F14) and the spec has the worker take it
+        first; never an epic, which the coordinator plans and nobody takes
+        whole. None when it has neither."""
         mine = [i for i in self.issues if is_mine(i, agent) and BLOCKED_LABEL not in label_names(i)]
         for issue in mine:
             if issue["number"] in self.claimed and self.claim_needs_work(issue["number"]):
                 return f"carry {issue['number']}"
         for issue in mine:
-            if self.free(issue) and TODO_LABEL in label_names(issue) and EPIC_LABEL not in label_names(issue):
+            if self.free(issue) and EPIC_LABEL not in label_names(issue):
                 return f"take {issue['number']}"
         return None
 
@@ -262,36 +300,79 @@ def deal(members, pool, areas=None):
     return dealt
 
 
-def next_for(client, agent, team=None, areas=None):
-    """The worker's next move: its own claims first, then the task it was
-    given, then its share of the shared work. The workers of one run ask at
-    the same moment, so the shared work is dealt out (deal): the workers
-    with no work of their own, in the order given, each take the next issue
-    that fits their area, and one with no issue left for it waits, rather
+def deals(client, team, areas=None):
+    """Every worker's next move, by name, from one look at the repository:
+    its own claims first, then the task it was given, then its share of the
+    shared work, which is dealt out (deal) among the workers with no work of
+    their own, in the order given, each taking the next issue that fits its
+    area; a worker with no issue left for it gets "none" and waits, rather
     than start a session that would race a peer for the same claim. areas
-    maps a worker's name to its area; a worker not in it takes any issue."""
+    maps a worker's name to its area; a worker not in it takes any issue.
+
+    One look for the whole run is the point: a worker that looked for
+    itself could see a peer's ready pull request clean, and be dealt the
+    issue after the peer's, while a later look saw the same pull request
+    behind the default branch, the peer carrying its own claim, and dealt
+    the peer's issue again (F4). So the workers' workflow asks once, in its
+    first job, and hands each leg its move; next_for is one worker's answer
+    from the same rule."""
+    return moves_from(Snapshot(client), team, areas)
+
+
+def moves_from(snap, team, areas=None):
+    """deals over a look already taken: each member's own move, then the
+    shared work dealt among the members with none. A name repeated in team
+    is one member, dealt once, so no issue goes to a repetition and to
+    nobody."""
+    team = list(dict.fromkeys(team))
+    moves = {member: snap.own_move(member) for member in team}
+    idle = [member for member in team if not moves[member]]
+    dealt = deal(idle, snap.pool(), areas)
+    for member in idle:
+        moves[member] = f"take {dealt[member]['number']}" if member in dealt else "none"
+    return moves
+
+
+def next_for(client, agent, team=None, areas=None):
+    """The worker's next move, as deals gives it: the same answer the run's
+    one look would give this worker, from the worker's own look. Its own
+    work is answered first, before any peer's claim is read: deals gives a
+    member with work of its own that work whatever the others do, and each
+    peer's pull request costs a call."""
     team = list(team or [agent])
     if agent not in team:
         team.append(agent)
     snap = Snapshot(client)
-    own = snap.own_move(agent)
-    if own:
-        return own
-    idle = [member for member in team if member == agent or not snap.own_move(member)]
-    issue = deal(idle, snap.pool(), areas).get(agent)
-    return f"take {issue['number']}" if issue else "none"
+    return snap.own_move(agent) or moves_from(snap, team, areas)[agent]
 
 
 def next_move(client, agent, team=None, label=None, areas=None):
-    """The worker's next move as the workers' workflow asks for it:
-    next_for, and when the move is a take and the worker named its label,
-    the label is made first, so the session that follows can put it on the
-    issue (a label gh cannot find makes `gh issue edit --add-label` add
-    none)."""
+    """The worker's next move as a round of the workers' workflow asks for
+    it: next_for, and when the move is a take and the worker named its
+    label, the label is made first, so the session that follows can put it
+    on the issue (a label gh cannot find makes `gh issue edit --add-label`
+    add none)."""
     answer = next_for(client, agent, team, areas)
     if label and answer.startswith("take "):
         ensure_label(client, label)
     return answer
+
+
+def deal_moves(client, team, areas=None, labels=None, run=None):
+    """The moves of the workers of one run, as the workers' workflow asks
+    for them in its first job: deals over the whole team, since a worker not
+    in this run is still dealt its share and so left it, as next_for leaves
+    it; the answer holds the workers of the run (run, default the whole
+    team; a name not in the team is dealt after it), and each take's worker
+    has its label made first, as next_move does, labels giving the label by
+    name."""
+    team = list(dict.fromkeys(team))
+    run = list(dict.fromkeys(team if run is None else run))
+    moves = deals(client, team + [name for name in run if name not in team], areas)
+    for name in run:
+        if moves[name].startswith("take ") and (labels or {}).get(name):
+            ensure_label(client, labels[name])
+    return {name: moves[name] for name in run}
 
 
 # --- seed -------------------------------------------------------------------

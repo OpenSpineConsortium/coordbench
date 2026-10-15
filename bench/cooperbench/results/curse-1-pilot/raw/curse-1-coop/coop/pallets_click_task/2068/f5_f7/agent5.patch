@@ -1,0 +1,142 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..b551f38 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -485,11 +485,15 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        lock_files: bool = False,
++        escape_shell: bool = False,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.lock_files = lock_files
++        self.escape_shell = escape_shell
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -515,6 +519,8 @@ class Editor:
+             environ = os.environ.copy()
+             environ.update(self.env)
+ 
++        lock_filename = self._create_lock_file(filename) if self.lock_files else None
++
+         try:
+             c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
+             exit_code = c.wait()
+@@ -526,6 +532,69 @@ class Editor:
+             raise ClickException(
+                 _("{editor}: Editing failed: {e}").format(editor=editor, e=e)
+             ) from e
++        finally:
++            # Runs for a failed editor, an interrupt or any other error too,
++            # so a crashed edit never leaves a lock behind.
++            if lock_filename is not None:
++                self._remove_lock_file(lock_filename)
++
++    def _get_lock_filename(self, filename: str) -> str:
++        """Return the path of the lock file for ``filename``: the same
++        directory, named ``.{basename}.lock``.
++        """
++        directory, basename = os.path.split(filename)
++        return os.path.join(directory, f".{basename}.lock")
++
++    def _create_lock_file(self, filename: str) -> str:
++        """Create the lock file for ``filename`` and return its path.
++
++        The file is made with ``O_CREAT | O_EXCL``, so the check for an
++        existing lock and the creation are one atomic step and two
++        processes can never both take the lock. It records the process
++        ID and the time, to help whoever finds a stale lock.
++
++        :raises ClickException: if the file is already locked or the
++            lock file cannot be created.
++        """
++        from datetime import datetime
++
++        lock_filename = self._get_lock_filename(filename)
++        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
++
++        try:
++            fd = os.open(lock_filename, flags, 0o644)
++        except FileExistsError:
++            raise ClickException(
++                _(
++                    "{filename}: File is locked, it is already being edited by"
++                    " another process. Lock file {lock} exists, remove it if"
++                    " that session is gone."
++                ).format(filename=filename, lock=lock_filename)
++            ) from None
++        except OSError as e:
++            raise ClickException(
++                _("{filename}: Cannot create lock file: {e}").format(
++                    filename=filename, e=e
++                )
++            ) from e
++
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as f:
++                f.write(f"PID: {os.getpid()}\nTime: {datetime.now().isoformat()}")
++        except BaseException:
++            # The file exists but is unusable. Don't leave it behind to
++            # block the next edit.
++            self._remove_lock_file(lock_filename)
++            raise
++
++        return lock_filename
++
++    def _remove_lock_file(self, lock_filename: str) -> None:
++        """Remove a lock file made by :meth:`_create_lock_file`. A lock
++        file that is already gone is not an error.
++        """
++        with contextlib.suppress(FileNotFoundError):
++            os.unlink(lock_filename)
+ 
+     def edit(self, text: t.AnyStr | None) -> t.AnyStr | None:
+         import tempfile
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..0453b04 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,8 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    lock_files: bool = False,
++    escape_shell: bool = False,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -674,13 +676,28 @@ def edit(
+     :param extension: the extension to tell the editor about.  This defaults
+                       to `.txt` but changing this might change syntax
+                       highlighting.
++    :param lock_files: if this is true, a lock file named
++                       ``.{filename}.lock`` is created next to the edited
++                       file while the editor is open, and removed when it
++                       closes, even on an error. Editing a file whose lock
++                       file exists raises a :exc:`ClickException` instead
++                       of opening the editor. The lock file holds the
++                       process ID and the time it was made. Defaults to
++                       false.
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        lock_files=lock_files,
++        escape_shell=escape_shell,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

@@ -1,0 +1,103 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..cf1bb6a 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -478,6 +478,28 @@ def _nullpager(
+         stream.write(text)
+ 
+ 
++# How much each priority changes a Unix process's niceness. A positive
++# increment lowers the priority; a negative one raises it and normally
++# needs privileges.
++_PRIORITY_NICE = {
++    "low": 10,
++    "below_normal": 5,
++    "normal": 0,
++    "above_normal": -5,
++    "high": -10,
++}
++
++# The priority class of each priority, as a subprocess constant's name,
++# since the constants exist on Windows only.
++_PRIORITY_WINDOWS = {
++    "low": "IDLE_PRIORITY_CLASS",
++    "below_normal": "BELOW_NORMAL_PRIORITY_CLASS",
++    "normal": "NORMAL_PRIORITY_CLASS",
++    "above_normal": "ABOVE_NORMAL_PRIORITY_CLASS",
++    "high": "HIGH_PRIORITY_CLASS",
++}
++
++
+ class Editor:
+     def __init__(
+         self,
+@@ -485,11 +507,50 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        process_priority: str | None = None,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        # An unknown priority is ignored, so the editor starts as usual.
++        self.process_priority = (
++            process_priority
++            if isinstance(process_priority, str) and process_priority in _PRIORITY_NICE
++            else None
++        )
++
++    def _priority_popen_kwargs(self) -> dict[str, t.Any]:
++        """Keyword arguments for ``subprocess.Popen`` that start the editor
++        at the requested priority, or an empty dict when none was asked
++        for or the platform has no way to set it.
++
++        Windows takes a priority class as a creation flag. Elsewhere the
++        child lowers or raises its own niceness before it runs the
++        editor, which the shell and anything it starts then inherit.
++        """
++        if self.process_priority is None:
++            return {}
++
++        if WIN:
++            import subprocess
++
++            flag = getattr(subprocess, _PRIORITY_WINDOWS[self.process_priority], 0)
++            return {"creationflags": flag} if flag else {}
++
++        if not hasattr(os, "nice"):
++            return {}
++
++        increment = _PRIORITY_NICE[self.process_priority]
++
++        def set_priority() -> None:
++            # Runs in the child before exec. An exception here would
++            # stop the editor from starting, and a plain user may not
++            # raise a priority, so a failure is swallowed.
++            with contextlib.suppress(OSError):
++                os.nice(increment)
++
++        return {"preexec_fn": set_priority}
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..68ff135 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -680,7 +680,13 @@ def edit(
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        process_priority=process_priority,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)
