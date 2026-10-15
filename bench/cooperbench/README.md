@@ -140,22 +140,30 @@ them, each member behind them by its size, a first header among them
 when a later one carries ustar's magic; and what follows the tar's
 end), zip members (a zipapp's too, one that does not read as unzip
 decompresses it, a Deflate64 one as far as deflate reads it, and the
-members a split zip's last part holds whole), ar members (a .deb, a
-BSD archive's, and what follows the last), git's loose objects (at
-whatever compression git wrote them), packfiles (with each delta
-applied to its base) and bundles, an archive inside an archive, up to
-eight layers deep, with one budget for the whole directory (1 GiB
-unpacked, each stream, member or object counting 1 KiB and a delta the
-larger of what it makes and 32 bytes an instruction). A layer is found
-where a file, a stream or a member starts, or by a zip's end record
-where no format that accounts for all of the bytes opens them: a
-stream that starts partway through other bytes (after a line of text,
-a zip's end, or a zlib or lzma stream) is outside it, as base64 is, and
-so are a zip after a git object or a pack, which git refuses with bytes
-after them, a v7 tar whose first header does not read, which has no
-magic to find the next header by, and a path staged and never
-committed that a git index of version 4 (feature.manyFiles) holds as
-what it does not share with the path before it. It exits 2 when a file
+members a split zip's last part holds whole, a zip64 split's too), ar
+members (a .deb, a BSD archive's, and what follows the last), git's
+loose objects (at whatever compression git wrote them), packfiles
+(with each delta applied to its base) and bundles, an archive inside
+an archive, up to eight layers deep, with one budget for the whole
+directory (1 GiB unpacked, each stream, member or object counting 1
+KiB and a delta the larger of what it makes and 32 bytes an
+instruction). A layer is found where a file, a stream or a member
+starts, or by a zip's end record where no format that accounts for all
+of the bytes opens them (a tar whose first header does not read, found
+by ustar's magic or by a later header, is a weak sign too: looked for
+after the end record, and not at all where the zip that record ends
+has its first member in the first block, as a zipapp has after its
+interpreter line, since text that happens to put a header's fields
+where a tar has them is a zip first of all; it never refuses a file it
+does not open, and the scrub's pass leaves it whole once it opens, as
+it leaves a tar): a stream that starts partway
+through other bytes (after a line of text, a zip's end, or a zlib or
+lzma stream) is outside it, as base64 is, and so are a zip after a git
+object or a pack, which git refuses with bytes after them, a v7 tar
+whose first header does not read, which has no magic to find the next
+header by, and a path staged and never committed that a git index of
+version 4 (feature.manyFiles) holds as what it does not share with the
+path before it. It exits 2 when a file
 or a layer still holds the token, a path's name does, the budget or the
 depth runs out, or a file does not open: a stream, a tar member or an
 ar member cut short (what it gave is searched first), a zip member that
@@ -165,10 +173,11 @@ last part once the members it holds whole are searched (a middle part,
 which starts partway through a member, is searched as it is, as is a
 last part that holds only the directory, and a zip -s archive that
 fits in one part is an ordinary zip), a format it cannot open (zstd,
-7z, rar, lz4, .Z, lzip), an incremental bundle whose pack holds a delta
-on an object it does not carry (its other objects are searched first),
-a SHA-256 repository's pack, or a path it cannot reach (one past
-PATH_MAX). A repository's history is the exception: what its objects
+7z, rar, lz4, .Z, lzip, an AIX big archive), an incremental bundle
+whose pack holds a delta on an object it does not carry (its other
+objects are searched first), a SHA-256 repository's pack, or a path it
+cannot reach (one past PATH_MAX). A repository's history is the
+exception: what its objects
 hold (a project's own zstd or cut gzip test fixture) is searched as far
 as it opens and never refused for it, though the same file in a work
 tree is, and a packfile cut short is not opened there at all. Every
@@ -176,7 +185,9 @@ line it writes names a path with the token replaced. A file whose bytes
 only look like a container (a log with a stray zip end record) is
 scrubbed as text, and the scrub's own pass has one budget for the
 directory too, each gzip member counting 1 KiB as in the read-back,
-past which a .gz is left whole for the read-back to refuse. The
+past which a .gz is left whole for the read-back to refuse; a file
+whose reading makes that pass raise is said and skipped, so the other
+files are still scrubbed, and the read-back then refuses it. The
 workflow's jobs run it before an upload, after stopping any agent
 container still up, and publish nothing it refused; a fake run, which
 has no token, reads its files back for a stand-in, so the rehearsal

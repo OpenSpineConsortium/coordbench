@@ -755,9 +755,12 @@ def scrub_file(path, values, budget):
 
 def scrub_paths(paths, values):
     """The files, each once; a file that cannot be read (a broken gzip
-    among them, or one past the pass's budget) is said and skipped, and
-    when any file holds the credential and could not be rewritten, every
-    other file is still scrubbed and then CredentialKept names them all."""
+    among them, or one past the pass's budget, or whatever else its bytes
+    make the reading raise) is said and skipped, so that no one file ends
+    the pass before the others are scrubbed, as unscrubbed refuses such a
+    file rather than end the read-back; and when any file holds the
+    credential and could not be rewritten, every other file is still
+    scrubbed and then CredentialKept names them all."""
     rewritten, kept, budget = [], [], Budget()
     for path in paths:
         try:
@@ -767,7 +770,7 @@ def scrub_paths(paths, values):
                 rewritten.append(path)
         except CredentialKept as problem:
             kept.append(str(problem))
-        except (OSError, EOFError, ValueError, zlib.error) as problem:
+        except Exception as problem:
             say(scrub_text(f"scrubbing {path} failed: {why(problem)}", values))
     if kept:
         raise CredentialKept("\n".join(kept))
@@ -864,11 +867,14 @@ class MembersUnread(ValueError):
 
 class Reading(io.RawIOBase):
     """A read-only file over bytes already held, for tarfile and zipfile:
-    io.BytesIO copies a bytearray, which every layer's content is."""
+    io.BytesIO copies a bytearray, which every layer's content is. patches
+    maps an offset to the bytes read there in place of the data's, so a
+    few bytes read otherwise (a zip64 locator's disk fields, zip_reader)
+    cost no copy of the whole."""
 
-    def __init__(self, data):
+    def __init__(self, data, patches=()):
         super().__init__()
-        self.view, self.position = memoryview(data), 0
+        self.view, self.position, self.patches = memoryview(data), 0, dict(patches)
 
     def readable(self):
         return True
@@ -879,6 +885,10 @@ class Reading(io.RawIOBase):
     def readinto(self, buffer):
         piece = self.view[self.position:self.position + len(buffer)]
         buffer[:len(piece)] = piece
+        for at, replacement in self.patches.items():
+            start, end = max(at, self.position), min(at + len(replacement), self.position + len(piece))
+            if start < end:
+                buffer[start - self.position:end - self.position] = replacement[start - at:end - at]
         self.position += len(piece)
         return len(piece)
 
@@ -1177,13 +1187,20 @@ TAR_SIZE = re.compile(rb" *([0-7]{1,11})[ \0]*")
 UNOPENED_FORMATS = ((b"\x28\xb5\x2f\xfd", "zstd"), (b"7z\xbc\xaf\x27\x1c", "7z"),
                     (b"Rar!\x1a\x07", "rar"), (b"\x04\x22\x4d\x18", "lz4"),
                     (b"\x1f\x9d", "compress (.Z)"), (b"LZIP", "lzip"),
+                    (b"<bigaf>\n", "AIX big archive"),
                     (b"PK\x07\x08", "a split zip's first part (zip -s)"))
 UNOPENED_NAMES = frozenset(name for _, name in UNOPENED_FORMATS)
-CONTAINERS = frozenset({"tar", "zip", "prefixed zip", "ar", "git packfile", "git bundle"})
+# A tar found by ustar's magic alone, or by a later header past a first
+# that does not read (is_broken_tar), read as a tar all the same; its
+# layers are labelled as a tar's are, and the scrub leaves it whole once
+# it opens to a layer (holds_members), since a replacement inside a tar
+# moves every header after it off its block.
+BROKEN_TAR = "tar whose first header does not read"
+CONTAINERS = frozenset({"tar", BROKEN_TAR, "zip", "prefixed zip", "ar", "git packfile", "git bundle"})
 # zlib_content inflates with partial and so raises only at a limit; zlib
 # is listed all the same, since a weak sign never refuses, however it is
-# read.
-WEAK_KINDS = frozenset({"zlib", "lzma", "prefixed zip"})
+# read. The broken tar is weak since its sign is a shape text may take.
+WEAK_KINDS = frozenset({"zlib", "lzma", "prefixed zip", BROKEN_TAR})
 # The kinds whose content is a repository's: its history holds whatever
 # the project committed (a test's zstd or cut gzip fixture among them),
 # so what such content holds is searched as far as it opens and never
@@ -1207,7 +1224,18 @@ def packed_kinds(data):
     git object is a sure sign once its first bytes inflate to git's
     header, since an object git wrote at compression level 0, or of bytes
     that do not compress, shows what it holds as it is, a zip's end
-    record among them."""
+    record among them. A tar is a sure sign only by a first header whose
+    checksum holds; one found by ustar's magic alone, or by a later header
+    past a first that does not read (broken_tar_header), is the weak sign
+    BROKEN_TAR, read as GNU tar reads past a header it refuses, but looked
+    for only where no sure sign is found, tried last, and not at all
+    where a zip covers the bytes it was found in (zip_covers_tar): that
+    is a zip with something before it, a zipapp after its interpreter
+    line, whose text happens to put an octal field or ustar's magic where
+    a header has them, and whose bytes the zip reads whole, where the
+    tar's steps over them read as no layer of their own and would refuse
+    a clean file. A zip that lies past the header the tar was found by is
+    a member of the tar, which is read all the same."""
     kinds = []
     if data[:3] == GZIP_MAGIC + b"\x08":
         kinds.append("gzip")
@@ -1219,7 +1247,7 @@ def packed_kinds(data):
         kinds.append("git packfile")
     elif data.startswith(BUNDLE_HEADERS):
         kinds.append("git bundle")
-    elif data.startswith(ZIP_STARTS) or (data.startswith(SPANNED_ZIP) and ends_as_zip(data)):
+    elif data.startswith(ZIP_STARTS) or (data.startswith(SPANNED_ZIP) and is_one_part(data)):
         kinds.append("zip")
     elif data.startswith(AR_MAGIC):
         kinds.append("ar")
@@ -1227,9 +1255,17 @@ def packed_kinds(data):
         kinds.append("zlib")
     else:
         kinds += [name for magic, name in UNOPENED_FORMATS if data.startswith(magic)]
-    if is_tar(data) or is_broken_tar(data):
+    whole_tar = checksum_holds(tar_header(data))
+    later = broken_tar_header(data)
+    broken_tar = not whole_tar and (is_tar(data) or later is not None)
+    if whole_tar:
         kinds.append("tar")
     if not UNOPENED_NAMES.issuperset(kinds):
+        # A zip by its first bytes covers its bytes, unless its end record places it later, after the header the
+        # tar was found by: a tar whose first member's name starts as a zip's header does, with a zip among its
+        # members.
+        if broken_tar and kinds == ["zip"] and not zip_covers_tar(data, later):
+            kinds.append(BROKEN_TAR)
         return kinds
     if len(data) > 2 and data[0] == 0x78 and (data[0] << 8 | data[1]) % 31 == 0:
         kinds.append("zlib")
@@ -1237,12 +1273,101 @@ def packed_kinds(data):
         kinds.append("lzma")
     if ends_as_zip(data):
         kinds.append("prefixed zip")
+    if broken_tar and not ("prefixed zip" in kinds and zip_covers_tar(data, later)):
+        kinds.append(BROKEN_TAR)
     return kinds
 
 
+def zip_covers_tar(data, later):
+    """Whether the zip the bytes end with, as zipfile places it from its end
+    record, covers the bytes a tar sign was found in: it starts in the
+    first block (a zipapp after its interpreter line, whose text put a
+    header's fields where a tar has them), or the later header the tar
+    was found by (later, from broken_tar_header) lies within it, as a
+    stored tar member's does. A zip that starts after the first block and
+    after that header is a member of the tar, which is read."""
+    extent = zip_extent(data)
+    if extent is None:
+        return False
+    start, end = extent
+    return start < 512 or (later is not None and start <= later < end)
+
+
+def zip_extent(data):
+    """Where the zip a file ends with starts and where its end record is,
+    as zipfile places them: the record's place less the directory's size
+    and offset, the zip64 record's when the classic leaves them to it;
+    None with no end record."""
+    tail = bytes(data[-ZIP_TAIL:])
+    at = tail.rfind(b"PK\x05\x06")
+    if at < 0 or len(tail) - at < 22:
+        return None
+    where = len(data) - len(tail) + at
+    size, offset = int.from_bytes(tail[at + 12:at + 16], "little"), int.from_bytes(tail[at + 16:at + 20], "little")
+    zip64 = zip64_record(tail, at)
+    if zip64:
+        size, offset, where = int.from_bytes(zip64[40:48], "little"), int.from_bytes(zip64[48:56], "little"), where - 76
+    return where - size - offset, where
+
+
 def ends_as_zip(data):
-    """Whether a zip's end record stands where zipfile looks for it."""
-    return zipfile.is_zipfile(io.BytesIO(bytes(data[-ZIP_TAIL:])))
+    """Whether a zip's end record stands where zipfile looks for it, a
+    zip64 split part's included (zip_reader). zipfile reads the record in
+    the last 64 KiB and its comment's most, which is handed to it as a
+    copy, read in C; a zip64 locator's offsets hold only against the
+    whole, so a tail that holds one is read in place of the whole."""
+    tail = bytes(data[-ZIP_TAIL:])
+    at = tail.rfind(b"PK\x05\x06")
+    if at < 20 or tail[at - 20:at - 16] != b"PK\x06\x07":
+        return zipfile.is_zipfile(io.BytesIO(tail))
+    with zip_reader(data) as source:
+        return zipfile.is_zipfile(source)
+
+
+def is_one_part(data):
+    """Whether bytes that start as a split zip's first part (SPANNED_ZIP)
+    are a zip -s archive that fits in one part, which is a whole zip: its
+    own end record ends the file, says disk 0 and names a directory whose
+    first entry places a local header at 4, after the marker. A real
+    first part has no end record of its own, and the record of a zip
+    stored among its members, which zip stores by default, ends where
+    that member ends and names the member's own offsets, so it never
+    stands in for the archive's."""
+    tail = bytes(data[-ZIP_TAIL:])
+    at = tail.rfind(b"PK\x05\x06")
+    record = tail[at:at + 22]
+    if at < 0 or len(record) < 22 or record[4:8] != bytes(4):
+        return False
+    if at + 22 + int.from_bytes(record[20:22], "little") != len(tail):
+        return False
+    directory = int.from_bytes(record[16:20], "little")
+    if directory == 0xFFFFFFFF:
+        zip64 = zip64_record(tail, at)
+        if not zip64:
+            return False
+        directory = int.from_bytes(zip64[48:56], "little")
+    entry = bytes(data[directory:directory + 46])
+    return entry[:4] == b"PK\x01\x02" and int.from_bytes(entry[42:46], "little") == 4
+
+
+def zip_reader(data):
+    """A file over the bytes for zipfile, which reads a zip64 split part's
+    locator as saying one disk, the first, so that it reads the part's
+    directory, which it otherwise refuses ("zipfiles that span multiple
+    disks are not supported") by the locator's two disk fields alone;
+    split_part reads the part's disk from the record itself, which is
+    left as it is, so the members on the part's own disk are read and the
+    part is then refused as before. The locator is the one zipfile reads,
+    the 20 bytes before the end record it finds last in the tail; the
+    bytes are read as they are when it says one disk or there is none, so
+    a stored member that happens to hold the locator's signature is read
+    as it is and its CRC still holds."""
+    tail = bytes(data[-ZIP_TAIL:])
+    at = tail.rfind(b"PK\x05\x06")
+    if at < 20 or tail[at - 20:at - 16] != b"PK\x06\x07" or int.from_bytes(tail[at - 4:at], "little") <= 1:
+        return Reading(data)
+    locator = len(data) - len(tail) + at - 20
+    return Reading(data, {locator + 4: bytes(4), locator + 16: (1).to_bytes(4, "little")})
 
 
 def is_loose_object(data):
@@ -1274,28 +1399,34 @@ def is_tar(data):
 
 
 def is_broken_tar(data):
-    """A tar whose first header does not read, its magic or another of its
-    bytes broken, which GNU tar reads past to the next header: the first
-    block is shaped like a header (its checksum field a number), and a
-    later block carries ustar's magic at 257 and a checksum that holds. A
-    v7 tar, which has no magic to find its next header by, is not looked
-    into past a first header that does not read."""
+    return broken_tar_header(data) is not None
+
+
+def broken_tar_header(data):
+    """Where the header is that makes a tar of bytes whose first header
+    does not read, its magic or another of its bytes broken, which GNU tar
+    reads past to the next header: the first block is shaped like a header
+    (its checksum field a number), and a later block carries ustar's magic
+    at 257 and a checksum that holds; None where there is none. A v7 tar,
+    which has no magic to find its next header by, is not looked into past
+    a first header that does not read."""
     start = ZEROS.match(data).end() // 512 * 512
     if not TAR_CHECKSUM.fullmatch(data[start + 148:start + 156]):
-        return False
+        return None
     at = data.find(b"ustar", start + 512 + 257)
     while at >= 0:
         if (at - 257) % 512 == 0 and checksum_holds(bytes(data[at - 257:at + 255])):
-            return True
+            return at - 257
         at = data.find(b"ustar", at + 1)
-    return False
+    return None
 
 
 def checksum_holds(header):
     """A tar header's checksum, at 148, sums its bytes, as tar sums them,
-    unsigned or, as some old tars did, signed."""
+    unsigned or, as some old tars did, signed; a block cut short of 512
+    bytes is no header."""
     field = TAR_CHECKSUM.fullmatch(header[148:156])
-    if not field:
+    if len(header) != 512 or not field:
         return False
     summed = header[:148] + b" " * 8 + header[156:512]
     return int(field.group(1), 8) in (sum(summed), sum(struct.unpack("512b", summed)))
@@ -1350,9 +1481,10 @@ def layers_through(kind, data, needles, budget, depth, strict):
     """credential_layers through one format. What a layer gives is
     searched, and so is what a stream gave before it stopped short
     (StoppedShort). A layer that does not open then refuses the file,
-    unless its sign is weak (WEAK_KINDS) and it never opened, or the bytes
-    are a repository's content, which are searched as far as they open; a
-    limit refuses it wherever it is met."""
+    unless its sign is weak (WEAK_KINDS) and it never opened, a member
+    that stopped short with bytes counting as opened, or the bytes are a
+    repository's content, which are searched as far as they open; a limit
+    refuses it wherever it is met."""
     layers, opened = UNPACKERS[kind](data, budget), False
     while True:
         try:
@@ -1366,7 +1498,7 @@ def layers_through(kind, data, needles, budget, depth, strict):
             found = credential_layers(partial, needles, budget, depth + 1, False) if partial else None
             if found is not None:
                 return [kind, *found]
-            if not strict or (kind in WEAK_KINDS and not opened):
+            if not strict or (kind in WEAK_KINDS and not opened and not partial):
                 return None
             raise
         opened = True
@@ -1549,12 +1681,42 @@ def stepped_over(data, start, end, budget):
 
 def what_follows(data, start, end, block, budget):
     """What follows a block of a tar that reads as no header, opened from
-    that block and, when it is shaped like a header, from the next."""
+    that block and, when it is shaped like a header, from the next. The
+    whole of what tar_members was given is never given back, which would
+    open it again to the depth's end; what follows its first block is
+    given in its place, since a first block that reads as no header
+    stands before whatever GNU tar skips to, past the blocks the walk
+    itself reads as headers or steps over as GNU tar does
+    (past_unread_blocks): text whose every line is a block with ustar's
+    magic would otherwise open itself a block shorter to the depth's
+    end, and a stream behind two headers that do not read would be
+    stepped over blind."""
     shaped = len(block) == 512 and TAR_CHECKSUM.fullmatch(block[148:156])
-    for begin in (start, start + 512) if shaped else (start,):
-        if begin < end and ZEROS.match(data, begin, end).end() < end and (begin, end) != (0, len(data)):
+    whole = (start, end) == (0, len(data))
+    begins = (past_unread_blocks(data, start + 512, end),) if whole else (start, start + 512) if shaped else (start,)
+    for begin in begins:
+        if begin < end and ZEROS.match(data, begin, end).end() < end:
             budget.take(end - begin)
             yield "what a tar stepped over", data[begin:end]
+
+
+def past_unread_blocks(data, start, end):
+    """The first block from start that the walk (stepped_over) neither
+    reads as a header nor steps over as GNU tar does: not zeros, not a
+    header whose size reads, whose member the walk gives, and not a block
+    that reads as a header by ustar's magic or its checksum but gives no
+    size, which the walk steps over; end where there is none."""
+    while start < end:
+        start += (ZEROS.match(data, start, end).end() - start) // 512 * 512
+        block = data[start:min(start + 512, end)]
+        size = header_size(block)
+        if size is not None:
+            start += 512 + -(-size // 512) * 512
+        elif len(block) == 512 and (block[257:262] == b"ustar" or checksum_holds(block)):
+            start += 512
+        else:
+            return start
+    return end
 
 
 def header_size(block):
@@ -1576,10 +1738,11 @@ def zip_members(data, budget):
     zipapp's #! line) reads the same way. The last part of a zip split
     across files (zip -s) gives the members that lie whole in it, which
     its directory places on its own disk, and is then refused for the
-    members that lie in the other parts."""
+    members that lie in the other parts; a zip64 split part's directory
+    is read the same way (zip_reader)."""
     budget.take(ITEM_COST * data.count(b"PK\x01\x02"))
     unread, elsewhere, disk = None, 0, split_part(data)
-    with Reading(data) as source, zipfile.ZipFile(source) as packed:
+    with zip_reader(data) as source, zipfile.ZipFile(source) as packed:
         for info in packed.infolist():
             if disk is not None and info.volume != disk:
                 elsewhere += 1
@@ -1602,12 +1765,25 @@ def zip_members(data, budget):
 
 def split_part(data):
     """The disk a zip's end record says it is, as zip -s numbers each part
-    of a zip split across files, or None for a zip in one file."""
+    of a zip split across files, or None for a zip in one file; when the
+    classic record leaves the disk to the zip64 record (0xFFFF), the
+    zip64 record's, which the locator before the classic record names."""
     tail = bytes(data[-ZIP_TAIL:])
     at = tail.rfind(b"PK\x05\x06")
     if at < 0 or tail[at + 4:at + 8] in (b"", bytes(4)):
         return None
-    return int.from_bytes(tail[at + 4:at + 6], "little")
+    disk = int.from_bytes(tail[at + 4:at + 6], "little")
+    zip64 = zip64_record(tail, at)
+    return int.from_bytes(zip64[16:20], "little") if disk == 0xFFFF and zip64 else disk
+
+
+def zip64_record(tail, at):
+    """A zip's zip64 end record, which stands before its locator, itself
+    before the classic end record at `at` in the tail, as zip writes them
+    and zipfile reads them; b"" where there is none."""
+    if at < 76 or tail[at - 20:at - 16] != b"PK\x06\x07" or tail[at - 76:at - 72] != b"PK\x06\x06":
+        return b""
+    return tail[at - 76:at - 20]
 
 
 def raw_member(data, info, budget):
@@ -1660,17 +1836,23 @@ def zip_lzma(packed):
 def holds_members(kind, data, budget):
     """Whether the scrub must leave a container whole: a sure sign always;
     a zip found by its end record, or a tar by its checksum alone, only
-    when it opens with a member, so a log whose bytes only look like one
-    is scrubbed as text. A zip's directory is charged to the scrub's
-    budget, as the read-back charges it, and one past what is left is
-    left whole for the read-back to refuse."""
+    when it opens with a member, and a tar whose first header does not
+    read only when it opens to a layer, so a log whose bytes only look
+    like one is scrubbed as text. A zip's directory is charged to the
+    scrub's budget, as the read-back charges it, and one past what is
+    left is left whole for the read-back to refuse, as is a tar past it."""
+    if kind == BROKEN_TAR:
+        try:
+            return any(True for _ in tar_members(data, budget))
+        except Exception:
+            return True
     if kind == "prefixed zip":
         entries = data.count(b"PK\x01\x02")
         if entries > budget.left // ITEM_COST:
             return True
         budget.take(ITEM_COST * entries)
         try:
-            with Reading(data) as source, zipfile.ZipFile(source) as packed:
+            with zip_reader(data) as source, zipfile.ZipFile(source) as packed:
                 return bool(packed.infolist())
         except Exception:
             return False
@@ -1765,6 +1947,7 @@ UNPACKERS = {
     "zip": zip_members,
     "prefixed zip": zip_members,
     "tar": tar_members,
+    BROKEN_TAR: tar_members,
     "ar": ar_members,
     "zlib": zlib_content,
     "lzma": lzma_content,
