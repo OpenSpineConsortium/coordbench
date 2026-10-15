@@ -71,6 +71,12 @@ def agent_records(result):
 
 
 def tokens_of(agent):
+    """The agent's counts, or None when it has none at all: an agent whose
+    transcript was never found is unmeasured, not an agent that used no
+    tokens, and counting it as 0 would halve its pair."""
+    fields = ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens", "output_tokens_lower_bound")
+    if all(agent.get(field) is None for field in fields):
+        return None
     out = {"input": agent.get("input_tokens") or 0, "cache_read": agent.get("cache_read_tokens") or 0,
            "cache_write": agent.get("cache_write_tokens") or 0}
     output = agent.get("output_tokens")
@@ -116,13 +122,16 @@ def pair_row(tag, arm, pair_dir):
     agents = agent_records(result)
     spans = [t for t in result.get("timings") or [] if t.get("phase") == "agent"]
     tokens = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}
-    lower_bound, cost, tool_calls, model = False, 0.0, 0, result.get("model")
+    lower_bound, cost, tool_calls, model, unmeasured = False, 0.0, 0, result.get("model"), 0
     for agent in agents:
         own = tokens_of(agent)
-        for kind in tokens:
-            tokens[kind] += own[kind]
-        lower_bound = lower_bound or own["output_is_lower_bound"]
-        own_cost = cost_of(own, agent.get("model") or model)
+        if own is None:
+            unmeasured += 1
+        else:
+            for kind in tokens:
+                tokens[kind] += own[kind]
+            lower_bound = lower_bound or own["output_is_lower_bound"]
+        own_cost = cost_of(own, agent.get("model") or model) if own else None
         cost = cost + own_cost if own_cost is not None and cost is not None else None
         transcript = pair_dir / f"{agent.get('id', 'agent')}_session.jsonl"
         if not transcript.exists():
@@ -144,10 +153,10 @@ def pair_row(tag, arm, pair_dir):
         "agents_wall_seconds": result.get("agents_seconds"),
         "agent_seconds_sum": sum(t.get("seconds") or 0 for t in spans) or None,
         "agent_seconds_max": max((t.get("seconds") or 0 for t in spans), default=None),
-        "input_tokens": tokens["input"], "cache_read_tokens": tokens["cache_read"],
-        "cache_write_tokens": tokens["cache_write"], "output_tokens": tokens["output"],
-        "output_is_lower_bound": lower_bound,
-        "total_tokens": sum(tokens.values()),
+        # A pair with an unmeasured agent has no token count or cost: its
+        # sums would read as the pair's and halve it.
+        "unmeasured_agents": unmeasured,
+        **pair_tokens(tokens, lower_bound, unmeasured or not agents),
         "cost_usd": round(cost, 4) if cost is not None else None,
         "tool_calls": tool_calls,
         "messages_sent": metrics.get("messages_sent"), "message_words": metrics.get("message_words"),
@@ -157,6 +166,15 @@ def pair_row(tag, arm, pair_dir):
         "time_to_first_merge_seconds": metrics.get("time_to_first_merge_seconds"),
         "run_id": result.get("run_id"), "log_dir": str(pair_dir),
     }
+
+
+def pair_tokens(tokens, lower_bound, unknown):
+    kinds = {"input_tokens": "input", "cache_read_tokens": "cache_read", "cache_write_tokens": "cache_write",
+             "output_tokens": "output"}
+    if unknown:
+        return {**dict.fromkeys(kinds), "output_is_lower_bound": None, "total_tokens": None}
+    return {**{field: tokens[kind] for field, kind in kinds.items()}, "output_is_lower_bound": lower_bound,
+            "total_tokens": sum(tokens.values())}
 
 
 def collect(logs, tag, arms):
@@ -174,9 +192,14 @@ def collect(logs, tag, arms):
     return rows
 
 
-def median(values):
+def exact_median(values):
     values = [v for v in values if v is not None]
-    return round(statistics.median(values), 1) if values else None
+    return statistics.median(values) if values else None
+
+
+def median(values):
+    value = exact_median(values)
+    return round(value, 1) if value is not None else None
 
 
 def mean(values):
@@ -217,6 +240,7 @@ def summarize_arm(attempts):
         "tokens_per_pair_median": {kind: median([r[f"{kind}_tokens"] for r in rows])
                                    for kind in ("input", "cache_read", "cache_write", "output", "total")},
         "output_lower_bound_pairs": sum(1 for r in rows if r["output_is_lower_bound"]),
+        "unmeasured_token_pairs": sum(1 for r in rows if r["total_tokens"] is None),
         "cost_usd_total": round(total_cost, 2), "priced_pairs": len(priced),
         "cost_usd_per_pair_mean": mean([r["cost_usd"] for r in rows]),
         "cost_usd_per_pair_median": median([r["cost_usd"] for r in rows]),
@@ -234,8 +258,10 @@ def summarize_arm(attempts):
 
 def paired(rows_a, rows_b):
     """Pairs both arms completed (no agent in Error): both pass, only a,
-    only b, neither, and the ratio of b's medians to a's on latency and
-    cost."""
+    only b, neither, and the ratio of b's medians to a's on latency,
+    tokens and cost, each over the shared pairs both arms measured it on
+    and from the medians before rounding, since a median rounded to one
+    decimal (a cost of $0.6) moves the ratio by a tenth."""
     def by_key(rows):
         return {(r["repo"], r["task"], r["features"]): r for r in rows if not r["agent_errors"]}
     a, b = by_key(rows_a), by_key(rows_b)
@@ -245,7 +271,8 @@ def paired(rows_a, rows_b):
         pa, pb = a[key]["passed"], b[key]["passed"]
         counts["both" if pa and pb else "only_a" if pa else "only_b" if pb else "neither"] += 1
     def ratio(field):
-        ma, mb = median([a[k][field] for k in shared]), median([b[k][field] for k in shared])
+        measured = [k for k in shared if a[k][field] is not None and b[k][field] is not None]
+        ma, mb = exact_median([a[k][field] for k in measured]), exact_median([b[k][field] for k in measured])
         return round(mb / ma, 3) if ma and mb is not None else None
     return {"shared_pairs": len(shared), **counts,
             "wall_seconds_ratio_b_over_a": ratio("wall_seconds"),
@@ -286,8 +313,13 @@ def markdown(summary, arms):
         lines.append(f"| {a} | {b} | {p['shared_pairs']} | {p['both']} | {p['only_a']} | {p['only_b']} | {p['neither']} | "
                      f"{p['wall_seconds_ratio_b_over_a']} | {p['agent_seconds_sum_ratio_b_over_a']} | "
                      f"{p['total_tokens_ratio_b_over_a']} | {p['cost_ratio_b_over_a']} |")
+    unmeasured = {arm: s["unmeasured_token_pairs"] for arm, s in summary["arms"].items() if s["unmeasured_token_pairs"]}
     lines += ["", f"Prices (USD per million tokens): {json.dumps(PRICES['claude-sonnet-5-5'])}; "
-              "output tokens are a lower bound where the table says so (summary.json counts the pairs).", ""]
+              "output tokens are a lower bound where the table says so (summary.json counts the pairs)."]
+    if unmeasured:
+        lines.append("Token and cost figures leave out the pairs with an agent whose transcript was not found: "
+                     + ", ".join(f"{arm} {n}" for arm, n in unmeasured.items()) + ".")
+    lines.append("")
     return "\n".join(lines)
 
 

@@ -1184,7 +1184,10 @@ Status: same.
   never in a tool call's input, and a transcript that names another agent's
   token of the same run is an orchestrator's and nobody's; a transcript
   whose reply carries the token is preferred over a newer one whose prompt
-  alone does.
+  alone does. Last comes a transcript whose prompt names the agent's own
+  prompt file (its run directory and name) and whose replies carry no run
+  token, for an agent that read the file only after its first reply and
+  never echoed the token (six of 72 agents in the curse-1 step of 8 pairs).
 
 **101. Solo result.json shape and file names.** Status: same.
 - CooperBench: solo.py (119-129): one "agent" block, agent_id "solo", so

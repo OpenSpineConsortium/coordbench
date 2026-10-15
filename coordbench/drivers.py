@@ -951,7 +951,8 @@ class SessionDriver:
         if not token:
             return {"source": None, "matches": 0, "note": "the plan predates the run token"}
         roots = self.transcript_roots if self.transcript_roots is not None else transcript_roots()
-        matches = find_transcripts(token, roots, handle.get("started", 0) - TRANSCRIPT_CLOCK_SLACK_SECONDS)
+        since = handle.get("started", 0) - TRANSCRIPT_CLOCK_SLACK_SECONDS
+        matches = find_transcripts(token, roots, since, handle.get("prompt_file"))
         if not matches:
             return {"source": None, "matches": 0, "note": "no subagent transcript carried the run token"}
         source = matches[0]
@@ -959,7 +960,8 @@ class SessionDriver:
         text = source.read_text(encoding="utf-8", errors="replace")
         write_text(log_sibling(handle["log_path"], "_session.jsonl"), text)
         fill_from_transcript(outcome, transcript_usage(text))
-        return {"source": str(source), "matches": len(matches)}
+        return {"source": str(source), "matches": len(matches),
+                "matched_by": carries_token(source, token, handle.get("prompt_file"))}
 
 
 def run_token(run_id, agent):
@@ -1007,11 +1009,12 @@ def transcript_roots():
     return [root for i, root in enumerate(roots) if root.is_dir() and root not in roots[:i]]
 
 
-def find_transcripts(token, roots, since):
+def find_transcripts(token, roots, since, prompt_file=None):
     """The subagent transcripts touched since `since` that are this
     agent's (carries_token), those whose reply carries the token first,
-    then those whose prompt alone does, each newest first. Claude Code
-    keeps a subagent's transcript under <project>/<session>/subagents/."""
+    then those whose prompt does, then those whose prompt names the
+    agent's own prompt file, each newest first. Claude Code keeps a
+    subagent's transcript under <project>/<session>/subagents/."""
     candidates = []
     for root in roots:
         for path in Path(root).rglob("*.jsonl"):
@@ -1021,10 +1024,14 @@ def find_transcripts(token, roots, since):
                 continue
             if "subagents" in path.parts and modified >= since:
                 candidates.append((modified, path))
-    found = [(carries_token(path, token), modified, path) for modified, path in candidates]
+    found = [(carries_token(path, token, prompt_file), modified, path) for modified, path in candidates]
     found = [entry for entry in found if entry[0]]
-    found.sort(key=lambda entry: (entry[0] != "reply", -entry[1]))
+    found.sort(key=lambda entry: (MATCH_ORDER.index(entry[0]), -entry[1]))
     return [path for _, _, path in found]
+
+
+# How a transcript was found to be the agent's, most certain first.
+MATCH_ORDER = ("reply", "prompt", "named")
 
 
 # A run token as run_token writes it; the agent's name ends on a letter,
@@ -1032,25 +1039,46 @@ def find_transcripts(token, roots, since):
 RUN_TOKEN = re.compile(r"coordbench-run-token (\S+) ([A-Za-z0-9_.-]*[A-Za-z0-9_-])")
 
 
-def carries_token(path, token):
+def carries_token(path, token, prompt_file=None):
     """Where the transcript carries the agent's token, "reply" or "prompt",
-    or None when it is not the agent's. The prompt is every user line
+    "named" when only its prompt names the agent's own prompt file, or
+    None when it is not the agent's. The prompt is every user line
     before the first reply (a Workflow subagent gets the harness's request
     first and its pasted task second); a reply counts by its text blocks
     only, never a tool call's input, where an orchestrator that launched
     the agents would have pasted their prompts. A transcript that holds
     another agent's token of the same run anywhere in what is read is
-    such an orchestrator's, and none of the agents'."""
-    found, replied = None, False
+    such an orchestrator's, and none of the agents'.
+
+    "named" is for an agent that read its prompt file only after its
+    first reply and never echoed the token (six of 72 agents in the
+    curse-1 step): the file's path is the agent's own, run directory and
+    name, and an orchestrator's prompt never names it. A transcript whose
+    reply carries any run token is some run's agent, and is "named" for
+    none."""
+    found, replied, prompt, echoed = None, False, [], False
     for kind, message in opening_messages(path):
-        if names_another_agent(content_blocks_to_text(message.get("content")), token):
+        text = content_blocks_to_text(message.get("content"))
+        if names_another_agent(text, token):
             return None
         if kind == "assistant":
             replied = True
+            echoed = echoed or bool(RUN_TOKEN.search(reply_text(message)))
             found = "reply" if holds_token(reply_text(message), token) else found
-        elif kind == "user" and not replied and holds_token(content_blocks_to_text(message.get("content")), token):
-            found = found or "prompt"
-    return found
+        elif kind == "user" and not replied:
+            prompt.append(text)
+            found = found or ("prompt" if holds_token(text, token) else None)
+    if found or echoed or not prompt_file:
+        return found
+    return "named" if names_file(" ".join(prompt), prompt_file) else None
+
+
+def names_file(text, path):
+    """Whether the text names the path whole: not as the tail of a longer
+    path and not as the head of a longer name (<file>.old); a full stop
+    that ends a sentence may follow it."""
+    pattern = r"(?<![\w./-])" + re.escape(str(path)) + r"(?![\w-]|\.\w)"
+    return re.search(pattern, text) is not None
 
 
 def opening_messages(path):

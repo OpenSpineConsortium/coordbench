@@ -45,10 +45,10 @@ runner/core.py's summary.json leaves eval errors out; its console line and scrip
 | Arm | Model | Pairs | Tokens per pair | Partly counted pairs, tokens per pair | Cost (USD, sum) | Cost source | Minutes per pair (mean) | Minutes per pair (median) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | solo | claude-sonnet-5-5 | 8 | - | 8, >= 1,737,924 | - | - | 5.1 | 3.7 |
-| coop | claude-sonnet-5-5 | 8 | - | 8, >= 3,016,430 | - | - | 6.1 | 5.6 |
-| sdlc | claude-sonnet-5-5 | 8 | - | 8, >= 3,575,799 | - | - | 19.6 | 8.8 |
-| coop-git | claude-sonnet-5-5 | 8 | - | 8, >= 4,116,160 | - | - | 6.0 | 5.1 |
-| team | claude-sonnet-5-5 | 8 | - | 8, >= 3,741,854 | - | - | 5.8 | 4.9 |
+| coop | claude-sonnet-5-5 | 8 | - | 8, >= 3,371,448 | - | - | 6.1 | 5.6 |
+| sdlc | claude-sonnet-5-5 | 8 | - | 8, >= 3,789,386 | - | - | 19.6 | 8.8 |
+| coop-git | claude-sonnet-5-5 | 8 | - | 8, >= 4,437,464 | - | - | 6.0 | 5.1 |
+| team | claude-sonnet-5-5 | 8 | - | 8, >= 3,982,167 | - | - | 5.8 | 4.9 |
 
 Tokens per pair is over the pairs whose four counts are all known for every agent. A pair with some counts null (the session driver's output count when the transcript lacks the final one) is no total: it is counted apart, with the known counts and output_tokens_lower_bound for the missing output as a lower bound, so drivers are never compared on different bases. A pair whose counts are all null (a driver that could not measure usage) is in neither, and '-' means no pair. Cost is result.json's total_cost summed over the pairs that have one; the median is CooperBench's ablation page's.
 
@@ -154,10 +154,10 @@ Each agent's patch alone against both suites (agents may redivide the features, 
 
 | Arm | Model | Conversations | With text | Turns (mean) | Speaker runs (mean) | Overhead: sends / tool calls | Sends and receives / tool calls | Sends and their results / calls and results | Pairs with a transcript |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| coop | claude-sonnet-5-5 | 8 | 8 | 6.1 | 3.9 | 19.6% | 46.0% | 19.6% | 8 |
-| sdlc | claude-sonnet-5-5 | 8 | 8 | 3.8 | 3.1 | 9.3% | 23.4% | 9.4% | 8 |
-| coop-git | claude-sonnet-5-5 | 8 | 8 | 5.6 | 4.6 | 13.5% | 31.8% | 13.5% | 8 |
-| team | claude-sonnet-5-5 | 8 | 8 | 4.1 | 3.9 | 10.6% | 21.2% | 10.6% | 8 |
+| coop | claude-sonnet-5-5 | 8 | 8 | 6.1 | 3.9 | 17.6% | 41.2% | 17.5% | 8 |
+| sdlc | claude-sonnet-5-5 | 8 | 8 | 3.8 | 3.1 | 8.8% | 22.1% | 8.9% | 8 |
+| coop-git | claude-sonnet-5-5 | 8 | 8 | 5.6 | 4.6 | 12.5% | 29.4% | 12.5% | 8 |
+| team | claude-sonnet-5-5 | 8 | 8 | 4.1 | 3.9 | 10.0% | 19.9% | 10.0% | 8 |
 
 A turn is one sent message, one per send call (a broadcast is one turn; a team's request and its response are one each, as the overhead counts them), from the conversation the judge labels (events.jsonl, else conversation_store.json, else CooperBench's conversation.json); speaker runs count the changes of speaker instead. The overhead pools the pairs: the sending calls (send_message, broadcast, and the team's request and respond) and the receiving ones (receive_messages, wait_for_message) as the hub counted them, each alias of a chained shell command apart, or as the transcripts show them, over every tool call of both agents' own turns (subagents left out). The paper counts OpenHands events (actions and observations), so neither basis is its unit.
 
@@ -169,10 +169,10 @@ Each act's count, and its share of the agents' tool calls over the conversations
 
 | Arm | Model | Labels | Conversations | With a transcript | Plan (% of tool calls) | Question (% of tool calls) | Answer (% of tool calls) | Update (% of tool calls) | Ack (% of tool calls) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| coop | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 9 (3.6%) | 11 (4.4%) | 5 (2.0%) | 11 (4.4%) | 2 (0.8%) |
-| sdlc | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 16 (5.0%) | 0 (0.0%) | 1 (0.3%) | 0 (0.0%) | 1 (0.3%) |
-| coop-git | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 7 (2.1%) | 9 (2.7%) | 4 (1.2%) | 8 (2.4%) | 1 (0.3%) |
-| team | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 15 (4.8%) | 0 (0.0%) | 4 (1.3%) | 9 (2.9%) | 5 (1.6%) |
+| coop | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 9 (3.2%) | 11 (3.9%) | 5 (1.8%) | 11 (3.9%) | 2 (0.7%) |
+| sdlc | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 16 (4.7%) | 0 (0.0%) | 1 (0.3%) | 0 (0.0%) | 1 (0.3%) |
+| coop-git | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 7 (1.9%) | 9 (2.5%) | 4 (1.1%) | 8 (2.2%) | 1 (0.3%) |
+| team | claude-sonnet-5-5 | keyword baseline | 8 | 8 | 15 (4.5%) | 0 (0.0%) | 4 (1.2%) | 9 (2.7%) | 5 (1.5%) |
 
 Plan:Question, by naive-merge conflict, as the ratio of totals and the mean of per-trajectory ratios (a trajectory with no Question left out of the mean):
 

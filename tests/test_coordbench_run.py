@@ -1892,7 +1892,7 @@ class Runs(RunnerCase):
         self.assertEqual((first["model_requested"], first["model_differs"]), ("claude-sonnet-5-5", True))
         self.assertEqual((pair / "agent1_session.jsonl").read_text(), transcript.read_text())
         outcome = json.loads((pair / "agent1_session_outcome.json").read_text())
-        self.assertEqual(outcome["transcript"], {"source": str(transcript), "matches": 1})
+        self.assertEqual(outcome["transcript"], {"source": str(transcript), "matches": 1, "matched_by": "reply"})
         self.assertFalse((pair / "agent1_stream.jsonl").exists())
         trajectory = json.loads((pair / "agent1_traj.json").read_text())
         # One message per transcript line, as parse_session_jsonl gives them.
@@ -2337,6 +2337,44 @@ class SessionTranscripts(unittest.TestCase):
         replied = write_transcript(subagents / "agent-replied.jsonl", token, age=100)
         prompted = write_lines(subagents / "agent-prompted.jsonl", [user_line(f"Begin with {token}.")])
         self.assertEqual(drivers.find_transcripts(token, [self.root], 0), [replied, prompted])
+
+    def test_an_agent_that_never_echoed_its_token_is_found_by_the_prompt_file_its_prompt_names(self):
+        """Six agents of the curse-1 step read their prompt file only after
+        their first reply and never echoed the token: the file's path,
+        named in the agent's own prompt, finds them, after every
+        transcript that carries the token, and never an orchestrator's
+        or another agent's."""
+        token = drivers.run_token("run-3", "agent1")
+        prompt_file = self.tmp / "logs" / "f1_f2" / "agent1.session-prompt.md"
+        subagents = self.root / "p" / "s" / "subagents"
+        reply = {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "On it."}]}}
+        read_back = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": f"# coordbench\nBegin with {token}."}]}}
+        mine = write_lines(subagents / "agent-quiet.jsonl", [
+            user_line(f"Your complete task is the file {prompt_file}. Read it in full first."), reply, read_back])
+        self.assertEqual(drivers.carries_token(mine, token, str(prompt_file)), "named")
+        self.assertIsNone(drivers.carries_token(mine, token), "without the prompt file there is nothing to name")
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, str(prompt_file)), [mine])
+        replied = write_transcript(subagents / "agent-replied.jsonl", token, age=100)
+        self.assertEqual(drivers.find_transcripts(token, [self.root], 0, str(prompt_file)), [replied, mine])
+        other = write_lines(subagents / "agent-other.jsonl", [
+            user_line(f"Your complete task is the file {prompt_file}.old and {prompt_file}x."), reply])
+        self.assertIsNone(drivers.carries_token(other, token, str(prompt_file)), "a longer name is another file")
+        tail = write_lines(subagents / "agent-tail.jsonl", [user_line(f"Read /mnt{prompt_file} first."), reply])
+        self.assertIsNone(drivers.carries_token(tail, token, str(prompt_file)), "a longer path is another file")
+        echoed = write_lines(subagents / "agent-echoed.jsonl", [
+            user_line(f"Your complete task is the file {prompt_file}."),
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": drivers.run_token("run-old", "agent1")}]}}])
+        self.assertIsNone(drivers.carries_token(echoed, token, str(prompt_file)),
+                          "an agent that echoed another run's token is that run's, though its file has the same path")
+        planner = write_lines(subagents / "agent-planner.jsonl", [
+            user_line("Run lane.py prepare."), {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "lane.py prepare"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": f"{prompt_file} {token}"}]}}])
+        self.assertIsNone(drivers.carries_token(planner, token, str(prompt_file)),
+                          "a plan printed by a tool after the first reply names nobody's prompt")
 
     def test_usage_counts_each_api_message_once_with_its_largest_figures(self):
         usage = drivers.transcript_usage("".join(json.dumps(line) + "\n" for line in transcript_lines("t")))

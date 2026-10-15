@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "bench" / "cooperbench" / "session"))
 import bundle  # noqa: E402
 import lane  # noqa: E402
 import subset  # noqa: E402
+import summary  # noqa: E402
 
 
 def plan_with(workspaces, deadline):
@@ -269,6 +270,65 @@ class SubsetCopiesTheSample(unittest.TestCase):
                              capture_output=True, text=True, cwd=str(ROOT))
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertNotIn("session", out.stdout)
+
+
+
+def measured_agent(cache_read, output=1000):
+    return {"input_tokens": 10, "cache_read_tokens": cache_read, "cache_write_tokens": 50000,
+            "output_tokens": None, "output_tokens_lower_bound": output, "model": "claude-sonnet-5-5"}
+
+
+UNMEASURED = dict.fromkeys(("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens",
+                            "output_tokens_lower_bound", "model"))
+
+
+def write_pair(logs, arm, task, agents, both_passed=True):
+    folder = Path(logs) / f"curse-1-{arm}" / "coop" / "repo_task" / str(task) / "f1_f2"
+    folder.mkdir(parents=True)
+    result = {"repo": "repo_task", "task_id": task, "features": [1, 2], "model": "claude-sonnet-5-5",
+              "duration_seconds": 300.0, "agents": agents}
+    (folder / "result.json").write_text(json.dumps(result))
+    (folder / "eval.json").write_text(json.dumps({"both_passed": both_passed}))
+    return folder
+
+
+class SummaryCountsWhatWasMeasured(unittest.TestCase):
+    """summary.py's token and cost figures: an agent with no counts at all
+    leaves its pair out of them, and a paired ratio is taken from the
+    medians before rounding."""
+
+    def setUp(self):
+        self.logs = tempfile.mkdtemp(prefix="coordbench-summary-")
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", self.logs], check=False))
+
+    def test_an_agent_without_counts_leaves_its_pair_unmeasured_not_halved(self):
+        half = summary.pair_row("curse-1", "coop", write_pair(self.logs, "coop", 1, {
+            "agent1": dict(UNMEASURED), "agent2": measured_agent(1_000_000)}))
+        self.assertEqual((half["unmeasured_agents"], half["total_tokens"], half["cost_usd"]), (1, None, None))
+        whole = summary.pair_row("curse-1", "coop", write_pair(self.logs, "coop", 2, {
+            "agent1": measured_agent(1_000_000), "agent2": measured_agent(1_000_000)}))
+        self.assertEqual(whole["unmeasured_agents"], 0)
+        self.assertEqual(whole["total_tokens"], 2 * (10 + 1_000_000 + 50000 + 1000))
+        arm = summary.summarize_arm([half, whole])
+        self.assertEqual(arm["unmeasured_token_pairs"], 1)
+        self.assertEqual(arm["tokens_per_pair_mean"]["total"], whole["total_tokens"], "the half-counted pair is left out")
+        self.assertEqual(arm["priced_pairs"], 1)
+
+    def test_a_measured_zero_is_a_count(self):
+        zero = summary.tokens_of({"input_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+                                  "output_tokens": 0})
+        self.assertEqual(zero["input"] + zero["output"], 0)
+        self.assertIsNone(summary.tokens_of(dict(UNMEASURED)))
+
+    def test_ratios_come_from_the_medians_before_rounding(self):
+        def row(task, cost, tokens=None):
+            return {"repo": "r", "task": task, "features": "f1_f2", "agent_errors": 0, "passed": True,
+                    "wall_seconds": 100.0, "agent_seconds_sum": 100.0, "total_tokens": tokens, "cost_usd": cost}
+        solo = [row(1, 0.64, 100), row(2, 0.64, 300)]
+        coop = [row(1, 1.16, 200), row(2, 1.16, None)]
+        result = summary.paired(solo, coop)
+        self.assertEqual(result["cost_ratio_b_over_a"], round(1.16 / 0.64, 3), "not 1.2 / 0.6 = 2.0")
+        self.assertEqual(result["total_tokens_ratio_b_over_a"], 2.0, "over the shared pairs both arms measured")
 
 
 if __name__ == "__main__":
