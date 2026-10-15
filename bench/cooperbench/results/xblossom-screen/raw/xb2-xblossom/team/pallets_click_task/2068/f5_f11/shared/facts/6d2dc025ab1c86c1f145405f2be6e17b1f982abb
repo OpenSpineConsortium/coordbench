@@ -1,0 +1,1 @@
+src/click/termui.py: edit() builds Editor(...) and calls ed.edit(text) or ed.edit_file(filename); monitor_process is passed through as the last Editor kwarg -- checked by: grep -n "monitor_process" src/click/termui.py

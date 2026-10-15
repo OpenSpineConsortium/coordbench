@@ -1,0 +1,39 @@
+[
+  {
+    "id": "710dc9c6a4",
+    "title": "Lead-only: integrate and submit feature 5",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792091013.0358317,
+    "last_note": "patch: the lead working tree (feature 5 lock_files joined with agent2 feature 11 monitor_process)\n src/click/_termui_impl.py | 219 +++++++++++++++++++++++++++++++++++++++++++++-\n src/click/termui.py       |  32 ++++++-\n 2 files changed, 249 insertions(+), 2 deletions(-)\ntest: python -m pytest /tmp/test_lock_scratch.py /tmp/test_combined_scratch.py tests -q --ignore=tests/test_basic.py -> exit 0 (574 passed, 21 skipped, 1 xfailed)",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "7dcfc23d30",
+    "title": "Implement feature 5: lock_files for click.edit (lead)",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "agent1",
+    "created_at": 1792091058.1003368,
+    "last_note": "patch: the lead working tree (feature 5 lock_files joined with agent2 feature 11 monitor_process)\n src/click/_termui_impl.py | 219 +++++++++++++++++++++++++++++++++++++++++++++-\n src/click/termui.py       |  32 ++++++-\n 2 files changed, 249 insertions(+), 2 deletions(-)\ntest: python -m pytest /tmp/test_lock_scratch.py /tmp/test_combined_scratch.py tests -q --ignore=tests/test_basic.py -> exit 0 (574 passed, 21 skipped, 1 xfailed)",
+    "metadata": {}
+  },
+  {
+    "id": "9ea4963926",
+    "title": "Implement feature 11",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792091013.0357726,
+    "last_note": "patch: /workspace/shared/agent2.patch\n src/click/_termui_impl.py | 152 +++++++++++++++++++++++++++++++++++++++++++++-\n src/click/termui.py       |  22 ++++++-\n 2 files changed, 172 insertions(+), 2 deletions(-)\ntest: python -m pytest tests/test_termui.py tests/test_utils.py -q -> exit 0",
+    "metadata": {
+      "feature_id": 11,
+      "assigned_to": "agent2"
+    }
+  }
+]

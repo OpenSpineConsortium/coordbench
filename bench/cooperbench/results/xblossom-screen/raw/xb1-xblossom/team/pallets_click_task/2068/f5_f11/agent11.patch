@@ -1,0 +1,226 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..0e80d3a 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -478,6 +478,150 @@ def _nullpager(
+         stream.write(text)
+ 
+ 
++def _process_state(pid: int) -> str | None:
++    """Return the one letter state of a process, such as ``R``, ``S`` or
++    ``T`` (stopped), or ``None`` when it cannot be told.
++
++    Only platforms with ``/proc`` can say, so elsewhere the answer is
++    always ``None`` and a monitor reports no suspend or resume events.
++    """
++    try:
++        with open(f"/proc/{int(pid)}/stat", "rb") as f:
++            data = f.read()
++    except (OSError, TypeError, ValueError):
++        return None
++
++    # The name in the second field may hold spaces and parentheses, so
++    # the state is the first field after the last closing parenthesis.
++    fields = data.rpartition(b")")[2].split()
++    return fields[0].decode("ascii", "replace") if fields else None
++
++
++class _ProcessMonitor:
++    """Reports the life of an editor process to a callback from a
++    background thread, while the calling thread keeps waiting for the
++    editor.
++
++    The callback is called as ``callback(event_type, process_id,
++    editor_command, timestamp)`` with ``"start"``, ``"suspend"``,
++    ``"resume"`` and ``"terminate"`` as event types. ``"start"`` always
++    comes first and ``"terminate"`` last, and the latter is finished
++    before :meth:`watch` returns. Suspend and resume are only seen where
++    :func:`_process_state` can tell.
++
++    The setting is a callable, or a mapping or an object with a
++    ``callback`` and, optionally, a ``poll_interval`` in seconds.
++    Anything false, ``None`` included, turns monitoring off.
++    """
++
++    default_interval = 0.1
++
++    def __init__(self, setting: t.Any, command: str) -> None:
++        self.command = command
++        self.callback: cabc.Callable[..., t.Any] | None = None
++        self.interval = self.default_interval
++
++        if not setting:
++            return
++
++        if callable(setting):
++            self.callback = setting
++            return
++
++        if isinstance(setting, cabc.Mapping):
++            callback = setting.get("callback")
++            interval = setting.get("poll_interval", self.default_interval)
++        else:
++            callback = getattr(setting, "callback", None)
++            interval = getattr(setting, "poll_interval", self.default_interval)
++
++        if not callable(callback):
++            raise TypeError(
++                "'monitor_process' must be a callable, or a mapping or an"
++                " object with a callable 'callback'."
++            )
++
++        self.interval = float(interval)
++
++        if self.interval <= 0:
++            raise ValueError("'poll_interval' must be greater than zero.")
++
++        self.callback = callback
++
++    @contextlib.contextmanager
++    def watch(self, process: t.Any) -> cabc.Iterator[None]:
++        """Monitor ``process`` for as long as the ``with`` block runs.
++        Leaving the block, by an error too, reports the termination and
++        ends the thread.
++        """
++        if self.callback is None:
++            yield
++            return
++
++        import threading
++
++        done = threading.Event()
++        thread = threading.Thread(
++            target=self._run,
++            args=(process, done),
++            name="click-editor-monitor",
++            daemon=True,
++        )
++        thread.start()
++
++        try:
++            yield
++        finally:
++            done.set()
++            thread.join()
++
++    def _run(self, process: t.Any, done: t.Any) -> None:
++        pid = process.pid
++        suspended = False
++        self._notify("start", pid)
++
++        # Event.wait returns True once the caller is done with the
++        # process, and False after each interval otherwise.
++        while not done.wait(self.interval):
++            if self._has_exited(process):
++                break
++
++            state = _process_state(pid)
++
++            if state is None or (state == "T") == suspended:
++                continue
++
++            suspended = not suspended
++            self._notify("suspend" if suspended else "resume", pid)
++
++        self._notify("terminate", pid)
++
++    @staticmethod
++    def _has_exited(process: t.Any) -> bool:
++        try:
++            return process.poll() is not None
++        except Exception:
++            return False
++
++    def _notify(self, event_type: str, pid: int) -> None:
++        assert self.callback is not None
++
++        try:
++            self.callback(event_type, pid, self.command, time.time())
++        except Exception as e:
++            import warnings
++
++            # A failing callback must not end the monitoring or the
++            # edit, and neither must a warning filter that raises.
++            with contextlib.suppress(Exception):
++                warnings.warn(
++                    f"The process monitor callback failed on {event_type!r}:"
++                    f" {type(e).__name__}: {e}",
++                    UserWarning,
++                    stacklevel=2,
++                )
++
++
+ class Editor:
+     def __init__(
+         self,
+@@ -485,11 +629,13 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        monitor_process: t.Any = None,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.monitor_process = monitor_process
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -516,8 +662,12 @@ class Editor:
+             environ.update(self.env)
+ 
+         try:
++            monitor = _ProcessMonitor(self.monitor_process, editor)
+             c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
+-            exit_code = c.wait()
++
++            with monitor.watch(c):
++                exit_code = c.wait()
++
+             if exit_code != 0:
+                 raise ClickException(
+                     _("{editor}: Editing failed").format(editor=editor)
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..9735e47 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,7 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    monitor_process: t.Any = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +678,29 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param monitor_process: report the life of the editor process while
++        this function waits for it.  Either a callable
++        ``callback(event_type, process_id, editor_command, timestamp)``,
++        or a dict, or an object, with that ``callback`` and optionally a
++        ``poll_interval`` in seconds (``0.1`` by default).  The callback
++        is called from a background thread with ``"start"`` when the
++        editor has started, ``"terminate"`` once it has ended, and where
++        the platform can tell (Linux), ``"suspend"`` and ``"resume"`` in
++        between.  ``process_id`` is the process the editor was started
++        in, ``editor_command`` the editor, and ``timestamp`` the time of
++        the event as ``time.time()`` gives it.  If the callback raises an
++        exception a :exc:`UserWarning` is issued and the monitoring goes
++        on.  By default nothing is monitored.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        monitor_process=monitor_process,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

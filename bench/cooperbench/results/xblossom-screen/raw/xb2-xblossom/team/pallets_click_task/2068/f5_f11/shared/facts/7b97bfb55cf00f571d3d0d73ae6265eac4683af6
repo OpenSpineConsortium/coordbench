@@ -1,0 +1,1 @@
+src/click/_termui_impl.py: Editor.edit() writes a mkstemp file and calls self.edit_file(name) in a try/finally; edit_file runs subprocess.Popen(editor "filename", shell=True) and waits -- checked by: git show HEAD:src/click/_termui_impl.py | grep -n "edit_file"

@@ -1,0 +1,190 @@
+{
+  "repo": "go_chi_task",
+  "task_id": 56,
+  "features": [
+    1,
+    5
+  ],
+  "setting": "coop",
+  "apply_status": {
+    "agent1": "applied",
+    "agent2": "applied"
+  },
+  "merge": {
+    "status": "clean",
+    "strategy": "naive",
+    "diff": "diff --git a/context.go b/context.go\nindex e78a238..783224c 100644\n--- a/context.go\n+++ b/context.go\n@@ -76,6 +76,11 @@ type Context struct {\n \n \t// methodNotAllowed hint\n \tmethodNotAllowed bool\n+\n+\t// methodsAllowed lists the methods registered on the route that matched\n+\t// the request path when the request method did not, so that a 405\n+\t// response can name them in its Allow header.\n+\tmethodsAllowed []methodTyp\n }\n \n // Reset a routing context to its initial state.\n@@ -91,6 +96,7 @@ func (x *Context) Reset() {\n \tx.routeParams.Keys = x.routeParams.Keys[:0]\n \tx.routeParams.Values = x.routeParams.Values[:0]\n \tx.methodNotAllowed = false\n+\tx.methodsAllowed = x.methodsAllowed[:0]\n \tx.parentCtx = nil\n }\n \ndiff --git a/cors.go b/cors.go\nnew file mode 100644\nindex 0000000..775e947\n--- /dev/null\n+++ b/cors.go\n@@ -0,0 +1,140 @@\n+package chi\n+\n+import (\n+\t\"net/http\"\n+\t\"sort\"\n+\t\"strconv\"\n+\t\"strings\"\n+)\n+\n+// CORSOptions configures the CORS middleware and Mux.EnableCORSWithOptions.\n+// DefaultCORSOptions returns a starting point to change.\n+type CORSOptions struct {\n+\t// AllowOrigin is the value of the Access-Control-Allow-Origin header:\n+\t// \"*\" for any origin, or the one origin that may read the responses, such\n+\t// as \"https://example.com\". When it is empty the header is not sent.\n+\tAllowOrigin string\n+\n+\t// AllowMethods are the methods listed in Access-Control-Allow-Methods on\n+\t// a preflight response. When empty, the methods that the requested route\n+\t// serves are listed, which is what the router already knows.\n+\tAllowMethods []string\n+\n+\t// AllowHeaders are the request headers listed in\n+\t// Access-Control-Allow-Headers on a preflight response. When empty, the\n+\t// headers the browser asks for in Access-Control-Request-Headers are\n+\t// allowed.\n+\tAllowHeaders []string\n+\n+\t// ExposeHeaders are the response headers that scripts of another origin\n+\t// may read, sent as Access-Control-Expose-Headers.\n+\tExposeHeaders []string\n+\n+\t// MaxAge is how many seconds a browser may cache a preflight response,\n+\t// sent as Access-Control-Max-Age. Zero sends no header, and so leaves the\n+\t// browser's own default; a negative value turns the cache off.\n+\tMaxAge int\n+\n+\t// AllowCredentials sends Access-Control-Allow-Credentials: true, which\n+\t// lets scripts of another origin send cookies and read the response.\n+\t// Browsers refuse credentials with the \"*\" origin, so set AllowOrigin to\n+\t// the one origin when this is on.\n+\tAllowCredentials bool\n+}\n+\n+// DefaultCORSOptions returns the options EnableCORS uses: any origin, the\n+// request headers most APIs need, the methods of the requested route and a\n+// preflight cache of one hour.\n+func DefaultCORSOptions() CORSOptions {\n+\treturn CORSOptions{\n+\t\tAllowOrigin:  \"*\",\n+\t\tAllowHeaders: []string{\"Accept\", \"Authorization\", \"Content-Type\", \"X-CSRF-Token\"},\n+\t\tMaxAge:       3600,\n+\t}\n+}\n+\n+// CORS returns a middleware that sets the CORS headers of options on every\n+// response.\n+//\n+// A preflight request is an OPTIONS request. The middleware answers it with\n+// 204 when options.AllowMethods is set, since it then knows all that the\n+// response says. When AllowMethods is empty, the methods come from the\n+// router, after routing: Mux.EnableCORS installs the method-not-allowed\n+// handler that answers the preflight with them, so use it to get them.\n+func CORS(options CORSOptions) func(http.Handler) http.Handler {\n+\treturn func(next http.Handler) http.Handler {\n+\t\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\tsetCORSHeaders(w.Header(), options)\n+\n+\t\t\tif r.Method == http.MethodOptions && len(options.AllowMethods) > 0 {\n+\t\t\t\twriteCORSPreflight(w, r, options, options.AllowMethods)\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tnext.ServeHTTP(w, r)\n+\t\t})\n+\t}\n+}\n+\n+// setCORSHeaders sets the headers that every response of a CORS enabled\n+// route carries, preflight or not.\n+func setCORSHeaders(h http.Header, options CORSOptions) {\n+\tif options.AllowOrigin != \"\" {\n+\t\th.Set(\"Access-Control-Allow-Origin\", options.AllowOrigin)\n+\t}\n+\tif options.AllowCredentials {\n+\t\th.Set(\"Access-Control-Allow-Credentials\", \"true\")\n+\t}\n+\tif len(options.ExposeHeaders) > 0 {\n+\t\th.Set(\"Access-Control-Expose-Headers\", strings.Join(options.ExposeHeaders, \", \"))\n+\t}\n+}\n+\n+// writeCORSPreflight answers a preflight request with 204 and the headers\n+// that tell the browser what it may send.\n+func writeCORSPreflight(w http.ResponseWriter, r *http.Request, options CORSOptions, methods []string) {\n+\th := w.Header()\n+\n+\tif len(methods) > 0 {\n+\t\th.Set(\"Access-Control-Allow-Methods\", strings.Join(methods, \", \"))\n+\t}\n+\tif len(options.AllowHeaders) > 0 {\n+\t\th.Set(\"Access-Control-Allow-Headers\", strings.Join(options.AllowHeaders, \", \"))\n+\t} else if requested := r.Header.Get(\"Access-Control-Request-Headers\"); requested != \"\" {\n+\t\th.Set(\"Access-Control-Allow-Headers\", requested)\n+\t\th.Add(\"Vary\", \"Access-Control-Request-Headers\")\n+\t}\n+\tif options.MaxAge != 0 {\n+\t\th.Set(\"Access-Control-Max-Age\", strconv.Itoa(options.MaxAge))\n+\t}"
+  },
+  "feature1": {
+    "feature_id": 1,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 8,
+    "tests_failed": 0,
+    "test_output": "Note: switching to '7f280968675bcc9f310008fc6b8abff0b923734c'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestSetAllowHeader|TestMuxNestedNotFound|TestMethodNotAllowed|TestMuxNestedMethodNotAllowed)$\nRunning Go tests...\n=== RUN   TestMuxNestedNotFound\n--- PASS: TestMuxNestedNotFound (0.00s)\n=== RUN   TestMethodNotAllowed\n=== RUN   TestMethodNotAllowed/Registered_Method\n=== RUN   TestMethodNotAllowed/Unregistered_Method\n--- PASS: TestMethodNotAllowed (0.00s)\n    --- PASS: TestMethodNotAllowed/Registered_Method (0.00s)\n    --- PASS: TestMethodNotAllowed/Unregistered_Method (0.00s)\n=== RUN   TestMuxNestedMethodNotAllowed\n--- PASS: TestMuxNestedMethodNotAllowed (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.010s\n=== RUN   TestSetAllowHeader\n=== RUN   TestSetAllowHeader/Registered_Method\n=== RUN   TestSetAllowHeader/Unregistered_Method\n--- PASS: TestSetAllowHeader (0.00s)\n    --- PASS: TestSetAllowHeader/Registered_Method (0.00s)\n    --- PASS: TestSetAllowHeader/Unregistered_Method (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.012s\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRemoving middleware/allowed_methods_test.go\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "feature_id": 5,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 5,
+    "tests_failed": 0,
+    "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestServerBaseContext|TestCORS)$\nRunning Go tests...\n=== RUN   TestServerBaseContext\n--- PASS: TestServerBaseContext (0.00s)\n=== RUN   TestCORS\n=== RUN   TestCORS/Basic_request_includes_CORS_headers\n=== RUN   TestCORS/OPTIONS_request_returns_appropriate_CORS_headers\n=== RUN   TestCORS/Method_not_allowed_includes_Allow_header\n--- PASS: TestCORS (0.00s)\n    --- PASS: TestCORS/Basic_request_includes_CORS_headers (0.00s)\n    --- PASS: TestCORS/OPTIONS_request_returns_appropriate_CORS_headers (0.00s)\n    --- PASS: TestCORS/Method_not_allowed_includes_Allow_header (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.008s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.005s [no tests to run]\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRepository cleaned.\n"
+  },
+  "both_passed": true,
+  "error": null,
+  "evaluated_at": "2026-10-15T19:21:14.105427",
+  "cascade": {
+    "cascade_version": 1,
+    "ran": true,
+    "basis": "the paper's cascade on the CooperBench 63b9d44 dataset",
+    "cooperbench_commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+    "verdict_63b9d44": true,
+    "verdict_paper_era": true,
+    "verdict_paper_era_regex": true,
+    "route": "naive",
+    "route_regex": "naive",
+    "lower_bound": false,
+    "verdict_63b9d44_rerun": true,
+    "deciding_artifact": {
+      "verdict_63b9d44": "merge_naive.diff",
+      "verdict_paper_era": "merge_naive.diff"
+    },
+    "apply_status": {
+      "agent1": "applied",
+      "agent2": "applied"
+    },
+    "has_naive_merge_conflict": false,
+    "naive": {
+      "conflict": false,
+      "conflict_sections": 0,
+      "conflict_lines": 0,
+      "avg_lines_per_conflict": 0,
+      "conflict_score": 0,
+      "severity": "NONE",
+      "diff_file": "merge_naive.diff",
+      "f1": true,
+      "f2": true,
+      "f1_regex": true,
+      "f2_regex": true,
+      "tests": {
+        "f1": {
+          "passed": true,
+          "passed_regex": true,
+          "exit_code": 0,
+          "tests_passed": 8,
+          "tests_failed": 0,
+          "test_output": "Note: switching to '7f280968675bcc9f310008fc6b8abff0b923734c'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestSetAllowHeader|TestMuxNestedNotFound|TestMethodNotAllowed|TestMuxNestedMethodNotAllowed)$\nRunning Go tests...\n=== RUN   TestMuxNestedNotFound\n--- PASS: TestMuxNestedNotFound (0.00s)\n=== RUN   TestMethodNotAllowed\n=== RUN   TestMethodNotAllowed/Registered_Method\n=== RUN   TestMethodNotAllowed/Unregistered_Method\n--- PASS: TestMethodNotAllowed (0.00s)\n    --- PASS: TestMethodNotAllowed/Registered_Method (0.00s)\n    --- PASS: TestMethodNotAllowed/Unregistered_Method (0.00s)\n=== RUN   TestMuxNestedMethodNotAllowed\n--- PASS: TestMuxNestedMethodNotAllowed (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.010s\n=== RUN   TestSetAllowHeader\n=== RUN   TestSetAllowHeader/Registered_Method\n=== RUN   TestSetAllowHeader/Unregistered_Method\n--- PASS: TestSetAllowHeader (0.00s)\n    --- PASS: TestSetAllowHeader/Registered_Method (0.00s)\n    --- PASS: TestSetAllowHeader/Unregistered_Method (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.012s\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRemoving middleware/allowed_methods_test.go\nRepository cleaned.\n"
+        },
+        "f2": {
+          "passed": true,
+          "passed_regex": true,
+          "exit_code": 0,
+          "tests_passed": 5,
+          "tests_failed": 0,
+          "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestServerBaseContext|TestCORS)$\nRunning Go tests...\n=== RUN   TestServerBaseContext\n--- PASS: TestServerBaseContext (0.00s)\n=== RUN   TestCORS\n=== RUN   TestCORS/Basic_request_includes_CORS_headers\n=== RUN   TestCORS/OPTIONS_request_returns_appropriate_CORS_headers\n=== RUN   TestCORS/Method_not_allowed_includes_Allow_header\n--- PASS: TestCORS (0.00s)\n    --- PASS: TestCORS/Basic_request_includes_CORS_headers (0.00s)\n    --- PASS: TestCORS/OPTIONS_request_returns_appropriate_CORS_headers (0.00s)\n    --- PASS: TestCORS/Method_not_allowed_includes_Allow_header (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.008s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.005s [no tests to run]\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRepository cleaned.\n"
+        }
+      },
+      "tests_from": "test_merged"
+    },
+    "union": {
+      "ran": false,
+      "clean": null,
+      "f1": null,
+      "f2": null,
+      "f1_regex": null,
+      "f2_regex": null,
+      "tests": {
+        "f1": null,
+        "f2": null
+      },
+      "diff_file": null,
+      "reason": "the naive merge was clean"
+    },
+    "llm": {
+      "ran": false,
+      "needed": false,
+      "reason": "not needed: the naive merge was clean"
+    },
+    "agent_alone": {
+      "agent1": {
+        "feature": 1,
+        "patch_file": "agent1.patch",
+        "f1": true,
+        "f2": true,
+        "f1_regex": true,
+        "f2_regex": true,
+        "tests": {
+          "f1": {
+            "passed": true,
+            "passed_regex": true,
+            "exit_code": 0,
+            "tests_passed": 8,
+            "tests_failed": 0,
+            "test_output": "Note: switching to '7f280968675bcc9f310008fc6b8abff0b923734c'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestSetAllowHeader|TestMuxNestedNotFound|TestMethodNotAllowed|TestMuxNestedMethodNotAllowed)$\nRunning Go tests...\n=== RUN   TestMuxNestedNotFound\n--- PASS: TestMuxNestedNotFound (0.00s)\n=== RUN   TestMethodNotAllowed\n=== RUN   TestMethodNotAllowed/Registered_Method\n=== RUN   TestMethodNotAllowed/Unregistered_Method\n--- PASS: TestMethodNotAllowed (0.00s)\n    --- PASS: TestMethodNotAllowed/Registered_Method (0.00s)\n    --- PASS: TestMethodNotAllowed/Unregistered_Method (0.00s)\n=== RUN   TestMuxNestedMethodNotAllowed\n--- PASS: TestMuxNestedMethodNotAllowed (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.010s\n=== RUN   TestSetAllowHeader\n=== RUN   TestSetAllowHeader/Registered_Method\n=== RUN   TestSetAllowHeader/Unregistered_Method\n--- PASS: TestSetAllowHeader (0.00s)\n    --- PASS: TestSetAllowHeader/Registered_Method (0.00s)\n    --- PASS: TestSetAllowHeader/Unregistered_Method (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.007s\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRemoving middleware/allowed_methods_test.go\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": true,
+            "passed_regex": true,
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestServerBaseContext|TestCORS)$\nRunning Go tests...\n=== RUN   TestServerBaseContext\n--- PASS: TestServerBaseContext (0.00s)\n=== RUN   TestCORS\n=== RUN   TestCORS/Basic_request_includes_CORS_headers\n=== RUN   TestCORS/OPTIONS_request_returns_appropriate_CORS_headers\n=== RUN   TestCORS/Method_not_allowed_includes_Allow_header\n--- PASS: TestCORS (0.00s)\n    --- PASS: TestCORS/Basic_request_includes_CORS_headers (0.00s)\n    --- PASS: TestCORS/OPTIONS_request_returns_appropriate_CORS_headers (0.00s)\n    --- PASS: TestCORS/Method_not_allowed_includes_Allow_header (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.008s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.006s [no tests to run]\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRepository cleaned.\n"
+          }
+        }
+      },
+      "agent2": {
+        "feature": 5,
+        "patch_file": "agent5.patch",
+        "f1": false,
+        "f2": true,
+        "f1_regex": false,
+        "f2_regex": true,
+        "tests": {
+          "f1": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestSetAllowHeader|TestMuxNestedNotFound|TestMethodNotAllowed|TestMuxNestedMethodNotAllowed)$\nRunning Go tests...\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods_test.go\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": true,
+            "passed_regex": true,
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestServerBaseContext|TestCORS)$\nRunning Go tests...\n=== RUN   TestServerBaseContext\n--- PASS: TestServerBaseContext (0.00s)\n=== RUN   TestCORS\n=== RUN   TestCORS/Basic_request_includes_CORS_headers\n=== RUN   TestCORS/OPTIONS_request_returns_appropriate_CORS_headers\n=== RUN   TestCORS/Method_not_allowed_includes_Allow_header\n--- PASS: TestCORS (0.00s)\n    --- PASS: TestCORS/Basic_request_includes_CORS_headers (0.00s)\n    --- PASS: TestCORS/OPTIONS_request_returns_appropriate_CORS_headers (0.00s)\n    --- PASS: TestCORS/Method_not_allowed_includes_Allow_header (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.007s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.004s [no tests to run]\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRepository cleaned.\n"
+          }
+        }
+      }
+    },
+    "test_file_filter": {
+      "verdict_63b9d44": "63b9d44 eval/sandbox.py _filter_test_files",
+      "verdict_paper_era": "63b9d44 eval/sandbox.py _filter_test_files, so both verdicts judge the same merges; 59bbf65 kept only code files (core/patch.py _filter_patch), see dropped_by_filter"
+    },
+    "dropped_by_filter": {
+      "agent1": {
+        "63b9d44": [],
+        "59bbf65": []
+      },
+      "agent2": {
+        "63b9d44": [],
+        "59bbf65": []
+      }
+    },
+    "filters_agree": true,
+    "rules": {
+      "verdict_63b9d44": "eval.json both_passed, from CooperBench's test_merged: the naive merge's tests when it is clean, else agent1's patch alone against both suites",
+      "verdict_paper_era": "naive merge, then union when naive conflicts, then the learned resolver when union fails a suite (59bbf65 run_merge_evaluation); no agent1-alone fallback; 63b9d44's pass rule",
+      "verdict_paper_era_regex": "the same cascade under 59bbf65's pass rule",
+      "pass_rule": "exit code 0 and a parsed passed count above 0 (63b9d44 eval/sandbox.py _run_tests)",
+      "pass_rule_regex": "59bbf65 evaluation/test_runner.py _parse_test_output: a pass word and no failure word, exit code ignored",
+      "patch_apply": "63b9d44 _setup_branches: git apply, then git apply --3way; 59bbf65 used git apply --whitespace=fix and stopped the evaluation when a patch failed",
+      "conflict_size": "59bbf65 core/merge.py _analyze_diff_content over the conflicted merge's git diff; conflict_score 20 per section and 2 per line; severity by reporter.py _get_severity_level",
+      "llm": "59bbf65 evaluation/llm_merge.py: its system prompt, 5 lines of context, temperature 0, 3 retries, its splice; the merge then tested from its own diff"
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,1 @@
+src/click/termui.py: merged edit() signature ends filename, lock_files, monitor_process and passes both to Editor -- checked by: python -c "import click,inspect;print(inspect.signature(click.edit))"

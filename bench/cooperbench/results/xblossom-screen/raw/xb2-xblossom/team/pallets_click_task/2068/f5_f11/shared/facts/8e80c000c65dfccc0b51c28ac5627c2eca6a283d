@@ -1,0 +1,1 @@
+src/click/_termui_impl.py: monitor events start/terminate/suspend/resume come from _ProcessMonitor (thread joined in stop(), so all callbacks return before edit_file does); tests/test_basic.py fails to collect on pytest 9 before any change -- checked by: python -m pytest -p no:cacheprovider /tmp/scratch/test_mon.py -q

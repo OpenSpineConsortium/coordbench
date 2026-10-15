@@ -1,0 +1,29 @@
+[
+  {
+    "id": "6206b15a5e",
+    "title": "Implement feature 5",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792090437.1901164,
+    "last_note": "patch: /workspace/shared/agent2.patch\n cors.go | 339 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n mux.go  |  28 ++++++\n tree.go |  23 +++++\n 3 files changed, 390 insertions(+)\ntest: go test . ./middleware/ -> exit 0 (plus 7 scratch CORS tests, removed afterwards)",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "fea1d84149",
+    "title": "Lead-only: integrate and submit feature 1",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792090437.1901631,
+    "last_note": "patch: the lead tree, /workspace/repo/patch.txt (both features, agent2.patch applied)\n context.go                    |   6 +\n cors.go                       | 339 ++++++++++++++++++++++++++++++++++++++++++\n middleware/allowed_methods.go |  87 +++++++++++\n mux.go                        |  67 ++++++++-\n tree.go                       |  95 +++++++++++-\n 5 files changed, 584 insertions(+), 10 deletions(-)\ntest: go build ./... && go vet . ./middleware && go test . ./middleware (also on a fresh git archive with patch.txt applied) -> exit 0",
+    "metadata": {
+      "feature_id": 1,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

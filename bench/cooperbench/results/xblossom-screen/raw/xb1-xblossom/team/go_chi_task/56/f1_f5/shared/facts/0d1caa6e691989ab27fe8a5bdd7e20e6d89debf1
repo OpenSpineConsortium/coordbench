@@ -1,0 +1,2 @@
+mux.go: Mux.Use panics once mx.handler is set (first route), so EnableCORS must come before routes; on an inline Mux (With/Group) MethodNotAllowed stores the middleware-wrapped handler on the PARENT mux -- checked by: grep -n "all middlewares must be defined\|m = mx.parent" mux.go
+mux.go: Mux.Match(rctx, method, path) walks sub-routers via node.subroutes and needs a fresh Context per call -- checked by: grep -n -A14 "func (mx \*Mux) Match" mux.go

@@ -1,0 +1,320 @@
+package chi
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func corsDo(h http.Handler, method, path string, headers ...string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, nil)
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func corsTestRouter() *Mux {
+	r := NewRouter()
+	r.EnableCORS()
+	ok := func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }
+	r.Get("/api/users", ok)
+	r.Post("/api/users", ok)
+	r.Get("/api/users/{id}", ok)
+	r.Delete("/api/users/{id}", ok)
+	r.Get("/readonly", ok)
+	return r
+}
+
+func TestCORSEnableCORS(t *testing.T) {
+	r := corsTestRouter()
+
+	rec := corsDo(r, "GET", "/api/users")
+	if rec.Code != 200 || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("GET: code %d, headers %v", rec.Code, rec.Header())
+	}
+
+	rec = corsDo(r, "OPTIONS", "/api/users")
+	if rec.Code != 204 {
+		t.Fatalf("preflight code = %d", rec.Code)
+	}
+	methods := rec.Header().Get("Access-Control-Allow-Methods")
+	if methods != "GET, POST" {
+		t.Fatalf("Allow-Methods = %q", methods)
+	}
+	if rec.Header().Get("Access-Control-Allow-Headers") == "" || rec.Header().Get("Access-Control-Max-Age") != "3600" {
+		t.Fatalf("preflight headers %v", rec.Header())
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("preflight origin %v", rec.Header())
+	}
+
+	rec = corsDo(r, "OPTIONS", "/api/users/42", "Origin", "http://a.example", "Access-Control-Request-Method", "DELETE")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "GET, DELETE" {
+		t.Fatalf("param preflight: %d %v", rec.Code, rec.Header())
+	}
+
+	rec = corsDo(r, "PUT", "/readonly")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "GET" {
+		t.Fatalf("PUT: code %d, Allow %q", rec.Code, rec.Header().Get("Allow"))
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("405 lacks cors headers: %v", rec.Header())
+	}
+
+	rec = corsDo(r, "PUT", "/api/users")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "GET, POST" {
+		t.Fatalf("PUT users: code %d, Allow %q", rec.Code, rec.Header().Get("Allow"))
+	}
+
+	rec = corsDo(r, "GET", "/nope")
+	if rec.Code != 404 {
+		t.Fatalf("not found code %d", rec.Code)
+	}
+	rec = corsDo(r, "OPTIONS", "/nope")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") == "" {
+		t.Fatalf("unknown path preflight: %d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestCORSEnableCORSWithOptions(t *testing.T) {
+	opts := DefaultCORSOptions()
+	opts.AllowOrigin = "https://example.com"
+	opts.AllowMethods = []string{"GET", "PATCH"}
+	opts.AllowHeaders = []string{"X-One", "X-Two"}
+	opts.ExposeHeaders = []string{"X-Total"}
+	opts.MaxAge = 60
+	opts.AllowCredentials = true
+
+	r := NewRouter()
+	r.EnableCORSWithOptions(opts)
+	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
+
+	rec := corsDo(r, "GET", "/a")
+	h := rec.Header()
+	if h.Get("Access-Control-Allow-Origin") != "https://example.com" ||
+		h.Get("Access-Control-Allow-Credentials") != "true" ||
+		h.Get("Access-Control-Expose-Headers") != "X-Total" ||
+		h.Get("Vary") != "Origin" {
+		t.Fatalf("headers %v", h)
+	}
+
+	rec = corsDo(r, "OPTIONS", "/a")
+	h = rec.Header()
+	if rec.Code != 204 || h.Get("Access-Control-Allow-Methods") != "GET, PATCH" ||
+		h.Get("Access-Control-Allow-Headers") != "X-One, X-Two" ||
+		h.Get("Access-Control-Max-Age") != "60" {
+		t.Fatalf("preflight %d %v", rec.Code, h)
+	}
+}
+
+func TestCORSWildcardWithCredentialsEchoesOrigin(t *testing.T) {
+	opts := DefaultCORSOptions()
+	opts.AllowCredentials = true
+	r := NewRouter()
+	r.EnableCORSWithOptions(opts)
+	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
+
+	rec := corsDo(r, "GET", "/a", "Origin", "http://x.example")
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://x.example" {
+		t.Fatalf("origin = %q", got)
+	}
+	if got := rec.Header().Get("Vary"); got != "Origin" {
+		t.Fatalf("vary = %q", got)
+	}
+}
+
+func TestCORSEmptyAllowHeadersEchoesRequest(t *testing.T) {
+	r := NewRouter()
+	r.EnableCORSWithOptions(CORSOptions{AllowOrigin: "*"})
+	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
+
+	rec := corsDo(r, "OPTIONS", "/a", "Access-Control-Request-Headers", "X-Foo")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Headers") != "X-Foo" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	if rec.Header().Get("Access-Control-Max-Age") != "" {
+		t.Fatalf("max age set: %v", rec.Header())
+	}
+}
+
+func TestCORSAfterRoutes(t *testing.T) {
+	r := NewRouter()
+	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
+	r.Post("/a", func(w http.ResponseWriter, r *http.Request) {})
+	r.EnableCORS()
+
+	rec := corsDo(r, "GET", "/a")
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("headers %v", rec.Header())
+	}
+	rec = corsDo(r, "OPTIONS", "/a")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "GET, POST" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	rec = corsDo(r, "PUT", "/a")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "GET, POST" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestCORSExplicitOptionsHandlerWins(t *testing.T) {
+	r := NewRouter()
+	r.EnableCORS()
+	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
+	r.Options("/a", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Mine", "yes")
+		w.WriteHeader(200)
+	})
+
+	rec := corsDo(r, "OPTIONS", "/a")
+	if rec.Code != 200 || rec.Header().Get("X-Mine") != "yes" ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "*" ||
+		rec.Header().Get("Access-Control-Allow-Methods") != "GET, OPTIONS" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestCORSSubrouters(t *testing.T) {
+	sub := NewRouter()
+	sub.Get("/items", func(w http.ResponseWriter, r *http.Request) {})
+	sub.Post("/items", func(w http.ResponseWriter, r *http.Request) {})
+	deep := NewRouter()
+	deep.Put("/leaf", func(w http.ResponseWriter, r *http.Request) {})
+	sub.Mount("/deep", deep)
+
+	r := NewRouter()
+	r.EnableCORS()
+	r.Mount("/api", sub)
+
+	rec := corsDo(r, "OPTIONS", "/api/items")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "GET, POST" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	rec = corsDo(r, "OPTIONS", "/api/deep/leaf")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "PUT" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	rec = corsDo(r, "DELETE", "/api/items")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "GET, POST" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	rec = corsDo(r, "DELETE", "/api/deep/leaf")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "PUT" ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestCORSSubrouterEnabledAfterMount(t *testing.T) {
+	sub := NewRouter()
+	sub.EnableCORS()
+	sub.Get("/items", func(w http.ResponseWriter, r *http.Request) {})
+
+	r := NewRouter()
+	r.Mount("/api", sub)
+
+	rec := corsDo(r, "OPTIONS", "/api/items")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "GET" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	rec = corsDo(r, "POST", "/api/items")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "GET" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestCORSWithCORSGroup(t *testing.T) {
+	r := NewRouter()
+	r.Get("/plain", func(w http.ResponseWriter, r *http.Request) {})
+
+	g := r.WithCORS()
+	g.Get("/cors", func(w http.ResponseWriter, r *http.Request) {})
+	g.Post("/cors", func(w http.ResponseWriter, r *http.Request) {})
+
+	rec := corsDo(r, "GET", "/cors")
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("%v", rec.Header())
+	}
+	rec = corsDo(r, "GET", "/plain")
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("plain route has cors: %v", rec.Header())
+	}
+	rec = corsDo(r, "OPTIONS", "/cors")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "GET, POST" ||
+		rec.Header().Get("Access-Control-Max-Age") == "" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	rec = corsDo(r, "PUT", "/cors")
+	if rec.Code != 405 || rec.Header().Get("Allow") != "GET, POST" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestCORSStandaloneMiddleware(t *testing.T) {
+	called := false
+	h := CORS(DefaultCORSOptions())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+
+	rec := corsDo(h, "OPTIONS", "/anything")
+	if rec.Code != 204 || called {
+		t.Fatalf("%d called=%v", rec.Code, called)
+	}
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "POST") {
+		t.Fatalf("%v", rec.Header())
+	}
+
+	rec = corsDo(h, "GET", "/anything")
+	if !called || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("%v", rec.Header())
+	}
+}
+
+func TestCORSUseAsMiddleware(t *testing.T) {
+	r := NewRouter()
+	r.Use(CORS(DefaultCORSOptions()))
+	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
+	r.Put("/a", func(w http.ResponseWriter, r *http.Request) {})
+
+	rec := corsDo(r, "OPTIONS", "/a")
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Methods") != "GET, PUT" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestGetMethodName(t *testing.T) {
+	cases := map[methodTyp]string{
+		mCONNECT: "CONNECT", mDELETE: "DELETE", mGET: "GET", mHEAD: "HEAD",
+		mOPTIONS: "OPTIONS", mPATCH: "PATCH", mPOST: "POST", mPUT: "PUT", mTRACE: "TRACE",
+		mALL: "", mSTUB: "", 0: "",
+	}
+	for m, want := range cases {
+		if got := GetMethodName(m); got != want {
+			t.Errorf("GetMethodName(%d) = %q, want %q", m, got, want)
+		}
+	}
+	for name, m := range methodMap {
+		if GetMethodName(m) != name {
+			t.Errorf("GetMethodName(%d) = %q, want %q", m, GetMethodName(m), name)
+		}
+	}
+}
+
+func TestGetMethodNameRegistered(t *testing.T) {
+	RegisterMethod("CORSTEST")
+	if got := GetMethodName(methodMap["CORSTEST"]); got != "CORSTEST" {
+		t.Fatalf("got %q", got)
+	}
+
+	r := NewRouter()
+	r.EnableCORS()
+	r.MethodFunc("CORSTEST", "/x", func(w http.ResponseWriter, r *http.Request) {})
+	rec := corsDo(r, "OPTIONS", "/x")
+	if rec.Header().Get("Access-Control-Allow-Methods") != "CORSTEST" {
+		t.Fatalf("%v", rec.Header())
+	}
+}

@@ -1,0 +1,1 @@
+src/click/termui.py: edit() builds Editor(editor, env, require_save, extension) then calls ed.edit(text) or ed.edit_file(filename); a new kwarg must be passed in that Editor(...) call -- checked by: git show HEAD:src/click/termui.py | grep -n "Editor("

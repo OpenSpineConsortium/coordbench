@@ -1,0 +1,21 @@
+{
+  "repo": "go_chi_task",
+  "task_id": 56,
+  "features": [
+    1,
+    5
+  ],
+  "setting": "solo",
+  "merge": null,
+  "feature1": {
+    "passed": false,
+    "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestSetAllowHeader|TestMuxNestedNotFound|TestMethodNotAllowed|TestMuxNestedMethodNotAllowed)$\nRunning Go tests...\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRemoving middleware/allowed_methods_test.go\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "passed": true,
+    "test_output": "HEAD is now at 7f28096 Spelling and grammar fixes (#820)\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nReset to base: 7f280968675bcc9f310008fc6b8abff0b923734c\nEnsuring clean repository state...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestServerBaseContext|TestCORS)$\nRunning Go tests...\n=== RUN   TestServerBaseContext\n--- PASS: TestServerBaseContext (0.00s)\n=== RUN   TestCORS\n=== RUN   TestCORS/Basic_request_includes_CORS_headers\n=== RUN   TestCORS/OPTIONS_request_returns_appropriate_CORS_headers\n=== RUN   TestCORS/Method_not_allowed_includes_Allow_header\n--- PASS: TestCORS (0.00s)\n    --- PASS: TestCORS/Basic_request_includes_CORS_headers (0.00s)\n    --- PASS: TestCORS/OPTIONS_request_returns_appropriate_CORS_headers (0.00s)\n    --- PASS: TestCORS/Method_not_allowed_includes_Allow_header (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.007s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.004s [no tests to run]\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 7f28096 Spelling and grammar fixes (#820)\nRemoving cors.go\nRemoving middleware/allowed_methods.go\nRepository cleaned.\n"
+  },
+  "both_passed": false,
+  "error": null,
+  "evaluated_at": "2026-10-15T18:55:06.846731"
+}

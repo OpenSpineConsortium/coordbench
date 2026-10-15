@@ -1,0 +1,156 @@
+{
+  "repo": "go_chi_task",
+  "task_id": 56,
+  "features": [
+    1,
+    5
+  ],
+  "setting": "solo",
+  "run_id": "solo-56-f1_f5-47085d",
+  "run_name": "xb2-solo",
+  "agent_framework": "claude_code_subagent",
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-10-15T19:16:30.247396",
+  "ended_at": "2026-10-15T19:27:39.848318",
+  "duration_seconds": 669.600922,
+  "agent": {
+    "status": "Submitted",
+    "cost": null,
+    "steps": null,
+    "input_tokens": 38,
+    "output_tokens": null,
+    "cache_read_tokens": 2787223,
+    "cache_write_tokens": 207060,
+    "patch_lines": 540,
+    "error": null,
+    "id": "agent1",
+    "features": [
+      1,
+      5
+    ],
+    "role": "solo",
+    "duration_ms": null,
+    "api_duration_ms": null,
+    "end_reason": null,
+    "model_requested": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5-5",
+    "model_differs": false,
+    "claude_code_version": "2.1.300",
+    "tools": null,
+    "mcp_servers": null,
+    "cost_source": null,
+    "output_tokens_lower_bound": 72876,
+    "cost_lower_bound": null
+  },
+  "total_cost": null,
+  "total_steps": null,
+  "log_dir": "/root/cooperbench/logs/xb2-solo/solo/go_chi_task/56/f1_f5",
+  "error_kind": null,
+  "arm": "solo",
+  "driver": "session",
+  "agents_seconds": 657.709001,
+  "isolation": "advisory",
+  "options": {},
+  "agent_models": {},
+  "max_turns": null,
+  "timeout_s": 2700.0,
+  "disallowed_tools": [
+    "WebFetch",
+    "WebSearch"
+  ],
+  "provenance": {
+    "cooperbench": {
+      "dir": "/root/cooperbench",
+      "commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+      "modified": [
+        "src/cooperbench/agents/claude_code/setup.sh"
+      ],
+      "modified_count": 1
+    },
+    "dataset": {
+      "dir": "/root/cooperbench/dataset",
+      "git_tree": "9c9e5802e06d89c7f84a9ebb13c3a5998b007e36",
+      "last_commit": "55a63e9329e1ef4e9957113534d5cad57c0f1f88",
+      "modified": false,
+      "sha256": "b0d33805162fa8001deba5f891de65e7b54e96351c2f21d810a0f0ac142710f6",
+      "files": 774
+    },
+    "coordbench": {
+      "dir": "/home/user/coordbench-xbrun/coordbench",
+      "commit": "66c293a1efff6a1ee935de567c9a3091312ad432",
+      "modified": [],
+      "modified_count": 0
+    }
+  },
+  "image": {
+    "image": "akhatua/cooperbench-go-chi:task56",
+    "id": "sha256:da4570750ebe6d9dba607f7c8cc9d70ba2b0c6f2b008aabf43d0fe50d95ab5db",
+    "repo_digests": [
+      "akhatua/cooperbench-go-chi@sha256:da4570750ebe6d9dba607f7c8cc9d70ba2b0c6f2b008aabf43d0fe50d95ab5db"
+    ],
+    "overlay": "cloud-session"
+  },
+  "metrics": {
+    "events": {
+      "run_started": 1
+    },
+    "tool_surface": "mcp",
+    "messages_sent": 0,
+    "messages_by_agent": {},
+    "message_chars": 0,
+    "message_words": 0,
+    "tool_calls": {}
+  },
+  "timings": [
+    {
+      "phase": "hub",
+      "agent": null,
+      "started": "2026-10-15T19:16:29.882206",
+      "ended": "2026-10-15T19:16:29.983996",
+      "seconds": 0.10179
+    },
+    {
+      "phase": "run_create",
+      "agent": null,
+      "started": "2026-10-15T19:16:30.381181",
+      "ended": "2026-10-15T19:16:30.387628",
+      "seconds": 0.006447
+    },
+    {
+      "phase": "provision",
+      "agent": "agent1",
+      "started": "2026-10-15T19:16:30.387944",
+      "ended": "2026-10-15T19:16:31.655298",
+      "seconds": 1.267354
+    },
+    {
+      "phase": "agent",
+      "agent": "agent1",
+      "started": "2026-10-15T19:16:31.655329",
+      "ended": "2026-10-15T19:27:29.364330",
+      "seconds": 657.709001
+    },
+    {
+      "phase": "close",
+      "agent": null,
+      "started": "2026-10-15T19:27:39.848337",
+      "ended": "2026-10-15T19:27:39.855624",
+      "seconds": 0.007287
+    },
+    {
+      "phase": "teardown",
+      "agent": null,
+      "started": "2026-10-15T19:27:39.868532",
+      "ended": "2026-10-15T19:27:40.645695",
+      "seconds": 0.777163
+    },
+    {
+      "phase": "score",
+      "agent": null,
+      "started": "2026-10-15T19:27:40.645803",
+      "ended": "2026-10-15T19:28:11.346492",
+      "seconds": 30.700689
+    }
+  ],
+  "utc_offset_seconds": 0
+}

@@ -1,0 +1,1 @@
+cors.go: CORSOptions/DefaultCORSOptions/CORS plus corsPolicy; preflight and Allow detection probe Routes.Match once per method name, with no new Context field -- checked by: grep -n "func corsRouteMethods\|func CORS\|func DefaultCORSOptions" cors.go
