@@ -12,9 +12,9 @@ sdlc_protocol board ...":
          comment on the pull requests that wait, or render a JSON
          snapshot with --dry-run FIXTURE and no network
   check  hold the pull request in GITHUB_EVENT_PATH to the claim protocol
-  team   [--repo OWNER/NAME] seed, route, next or schema, the clerk; seed,
-         next and schema read the workers from the registry with
-         --registry DIR
+  team   [--repo OWNER/NAME] seed, route, next, deal or schema, the clerk;
+         seed, next, deal and schema read the workers from the registry
+         with --registry DIR
   workers check, list, describe, get or from-form: the registry of
          workers, .github/symphony/workers/<name>.json, read offline
   guard  the PreToolUse hook: the tool call's JSON on stdin, and exit 2
@@ -80,7 +80,10 @@ def board_arguments(argv):
     parser.add_argument("--out", help=f"where to write the board (default: {board.STATE_PATH} in the current "
                                       "directory; stdout with --dry-run)")
     parser.add_argument("--default-branch", default="main", help="the default branch's name (default: main)")
-    parser.add_argument("--sha", help="the default branch's commit the board describes (default: GITHUB_SHA)")
+    parser.add_argument("--sha", help="the default branch's head, which the board describes and names in its "
+                        "main-moved comments on every event (default: GITHUB_SHA where that is the default "
+                        "branch's head, which it is not on a pull_request event or a push to another branch; "
+                        "then no main-moved comment is made)")
     return parser.parse_args(argv)
 
 
@@ -95,28 +98,67 @@ def board_dry_run(args):
     return 0
 
 
+def plan_board(api, sha, default_branch, now, render_only=False, say=print):
+    """The first half of a board run: read the repository as GitHub holds
+    it, release the claims due and tell overlapping work (the coordinator),
+    and render the page; with render_only, the command's --render-only,
+    the coordinator is skipped and the half only reads and renders. The
+    snapshot as the coordinator left it, which the second half acts on,
+    and the page. The run is in two halves so that the validation harness
+    can run them on its own clock with other work between them, as the
+    half-minute of a workflow run allows; say takes each log line as it is
+    made."""
+    github = github_adapter()
+    snap = github.snapshot(api, sha, default_branch, now)
+    for line in github.unread_claim_lines(snap) + github.began_refused_lines(snap):
+        say(line)
+    if not render_only:
+        for line in github.coordinate(api, snap, now):
+            say(line)
+    return snap, board.render(snap)
+
+
+def act_on_board(api, snap, event_name, ref_name, now, say=print):
+    """The second half, once the page is written: rename the released
+    claims' branches, then post the comments the pull requests are owed,
+    both from the snapshot the first half read; the event and the ref are
+    passed on, though since F12's fix no comment depends on them."""
+    github = github_adapter()
+    for line in github.release_claims(api, snap):
+        say(line)
+    for line in github.post_comments(api, board.comments_due(snap, event_name, ref_name, now)):
+        say(line)
+
+
+def default_head_sha(environ, default_branch):
+    """GITHUB_SHA where it is the default branch's head: on a push to that
+    branch, and on every event but a pull request's and a push to another
+    branch, which carry the pull request's merge commit or that branch's
+    head, no commit of the default branch at all; there it is "", so the
+    board names no commit and tells nobody that main moved (board.
+    comments_due), since the word now goes out on every event and would
+    otherwise carry a sha that is not main's, once per such event. A
+    workflow that passes --sha from a checkout of the default branch, as
+    the template's does, never comes here."""
+    event, ref = environ.get("GITHUB_EVENT_NAME", ""), environ.get("GITHUB_REF_NAME", "")
+    if event.startswith("pull_request") or (event == "push" and ref != default_branch):
+        return ""
+    return environ.get("GITHUB_SHA", "")
+
+
 def board_live_run(args, environ):
     token, repo = environ.get("GITHUB_TOKEN"), environ.get("GITHUB_REPOSITORY")
     if not token or not repo:
         raise CommandError("GITHUB_TOKEN and GITHUB_REPOSITORY must be set")
-    github = github_adapter()
-    api = github.GitHub(token, repo)
+    api = github_adapter().GitHub(token, repo)
     now = datetime.now(timezone.utc)
-    snap = github.snapshot(api, args.sha or environ.get("GITHUB_SHA", ""), args.default_branch, now)
-    for line in github.unread_claim_lines(snap):
-        print(line)
-    if not args.render_only:
-        for line in github.coordinate(api, snap, now):
-            print(line)
+    snap, page = plan_board(api, args.sha or default_head_sha(environ, args.default_branch), args.default_branch,
+                            now, args.render_only)
     out = Path(args.out) if args.out else board.STATE_PATH
-    changed = board.write_if_changed(out, board.render(snap))
+    changed = board.write_if_changed(out, page)
     print(f"{out.as_posix()}: {'rewritten' if changed else 'unchanged'}")
     if not args.render_only:
-        for line in github.release_claims(api, snap):
-            print(line)
-        due = board.comments_due(snap, environ.get("GITHUB_EVENT_NAME", ""), environ.get("GITHUB_REF_NAME", ""), now)
-        for line in github.post_comments(api, due):
-            print(line)
+        act_on_board(api, snap, environ.get("GITHUB_EVENT_NAME", ""), environ.get("GITHUB_REF_NAME", ""), now)
     return 0
 
 
@@ -191,6 +233,12 @@ def team_arguments(argv, environ=None):
                                             "Actions, each by its area")
     nexting.add_argument("--label", default=None,
                          help="the worker's label, made before a take so the session can add it")
+    dealing = sub.add_parser("deal", help="the next move of every worker in Actions of this registry, from one "
+                                          "look at the repository, as a JSON object by worker on one line")
+    dealing.add_argument("--registry", required=True, help="the registry whose workers in Actions are dealt to")
+    dealing.add_argument("--workers", default=None,
+                         help="a JSON list of the workers of this run (default: every worker in Actions): "
+                              "theirs are the moves printed and the labels made before a take")
     schema = sub.add_parser("schema", help="the JSON schema of the coordinator's plan, on one line")
     schema.add_argument("--registry", help="the registry whose workers a task may go to")
     return parser.parse_args(argv)
@@ -198,20 +246,46 @@ def team_arguments(argv, environ=None):
 
 def team_answer(client, args):
     """The one line the workflow reads, from the clerk's rules. With a
-    registry, seed gives tasks to every registered worker, and next deals
-    the shared work among the workers in Actions, which ask at the same
-    moment, each by its area."""
+    registry, seed gives tasks to every registered worker, next deals the
+    shared work among the workers in Actions, each by its area, from the
+    asking worker's own look, and deal deals it once for the whole run,
+    from one look, and answers for every worker of the run."""
     registered = workers.load(args.registry) if getattr(args, "registry", None) else None
     if args.command == "seed":
         names = [w.name for w in registered] if registered is not None else team.team_members(args.team)
         return team.seed(client, args.epic, load_json(args.plan), names)
     if args.command == "route":
         return team.route(client, args.event, args.issue, args.label)
+    if args.command == "deal":
+        return deal_answer(client, registered, args.workers)
     if registered is None:
         return team.next_move(client, args.agent, team.team_members(args.team), args.label)
     in_actions = workers.in_actions(registered)
     areas = {w.name: w.area for w in registered}
     return team.next_move(client, args.agent, [w.name for w in in_actions], args.label, areas)
+
+
+def deal_answer(client, registered, run_json):
+    """The deal's one line: a JSON object, worker to move, for the workers
+    of the run, the registry's workers in Actions unless --workers names
+    them; a name that is no worker here, or a value that is not JSON, is a
+    ValueError naming the flag and the shape it takes, since the workflow
+    took its list from the same registry; so is an empty --registry, which
+    argparse lets through and which names no folder."""
+    if registered is None:
+        raise ValueError("--registry must name the registry folder")
+    in_actions = workers.in_actions(registered)
+    names = [w.name for w in in_actions]
+    shape = f"--workers must be a JSON list of the registry's workers in Actions, {json.dumps(names)}"
+    try:
+        run = names if run_json is None else json.loads(run_json)
+    except ValueError as problem:
+        raise ValueError(f"{shape}; the value given is not JSON: {problem}") from None
+    if not isinstance(run, list) or any(name not in names for name in run):
+        raise ValueError(shape)
+    moves = team.deal_moves(client, names, {w.name: w.area for w in registered},
+                            {w.name: w.label for w in in_actions}, run)
+    return json.dumps(moves, sort_keys=True, separators=(",", ":"))
 
 
 def team_schema(args):

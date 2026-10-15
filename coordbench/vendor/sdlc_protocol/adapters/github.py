@@ -45,6 +45,13 @@ API_VERSION = "2022-11-28"
 USER_AGENT = "sdlc-board"
 TIMEOUT = 60
 PER_PAGE = 100
+# The branch creations one read of the repository's activity lists, the
+# most GitHub gives on a page (began_times).
+ACTIVITY_PAGE = 100
+# What the Overlaps do with the work of a branch GitHub refused to date
+# (began_refused_lines).
+UNDATED_PULL = "date its pull request by when it was opened"
+UNDATED_CLAIM = "put its claim last, as work nothing dates"
 # GitHub computes mergeability after the first ask; one more ask after a
 # pause is enough, and "unknown" is the honest word when it still has not.
 MERGEABLE_RETRY_SECONDS = 3
@@ -241,13 +248,36 @@ class GitHub:
         return [branch["name"] for branch in self.get_all(f"/repos/{self.repo}/branches")]
 
     def open_pull(self, branch):
+        """The open pull request from a branch of this repository, as
+        pull_detail gives it, with its standing where GitHub's word says
+        only that something else stops the merge (standing_of), so the
+        clerk deals a claim back for a branch behind its base, as the board
+        tells one behind the default branch "main moved"; or None. A draft
+        is not compared, since the clerk carries a draft whatever its
+        standing. No default branch is named, so a pull request stacked on
+        another branch is compared with that base, which the clerk reads as
+        a base it has fallen behind and the board leaves to GitHub's word;
+        the template's rulesets hold only the default branch, so GitHub
+        never calls such a pull request blocked there."""
+        detail = self.pull_detail(branch)
+        if detail and not detail.get("draft"):
+            standing = standing_of(self, detail)
+            if standing is not None:
+                detail["standing"] = standing
+        return detail
+
+    def pull_detail(self, branch):
         """The open pull request from a branch of this repository, in the
-        detail that holds mergeable_state and the head's sha, or None."""
+        detail that holds mergeable_state and the head's sha, as GitHub
+        gives it, or None. The list's head filter names the branch by its
+        owner, which a fork in the same organization shares (github/docs,
+        content/pull-requests/reference/forks.md:113), so a pull request
+        from such a fork is left out by the head and base the list gives
+        (board.from_fork; F17's review)."""
         owner = self.repo.split("/")[0]
         found = self.get(f"/repos/{self.repo}/pulls", {"state": "open", "head": f"{owner}:{branch}"}) or []
-        if not found:
-            return None
-        return self.get(f"/repos/{self.repo}/pulls/{found[0]['number']}")
+        own = [pull for pull in found if not board.from_fork(pull)]
+        return self.get(f"/repos/{self.repo}/pulls/{own[0]['number']}") if own else None
 
     def check_runs(self, sha):
         """Every check run on one commit, page by page: the endpoint wraps
@@ -298,12 +328,63 @@ def settled(api, detail):
     return detail
 
 
-def pull_with_detail(api, number):
-    """One pull request with its mergeable_state settled and its file paths."""
+def pull_with_detail(api, number, default_branch=None):
+    """One pull request with its mergeable_state settled, its standing read
+    where that word is opaque, and its file paths."""
     path = f"/repos/{api.repo}/pulls/{number}"
     detail = settled(api, api.get(path))
+    standing = standing_of(api, detail, default_branch)
+    if standing is not None:
+        detail["standing"] = standing
     detail["files"] = [f["filename"] for f in api.get_all(path + "/files")]
     return detail
+
+
+def standing_of(api, detail, default_branch=None):
+    """How the pull request's branch stands to its base, in the board's
+    words, where GitHub's mergeable_state says only that something else
+    stops the merge (a rule, a review, the draft itself): mergeable tells
+    a conflict apart, and the comparison tells behind from clean, as the
+    gate's world reads such a pull request (F9: until this the board read
+    blocked as blocked and draft as unknown, and neither heard "main
+    moved"). None where GitHub's word is one the board reads as it is:
+    behind and dirty say how the branch stands, unknown is GitHub still
+    computing, and clean, unstable and has_hooks say the repository's
+    rules do not hold the pull request for being behind, a draft's as any
+    other's, since GitHub gives a draft the word its branch has (C0), which
+    they say of a branch that is behind only under a rule that does not
+    require an up-to-date branch, or under none, so the spec owes it
+    nothing however far the default branch has moved (F16). None too for a pull request
+    stacked on a branch other than the default branch the caller names,
+    since "main moved" speaks of the default branch. A
+    comparison GitHub refuses, a 5xx, a 422 or a rate limit's 403, reads
+    as unknown, which keeps GitHub's own word, as the coordinator's own
+    comparison does (holding): one pull request GitHub will not compare
+    must not fail the board's whole run."""
+    if detail.get("mergeable_state") not in OPAQUE_STATES:
+        return None
+    base = (detail.get("base") or {}).get("ref")
+    if default_branch and base and base != default_branch:
+        return None
+    if not detail.get("mergeable"):
+        return standing_word(detail)
+    try:
+        behind = behind_by(api, detail, default_branch)
+    except GitHubError:
+        behind = None
+    return standing_word(detail, behind)
+
+
+def behind_by(api, pull, default_branch=None):
+    """How many commits of the pull request's base its head lacks, from
+    GitHub's comparison of the two; None when there is nothing to compare
+    or GitHub has no such comparison (404). Any other refusal raises."""
+    base = (pull.get("base") or {}).get("ref") or default_branch
+    head = (pull.get("head") or {}).get("sha")
+    if not head or not base:
+        return None
+    found = api.get(f"/repos/{api.repo}/compare/{quoted(base)}...{head}", missing_ok=True)
+    return (found or {}).get("behind_by")
 
 
 def claim_text(api, branch):
@@ -407,8 +488,9 @@ def may_be_due(issue):
 def ready_branches(pulls):
     """The head branches of the open pull requests marked ready, as the API
     details them; a pull request whose draft state is not given counts as
-    ready, as the board counts it."""
-    return {(p.get("head") or {}).get("ref") for p in pulls if not p.get("draft")}
+    ready, as the board counts it. One from a fork is left out, whatever
+    its branch is called, since it is no claim's (board.claim_of)."""
+    return {(p.get("head") or {}).get("ref") for p in pulls if not p.get("draft") and not board.from_fork(p)}
 
 
 def may_write(api):
@@ -473,7 +555,7 @@ def releases(api, heads, found_issues, pulls, now=None):
     a release can be due or can have happened."""
     now = now or datetime.now(timezone.utc)
     ready, trusted = ready_branches(pulls), may_write(api)
-    drafts = {(p.get("head") or {}).get("ref"): p for p in pulls if p.get("draft")}
+    drafts = {(p.get("head") or {}).get("ref"): p for p in pulls if p.get("draft") and not board.from_fork(p)}
     found = {}
     for branch, sha in sorted(heads.items()):
         key = claims.key_of(branch)
@@ -499,11 +581,12 @@ def collect(api, sha, default_branch, now=None):
     given."""
     repo = api.repo
     issues = [i for i in api.get_all(f"/repos/{repo}/issues", {"state": "open"}) if "pull_request" not in i]
-    pulls = [pull_with_detail(api, p["number"]) for p in api.get_all(f"/repos/{repo}/pulls", {"state": "open"})]
+    pulls = [pull_with_detail(api, p["number"], default_branch)
+             for p in api.get_all(f"/repos/{repo}/pulls", {"state": "open"})]
     listed = api.get_all(f"/repos/{repo}/branches")
     branches = board.claim_branches(listed)
     found_issues = claim_issues(api, branches, issues)
-    return {
+    found = {
         "sha": sha,
         "default_branch": default_branch,
         "issues": issues,
@@ -514,6 +597,106 @@ def collect(api, sha, default_branch, now=None):
         "merged": recent_merged(api),
         "releases": releases(api, claim_heads(listed), found_issues, pulls, now),
     }
+    found["began"], refused = began_times(api, found)
+    if refused:
+        found["began_refused"] = refused
+    return found
+
+
+def began_times(api, found):
+    """When each piece of open work that meets other work in a file began,
+    by its branch: the time GitHub writes for the newest push that made a
+    branch of that name, read from the repository's activity, which GitHub
+    records as the pushes reach it, so no clock of a worker's own comes in
+    (F13); and GitHub's answer for each branch it refused to date. Only the
+    work in the Overlaps is asked about, since the landing order is all the
+    time is for, and a pull request from a fork never, since its branch is
+    none of this repository's (board.open_work). One call reads the newest
+    branch creations of the whole repository (newest_creations), and each
+    branch it does not name is asked about on its own (branch_made_at), so
+    a run pays one call where the work is new, as it is while it overlaps,
+    and a refused first call costs only the reads it would have saved.
+    When GitHub has no such push to give, or no activity at all (a 404),
+    or refuses a branch's own read, whatever it answers, that branch is
+    left out and the board orders its work as work whose beginning nothing
+    says (board.landing_key), a pull request by when it was opened: the
+    order is the one thing the time is for, and one branch GitHub will not
+    answer for must not fail the board's whole run, as a comparison GitHub
+    refuses does not (standing_of)."""
+    wanted = list(dict.fromkeys(work.branch for works in board.overlaps(found).values()
+                                for work in works if work.branch))
+    if not wanted:
+        return {}, {}
+    try:
+        times = newest_creations(api, wanted)
+    except GitHubError:
+        times = {}
+    refused = {}
+    for branch in wanted:
+        if branch in times:
+            continue
+        try:
+            began = branch_made_at(api, branch)
+        except GitHubError as problem:
+            refused[branch] = f"{problem}{github_words(problem)}"
+            continue
+        if began:
+            times[branch] = began
+    return times, refused
+
+
+def newest_creations(api, branches):
+    """When the newest push that made each of these branches came, for those
+    the repository's newest ACTIVITY_PAGE branch creations name: one call,
+    the activity filtered to branch creations and listed newest first, so
+    the first entry for a branch is its newest creation. A refusal other
+    than a 404 raises."""
+    wanted = {f"refs/heads/{branch}": branch for branch in branches}
+    listed = api.get(f"/repos/{api.repo}/activity", {"activity_type": "branch_creation", "direction": "desc",
+                                                     "per_page": ACTIVITY_PAGE}, missing_ok=True) or []
+    times = {}
+    for activity in listed if isinstance(listed, list) else []:
+        made = made_at(activity)
+        branch = wanted.get(activity.get("ref")) if made and isinstance(activity.get("ref"), str) else None
+        if branch and branch not in times:
+            times[branch] = made
+    return times
+
+
+def branch_made_at(api, branch):
+    """When the newest push that made the branch came, as GitHub writes the
+    time, or "" when GitHub records none: the activity list, filtered to the
+    branch and to branch creations and listed newest first. A refusal other
+    than a 404 raises."""
+    listed = api.get(f"/repos/{api.repo}/activity", {"ref": f"refs/heads/{branch}", "activity_type": "branch_creation",
+                                                     "direction": "desc", "per_page": 1}, missing_ok=True) or []
+    for activity in listed if isinstance(listed, list) else []:
+        if made_at(activity) and activity.get("ref") == f"refs/heads/{branch}":
+            return made_at(activity)
+    return ""
+
+
+def made_at(activity):
+    """The time of an entry of the activity that records a push making a
+    branch, "" for any other entry."""
+    if not isinstance(activity, dict) or activity.get("activity_type") != "branch_creation":
+        return ""
+    return activity.get("timestamp") or ""
+
+
+def began_refused_lines(snapshot):
+    """A line for each branch of overlapping work GitHub refused to date in
+    this run, for the workflow's log, since the page says nothing of why
+    that work stands where it does: a token that may not read the
+    repository's activity would otherwise leave every claim undated on
+    every run unseen. A pull request from such a branch is then dated by
+    its opening, and a claim with none yet is work nothing dates, which
+    lands last (board.pull_began, board.UNDATED)."""
+    snap = board.as_snapshot(snapshot)
+    opened = {pull.branch for pull in snap.pulls if not pull.fork}
+    return [f"{branch}: GitHub refused to say when the branch was made ({answer}), so the Overlaps "
+            f"{UNDATED_PULL if branch in opened else UNDATED_CLAIM}"
+            for branch, answer in sorted(snap.began_refused.items())]
 
 
 def snapshot(api, sha, default_branch, now=None):
@@ -543,11 +726,10 @@ def post_comments(api, due):
     tried. The board is written before the comments, and the workflow
     writes it to its branch only after a run that succeeded, so a refusal
     that escaped here would keep the board off its branch, and one GitHub
-    gives for good would keep it off on every run. A refused idle comment
-    is due again, and a later run, which finds no marker yet, posts it; a
-    "main moved" comment is due only in the run of the push that moved the
-    default branch, so a refused one is never posted, and the pull request
-    hears that main moved only when the default branch moves again."""
+    gives for good would keep it off on every run. A refused comment is
+    due again, idle or "main moved" alike, since both depend on the state
+    and not on the run's event (board.comments_due), and a later run,
+    which finds no marker yet, posts it."""
     lines = []
     for number, marker, text in due:
         kind = "idle" if marker == board.IDLE_MARKER else "main-moved"
@@ -594,16 +776,21 @@ def holding(api, default_branch, sha):
 
 
 def release_one(api, snap, key, now):
-    """Release one claim: the labels first, then the comment, in the
-    protocol's order, and the board counts a release only once both are
-    done. A run that fails between them puts back the labels it took off,
-    so the issue is as the run found it and the next run starts the
-    release over, unless the comment turns out to be there after all, one
-    GitHub wrote and lost its answer to, which makes the release whole.
-    Only when GitHub refuses the putting back too are the labels left off
-    with no comment, until a run releases the claim or a person puts them
-    back. What was done, in a line."""
-    release, names, taken_off = snap.releases[key], coordinator.labels_released(snap, key), []
+    """Release one claim: the labels first, claimed and every worker's off
+    and todo on where the issue carries none of todo, epic and blocker
+    (coordinator.labels_put_on), then the comment, in the protocol's
+    order, and the board counts a release only once both are done. A run
+    that fails between them puts back the labels it took off and takes off
+    the todo it put on, so the issue is as the run found it and the next
+    run starts the release over, unless the comment turns out to be there
+    after all, one GitHub wrote and lost its answer to, which makes the
+    release whole. Only when GitHub refuses the putting back too are the
+    labels left as the failure left them with no comment, until a run
+    releases the claim or a person puts them back. What was done, in a
+    line."""
+    release = snap.releases[key]
+    names, put_on = coordinator.labels_released(snap, key), coordinator.labels_put_on(snap, key)
+    taken_off = []
     try:
         for name in names:
             if take_label_off(api, key, name):
@@ -611,6 +798,9 @@ def release_one(api, snap, key, now):
     except GitHubError as problem:
         return (f"#{key}: not released, taking the labels off failed: {problem}{github_words(problem)}"
                 + put_back(api, key, taken_off))
+    refused = put_labels_on(api, key, put_on, taken_off)
+    if refused:
+        return refused
     text = coordinator.release_text(snap, key, holding(api, snap.default_branch, release.sha))
     lost = ""
     try:
@@ -619,9 +809,9 @@ def release_one(api, snap, key, now):
         released_at = landed_release(api, key, release)
         if not released_at:
             return (f"#{key}: not released, the comment failed: {problem}{github_words(problem)}"
-                    + put_back(api, key, taken_off))
+                    + put_back(api, key, taken_off, put_on))
         lost = f" (GitHub's answer to the comment was lost, {problem}, but the comment is there)"
-    coordinator.after_release(snap, key, released_at or now.isoformat(), names)
+    coordinator.after_release(snap, key, released_at or now.isoformat(), names, put_on)
     return f"#{key}: claim released, idle since {release.committed_at}{lost}"
 
 
@@ -639,18 +829,45 @@ def take_label_off(api, key, name):
     return True
 
 
-def put_back(api, key, names):
-    """Put the labels a release took off back on its issue once a later step
-    failed, so the claim stays its holder's until a run releases it whole;
-    what was done, as the end of the release's line."""
-    if not names:
+def put_labels_on(api, key, put_on, taken_off):
+    """Put on a claim's issue the labels its release puts on
+    (coordinator.labels_put_on): nothing when they went on, else the
+    release's line saying it failed there, with the labels taken off put
+    back and those put on taken off again, since GitHub may have written
+    them and lost its answer."""
+    if not put_on:
         return ""
-    listed = ", ".join(names)
     try:
-        api.post(f"/repos/{api.repo}/issues/{key}/labels", {"labels": names})
+        api.post(f"/repos/{api.repo}/issues/{key}/labels", {"labels": put_on})
     except GitHubError as problem:
-        return f"; putting {listed} back failed too, so they stay off: {problem}{github_words(problem)}"
-    return f"; {listed} put back"
+        return (f"#{key}: not released, putting {', '.join(put_on)} on failed: {problem}{github_words(problem)}"
+                + put_back(api, key, taken_off, put_on))
+    return ""
+
+
+def put_back(api, key, names, put_on=()):
+    """Put the labels a release took off back on its issue once a later step
+    failed, so the claim stays its holder's until a run releases it whole,
+    then take off the labels it put on, so the issue is as the run found
+    it; what was done, as the end of the release's line. A label put on
+    whose answer was an error is taken off too, since GitHub may have
+    written it and lost the answer; one that is not there counts as taken
+    off, as in the release itself."""
+    said = ""
+    if names:
+        listed = ", ".join(names)
+        try:
+            api.post(f"/repos/{api.repo}/issues/{key}/labels", {"labels": names})
+            said += f"; {listed} put back"
+        except GitHubError as problem:
+            said += f"; putting {listed} back failed too, so they may still be off: {problem}{github_words(problem)}"
+    for name in put_on:
+        try:
+            if take_label_off(api, key, name):
+                said += f"; {name} taken off again"
+        except GitHubError as problem:
+            said += f"; taking {name} off again failed too, so it may still be on: {problem}{github_words(problem)}"
+    return said
 
 
 def landed_release(api, key, release):
@@ -819,20 +1036,20 @@ def github_words(problem):
 
 # --- the gate's world ---------------------------------------------------------
 
-def standing_word(pull, behind_by=None):
+def standing_word(pull, behind=None):
     """How a pull request's branch stands to its base, in the gate's four
     words, from the pull's mergeable_state as the board reads it. Where
     GitHub's word says only that something else blocks the merge (a rule,
-    a review, a draft), mergeable tells a conflict apart, and behind_by,
-    the commits of the base the head lacks, tells behind from clean; with
+    a review, a draft), mergeable tells a conflict apart, and behind, the
+    commits of the base the head lacks, tells behind from clean; with
     neither known the answer is unknown."""
     if pull.get("mergeable_state") not in OPAQUE_STATES:
         return board.pr_state(pull)
     if pull.get("mergeable") is False:
         return gate.CONFLICTING
-    if pull.get("mergeable") is None or behind_by is None:
+    if pull.get("mergeable") is None or behind is None:
         return gate.UNKNOWN
-    return gate.BEHIND if behind_by > 0 else gate.CLEAN
+    return gate.BEHIND if behind > 0 else gate.CLEAN
 
 
 def check_word(runs, name):
@@ -875,28 +1092,35 @@ class GitHubWorld:
 
     def pull_of(self, branch):
         """The branch's open pull request, settled, or None."""
-        found = self.api.open_pull(branch)
+        found = self.api.pull_detail(branch)
         return settled(self.api, found) if found else None
 
     def behind_by(self, pull):
         """How many commits of the pull request's base its head lacks, from
-        GitHub's comparison of the two; None when GitHub cannot say."""
-        base = (pull.get("base") or {}).get("ref") or self.default_branch
-        head = (pull.get("head") or {}).get("sha")
-        if not head:
-            return None
-        found = self.api.get(f"/repos/{self.api.repo}/compare/{quoted(base)}...{head}", missing_ok=True)
-        return (found or {}).get("behind_by")
+        GitHub's comparison of the two; None when there is nothing to
+        compare or GitHub has no such comparison (a 404). Any other refusal
+        raises."""
+        return behind_by(self.api, pull, self.default_branch)
 
     def standing(self, branch):
         """Unknown for a branch with no open pull request: GitHub computes
-        mergeability only for one, and the gate asks only about those."""
+        mergeability only for one, and the gate asks only about those.
+        Where GitHub's word is opaque the branch is read through mergeable
+        and one comparison (standing_of), a comparison GitHub refuses
+        reading as unknown, the same whether GitHub had computed the pull
+        request's mergeability at the first read or only after the pause."""
         pull = self.pull_of(branch)
         if pull is None:
             return gate.UNKNOWN
-        if pull.get("mergeable_state") in OPAQUE_STATES and pull.get("mergeable"):
-            return standing_word(pull, self.behind_by(pull))
-        return standing_word(pull)
+        found = standing_of(self.api, pull)
+        return found if found is not None else standing_word(pull)
+
+    def standing_detail(self, branch):
+        """The branch's gate.Standing, which never says a clean branch is
+        level with the default branch: GitHub's word clean says only that
+        it merges as it stands, behind or not under a rule that does not
+        ask for an up-to-date branch (F16)."""
+        return gate.Standing(self.standing(branch), level=False)
 
     def check(self, branch):
         sha = self.branch_sha(branch)
@@ -911,7 +1135,7 @@ class GitHubWorld:
         if self.policy.who_merges != gate.GATE:
             raise NotAllowed(f"{gate.MOVERS[self.policy.who_merges]} merges here, not the gate; "
                              f"{branch} waits for it")
-        pull = self.api.open_pull(branch)
+        pull = self.api.pull_detail(branch)
         if pull is None:
             raise MergeRefused(f"{branch} has no open pull request to merge; open one first")
         try:
@@ -926,7 +1150,9 @@ class GitHubWorld:
         a pull request it will not merge and 409 when the head moved: main
         moved when the branch, read again, no longer fits the default
         branch, and otherwise the author has something to fix (a review, a
-        rule, a push to look at). Any other answer is the gate failing."""
+        rule, a push to look at), which is also the answer when GitHub will
+        not compare the branch, since the standing is then unknown. Any
+        other answer is the gate failing."""
         said = f": {problem.detail}" if problem.detail else ""
         if problem.status not in (405, 409):
             return GateFailed(f"GitHub did not merge #{pull['number']}: {problem}{said}")

@@ -20,13 +20,14 @@ branch so the name is free for the next claim. Nothing here calls GitHub.
 import json
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
 from . import labels
 from .claims import (
     CLAIM_DIR, IDLE_AFTER, PREFIX, RELEASED_PREFIX, branch_of, by_number, claim_files, claim_worker,
-    is_claim_branch, is_idle, key_of, number_in, number_of, was_released,
+    is_claim_branch, is_idle, key_of, number_in, number_of, parse_time, was_released,
 )
 
 RECENT_MERGED = 5
@@ -75,7 +76,7 @@ OVERLAP_HEADING = ("## Overlaps (files that more than one piece of open work cha
 OVERLAP_COLUMNS = ("File", "Open work, in the order it should land")
 QUEUE_HEADING = "## Queue (open issues labelled todo, unclaimed and given to no worker)"
 ISSUE_COLUMNS = ("Issue", "Title", "Labels")
-GIVEN_HEADING = "## Given to workers (open issues labelled todo that a worker's label names, not yet claimed)"
+GIVEN_HEADING = "## Given to workers (open issues a worker's label names, not yet claimed)"
 GIVEN_COLUMNS = ("Issue", "Title", "Worker")
 BLOCKER_HEADING = "## Blockers (open issues labelled blocker)"
 MERGED_HEADING = f"## Recently merged (the last {RECENT_MERGED})"
@@ -119,7 +120,14 @@ class Pull:
     waits for review however long it takes, so its claim is never released,
     and a pull request whose draft state is not given counts as ready. The
     dict shape is the API's, head and all, so a pull request detail from
-    GitHub is a fixture as it is."""
+    GitHub is a fixture as it is; standing is the adapter's own key, how
+    the branch stands where GitHub's word says only that something else
+    stops the merge (adapters.github.standing_of). created_at, when the
+    pull request was opened, is when its work began where GitHub says
+    nothing of its branch (open_work); fork, whether its branch stands in
+    another repository, or in none, a fork since deleted, whose branch a
+    branch of the same name here is not (from_fork), so it is never a
+    claim's (claim_of)."""
 
     number: int
     title: str = ""
@@ -129,11 +137,26 @@ class Pull:
     updated_at: str = ""
     files: list = field(default_factory=list)
     draft: bool = False
+    standing: str | None = None
+    created_at: str = ""
+    fork: bool = False
 
     @property
     def state(self):
-        """The board's word for the pull request's standing."""
-        return state_word(self.mergeable_state)
+        """The board's word for the pull request: GitHub's mergeable_state
+        as state_word reads it, except where that word says only that
+        something else stops the merge (blocked, or the draft itself) and
+        the adapter read how the branch stands through mergeable and a
+        comparison (F9): behind and conflicting win, since the main-moved
+        rule speaks to them, and a draft whose branch is clean reads clean
+        rather than unknown; a blocked branch that is clean stays blocked,
+        which says what still stops it."""
+        word = state_word(self.mergeable_state)
+        if self.standing in ("behind", "conflicting"):
+            return self.standing
+        if word == "unknown" and self.standing == "clean":
+            return "clean"
+        return word
 
     @classmethod
     def from_dict(cls, data):
@@ -147,10 +170,13 @@ class Pull:
             updated_at=data.get("updated_at") or "",
             files=[file_name(f) for f in data.get("files") or []],
             draft=bool(data.get("draft")),
+            standing=data.get("standing"),
+            created_at=str(data.get("created_at") or ""),
+            fork=from_fork(data),
         )
 
     def to_dict(self):
-        return {
+        data = {
             "number": self.number,
             "title": self.title,
             "head": {"ref": self.branch, "sha": self.head_sha},
@@ -159,6 +185,37 @@ class Pull:
             "files": list(self.files),
             "draft": self.draft,
         }
+        if self.standing is not None:
+            data["standing"] = self.standing
+        if self.created_at:
+            data["created_at"] = self.created_at
+        if self.fork:
+            data["fork"] = True
+        return data
+
+
+def from_fork(data):
+    """Whether a pull request's branch stands in another repository than the
+    one it would merge into, or in none, a fork since deleted, as the API's
+    head and base name them; a dict that does not name both by their full
+    names, as a fixture or a snapshot written by hand, which may hold
+    anything there, says so by the board's own key fork, which
+    Pull.to_dict writes."""
+    head, base = mapping(data.get("head")), mapping(data.get("base"))
+    base_name = mapping(base.get("repo")).get("full_name")
+    if "repo" not in head or not isinstance(base_name, str) or not base_name:
+        return bool(data.get("fork"))
+    if head["repo"] is None:
+        return True
+    head_name = mapping(head["repo"]).get("full_name")
+    if not isinstance(head_name, str):
+        return bool(data.get("fork"))
+    return head_name.lower() != base_name.lower()
+
+
+def mapping(value):
+    """The value when it is a dict, else an empty one."""
+    return value if isinstance(value, dict) else {}
 
 
 @dataclass
@@ -235,7 +292,11 @@ class Snapshot:
     branch names, the claim files by issue key (None for a branch with no
     file yet, UNREAD_CLAIM for one GitHub gave no text of), the issue
     behind each claim branch, what a release reads about a claim by issue
-    key, and the merges last."""
+    key, the merges last, and when the work that meets other work began,
+    by its branch: when GitHub says the push that made the branch came, as
+    the adapter reads it for the overlaps' landing order (began_at), with
+    GitHub's answer for each branch it refused to date, which the run's log
+    names (adapters.github.began_refused_lines)."""
 
     sha: str = ""
     default_branch: str = "main"
@@ -246,6 +307,8 @@ class Snapshot:
     claim_issues: dict = field(default_factory=dict)
     merged: list = field(default_factory=list)
     releases: dict = field(default_factory=dict)
+    began: dict = field(default_factory=dict)
+    began_refused: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data):
@@ -261,6 +324,8 @@ class Snapshot:
             claim_issues={str(k): ClaimIssue.from_dict(v or {}) for k, v in (data.get("claim_issues") or {}).items()},
             merged=[Merged.from_dict(m) for m in data.get("merged") or []],
             releases={str(k): Release.from_dict(v or {}) for k, v in (data.get("releases") or {}).items()},
+            began={str(k): str(v) for k, v in (data.get("began") or {}).items() if v},
+            began_refused={str(k): str(v) for k, v in (data.get("began_refused") or {}).items()},
         )
 
     def to_dict(self):
@@ -274,7 +339,8 @@ class Snapshot:
             "claim_issues": {k: v.to_dict() for k, v in self.claim_issues.items()},
             "merged": [m.to_dict() for m in self.merged],
             "releases": {k: v.to_dict() for k, v in self.releases.items()},
-        }
+            "began": dict(self.began),
+        } | ({"began_refused": dict(self.began_refused)} if self.began_refused else {})
 
     @classmethod
     def from_json(cls, text):
@@ -321,8 +387,10 @@ def state_word(mergeable_state):
 
 def pr_state(pull):
     """The board's word for a pull request, given as a Pull or as the dict
-    the API returns."""
-    return state_word(pull.mergeable_state if isinstance(pull, Pull) else pull.get("mergeable_state"))
+    the API returns, with the adapter's standing where it read one."""
+    if isinstance(pull, Pull):
+        return pull.state
+    return Pull(0, mergeable_state=pull.get("mergeable_state"), standing=pull.get("standing")).state
 
 
 def short_sha(sha):
@@ -392,9 +460,36 @@ def is_released(snap, key, idle_after=IDLE_AFTER):
         return False
     if issue.state != "open" or labels.CLAIMED in issue.labels or labels.IN_REVIEW in issue.labels:
         return False
-    if any(p.branch == branch_of(key) and not p.draft for p in snap.pulls):
+    if any(of_claim(p, key) and not p.draft for p in snap.pulls):
         return False
     return was_released(release.released_at, release.committed_at, idle_after)
+
+
+def claim_of(pull):
+    """The key of the claim whose pull request this is: the key its branch
+    names (key_of), or None for a branch that is no claim and for a pull
+    request from a fork, whatever its branch is called. A claim branch
+    lives in this repository, and a fork's branch of the same name is
+    another branch, so such a pull request, marked ready or said finished,
+    finishes no claim, the board lists it and tells it what it tells any
+    other, and a release's rename, which closes the claim's own pull
+    request, leaves it open (F17: until its fix a ready pull request from a
+    fork's claude/<issue> kept that claim from ever being released, and
+    the board took it for the claim's own on the page and in the
+    Overlaps)."""
+    return None if pull.fork else key_of(pull.branch)
+
+
+def of_claim(pull, key):
+    """Whether the pull request is the claim's with this key (claim_of)."""
+    return claim_of(pull) == key
+
+
+def closed_by_release(pull, released):
+    """Whether the rename of a released claim's branch closes the pull
+    request: the claim's own, from a branch released_branches names
+    (claim_of)."""
+    return claim_of(pull) is not None and pull.branch in released
 
 
 def released_branches(snap):
@@ -454,7 +549,8 @@ def rename_refused_text(old, new, rulesets, words):
 
 def pulls_behind_main(pulls):
     """The pull requests the main-moved rule speaks to: behind or
-    conflicting, and only those."""
+    conflicting, and only those, a draft or a blocked one included once
+    the adapter has read how its branch stands (F9)."""
     return [p for p in pulls if pr_state(p) in ("behind", "conflicting")]
 
 
@@ -492,19 +588,29 @@ class DueComment(NamedTuple):
 
 
 def comments_due(snapshot, event_name, ref_name, now, idle_after=IDLE_AFTER):
-    """What the board says after this event, as (pull number, marker, text).
-    After a push to the default branch, every pull request behind it or in
-    conflict with it hears so, once per commit of the default branch (the
-    marker carries the short sha); a pull request nobody touched for a day
-    is asked once whether it is parked. Main-moved comments come first,
-    then idle ones, each in the order the snapshot lists the pull requests,
-    as the template's board posted them. A released claim's pull request
-    hears nothing: renaming its branch closes it."""
+    """What the board says after this run, as (pull number, marker, text).
+    Every pull request behind the default branch or in conflict with it, as
+    its state word says (Pull.state), hears so, once per commit of the
+    default branch (the marker carries the short sha), in whichever run
+    first finds it so; behind is GitHub's word, or, where GitHub says only
+    that something else stops the merge, the comparison's (F9), so one
+    GitHub calls clean, which the repository's rules do not hold for being
+    behind, hears nothing (F16): the word used to
+    be owed only by the run the push to the default branch started, and
+    that run is lost when the workflow's concurrency group replaces it
+    behind a later event's (F12), so the word depends on the state alone,
+    and event_name and ref_name, which the callers still pass, decide
+    nothing. A pull request nobody touched for a day is asked once whether
+    it is parked. Main-moved comments come first, then idle ones, each in
+    the order the snapshot lists the pull requests, as the template's
+    board posted them. A released claim's pull request hears nothing:
+    renaming its branch closes it; a pull request from a fork, whatever
+    its branch is called, hears what any other does (closed_by_release)."""
     snap = as_snapshot(snapshot)
     released = released_branches(snap)
-    pulls = [p for p in snap.pulls if p.branch not in released]
+    pulls = [p for p in snap.pulls if not closed_by_release(p, released)]
     due = []
-    if event_name == "push" and ref_name == snap.default_branch:
+    if snap.sha:
         sha7 = short_sha(snap.sha)
         marker = MAIN_MOVED_MARKER.format(sha=sha7)
         for pull in pulls_behind_main(pulls):
@@ -566,8 +672,10 @@ def claim_row(key, branch, text, pull, issue):
 
 
 def claim_rows(snap):
-    """A row per claim branch, in issue order, but a released claim's."""
-    pulls_by_branch = {p.branch: p for p in snap.pulls}
+    """A row per claim branch, in issue order, but a released claim's; the
+    pull request a row names is the claim's own, never one from a fork
+    (claim_of)."""
+    pulls_by_branch = {p.branch: p for p in snap.pulls if claim_of(p) is not None}
     released = released_keys(snap)
     rows = []
     for branch in sorted(claim_branches(snap.branches), key=lambda b: by_number(key_of(b))):
@@ -580,11 +688,12 @@ def claim_rows(snap):
 
 def pull_rows(snap):
     """A row per open pull request, in number order, but one from a
-    released claim's branch, which the rename of that branch closes."""
+    released claim's branch, which the rename of that branch closes; one
+    from a fork stays, whatever its branch is called (closed_by_release)."""
     released = released_branches(snap)
     return [
         [f"#{p.number}", p.title, p.branch, p.state, p.updated_at]
-        for p in sorted(snap.pulls, key=lambda p: p.number) if p.branch not in released
+        for p in sorted(snap.pulls, key=lambda p: p.number) if not closed_by_release(p, released)
     ]
 
 
@@ -605,20 +714,22 @@ def issue_rows(snap, label, unclaimed_only):
 
 
 def given_rows(snap):
-    """The open issues labelled todo that a worker's label gives to that
-    worker and that nobody has claimed yet, in number order: the queue
-    leaves them out, since only that worker takes them, and this is where
-    the worker and everyone else see them. An epic is the coordinator's
-    to plan, not a worker's to take, so it is left out with its labels."""
+    """The open issues a worker's label gives to that worker and that
+    nobody has claimed yet, in number order, whatever else they are
+    labelled: the spec says an issue a worker's label names is that
+    worker's alone, left out of the Queue and shown here until the worker
+    claims it, so the queue leaves them out and this is where the worker
+    and everyone else see them. Until F14's fix the rows needed todo and
+    left epics out, so an issue labelled worker:<name> alone was shown
+    nowhere."""
     claimed = claimed_numbers(snap.branches, released_keys(snap))
     rows = []
     for issue in sorted(snap.issues, key=lambda i: i.number):
         names = sorted(issue.labels)
         workers = labels.holder_names(names)
-        if labels.TODO not in names or labels.CLAIMED in names or labels.EPIC in names or not workers:
+        if labels.CLAIMED in names or not workers or issue.number in claimed:
             continue
-        if issue.number not in claimed:
-            rows.append([f"#{issue.number}", issue.title, ", ".join(workers)])
+        rows.append([f"#{issue.number}", issue.title, ", ".join(workers)])
     return rows
 
 
@@ -627,20 +738,51 @@ class Work(NamedTuple):
     request's or, for a claim with no pull request yet, the issue's; the
     files it changes or, before it changes any, the files its claim says it
     will touch; whether it is marked ready and whether its issue is a
-    blocker; and whether it is a pull request at all."""
+    blocker; whether it is a pull request at all; its branch, "" for a
+    pull request from a fork; and when it began, as GitHub writes a time,
+    "" when nothing says (open_work)."""
 
     number: int
     files: tuple
     ready: bool = False
     blocker: bool = False
     is_pull: bool = True
+    branch: str = ""
+    began: str = ""
+
+
+# Where work whose beginning nothing says stands in the landing order: with
+# the newest. Only a claim with no pull request yet can be such work, since
+# a pull request began at its opening where GitHub says nothing of its
+# branch, and the protocol has a claim open its draft at once (Work in the
+# open), so such a claim is all but always the newest piece; counted as the
+# oldest, a claim GitHub would not date in the run that tells an overlap
+# was told as landing before work days older (F13's review). The number
+# orders such work among itself.
+UNDATED = datetime.max.replace(tzinfo=timezone.utc)
 
 
 def landing_key(work):
     """The order open work that meets in a file should land in: a blocker
     first, since it stops everyone; then work marked ready, which is done
-    and waits only for its merge; then the oldest, which started first."""
-    return (not work.blocker, not work.ready, work.number)
+    and waits only for its merge; then the oldest, the work that began
+    first, by the time GitHub gives (began_at), and not by its number,
+    which for a claim is its issue's and for a pull request the pull
+    request's, two numbers that tell nothing of which began first (F13);
+    the number breaks a tie."""
+    return (not work.blocker, not work.ready, began_at(work.began), work.number)
+
+
+def began_at(text):
+    """When a piece of work began, as an aware datetime, from the time
+    GitHub wrote; UNDATED when there is none or it does not read as a
+    time, since a fixture or a snapshot saved by hand may hold anything,
+    a number or a list included, and the board never stops for one
+    value."""
+    try:
+        return parse_time(text) if text else UNDATED
+    except (AttributeError, TypeError, ValueError):
+        return UNDATED
 
 
 def own_files(files):
@@ -658,24 +800,41 @@ def open_work(snapshot):
     """Every piece of open work, in number order: each open pull request but
     a released claim's, with the files it changes, or the files its claim
     file lists while it changes nothing but that file; and each claim with
-    no pull request yet, with the files its claim file lists."""
+    no pull request yet, with the files its claim file lists. Each began
+    when the push that made its branch came, as the snapshot holds it by
+    branch, and a pull request where pull_began says; a pull request from a
+    fork carries no branch, since its branch is none of this
+    repository's, and is a piece of its own, whatever its branch is called,
+    since it is no claim's (claim_of)."""
     snap = as_snapshot(snapshot)
     released = released_keys(snap)
-    pulls = {p.branch: p for p in snap.pulls}
+    pulls = {p.branch: p for p in snap.pulls if claim_of(p) is not None}
     work = []
     for pull in snap.pulls:
-        key = key_of(pull.branch) if is_claim_branch(pull.branch) else None
+        key = claim_of(pull)
         if key in released:
             continue
         files = own_files(pull.files) or (own_files(claim_files(snap.claims.get(key) or "")) if key else ())
-        work.append(Work(pull.number, files, not pull.draft, bool(key) and is_blocker(snap, key)))
+        work.append(Work(pull.number, files, not pull.draft, bool(key) and is_blocker(snap, key), True,
+                         "" if pull.fork else pull.branch, pull_began(snap, pull)))
     for branch in claim_branches(snap.branches):
         key, number = key_of(branch), number_of(branch)
         if branch in pulls or key in released or number is None:
             continue
         files = own_files(claim_files(snap.claims.get(key) or ""))
-        work.append(Work(number, files, False, is_blocker(snap, key), False))
+        work.append(Work(number, files, False, is_blocker(snap, key), False, branch, snap.began.get(branch, "")))
     return sorted(work, key=lambda w: w.number)
+
+
+def pull_began(snap, pull):
+    """When a pull request's work began: when the push that made its branch
+    came, as the snapshot holds it, so a claim and the pull request later
+    opened from its branch are one piece that began at the claim (F13);
+    else, for a pull request from a branch the snapshot says nothing of,
+    or nothing that reads as a time, or from a fork, whose branch a branch
+    of the same name here is not, when it was opened."""
+    made = "" if pull.fork else snap.began.get(pull.branch, "")
+    return made if began_at(made) != UNDATED else pull.created_at
 
 
 def overlaps(snapshot):
