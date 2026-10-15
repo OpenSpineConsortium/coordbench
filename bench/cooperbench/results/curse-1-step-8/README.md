@@ -276,9 +276,12 @@ which the medians above do not move with.
   read. In this route that context opens with about 78 thousand tokens
   of the orchestrating session's instructions (the pilot's README), so
   a pair's tokens track its agents' turns, and the absolute figures are
-  this route's, not a standalone agent's. The two agents of a pair
-  print only 6 to 25 percent of the same lines, by an analysis outside
-  this repository over 34 two-agent runs that predates the last typst
+  this route's, not a standalone agent's: the 72 agents' first calls
+  read 78,492 to 81,689 tokens before any work, and that much again on
+  every later call is 74 to 76 percent of each arm's input and, at
+  cache-read prices, 35 to 43 percent of its dollars. The two agents of
+  a pair print only 6 to 25 percent of the same lines, by an analysis
+  outside this repository over 34 two-agent runs that predates the last typst
   runs (/mnt/project-files/experiments/curse-of-coordination/xblossom/
   in the project).
 - The same code and the same queue grow the run, the way this step was
