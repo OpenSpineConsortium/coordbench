@@ -1234,7 +1234,8 @@ def packed_kinds(data):
     line, whose text happens to put an octal field or ustar's magic where
     a header has them, and whose bytes the zip reads whole, where the
     tar's steps over them read as no layer of their own and would refuse
-    a clean file. A zip that lies past the header the tar was found by is
+    a clean file. A zip that lies past the header the tar was found by,
+    or one stored in the tar, whose record the tar's padding follows, is
     a member of the tar, which is read all the same."""
     kinds = []
     if data[:3] == GZIP_MAGIC + b"\x08":
@@ -1256,7 +1257,7 @@ def packed_kinds(data):
     else:
         kinds += [name for magic, name in UNOPENED_FORMATS if data.startswith(magic)]
     whole_tar = checksum_holds(tar_header(data))
-    later = broken_tar_header(data)
+    later = None if whole_tar else broken_tar_header(data)
     broken_tar = not whole_tar and (is_tar(data) or later is not None)
     if whole_tar:
         kinds.append("tar")
@@ -1285,7 +1286,9 @@ def zip_covers_tar(data, later):
     header's fields where a tar has them), or the later header the tar
     was found by (later, from broken_tar_header) lies within it, as a
     stored tar member's does. A zip that starts after the first block and
-    after that header is a member of the tar, which is read."""
+    after that header is a member of the tar, which is read, and so is a
+    zip stored in the tar with a tar of its own among its members, whose
+    record the tar's padding follows (zip_extent gives it no extent)."""
     extent = zip_extent(data)
     if extent is None:
         return False
@@ -1297,7 +1300,14 @@ def zip_extent(data):
     """Where the zip a file ends with starts and where its end record is,
     as zipfile places them: the record's place less the directory's size
     and offset, the zip64 record's when the classic leaves them to it;
-    None with no end record."""
+    None with no end record, or with one that is no zip's own: whose
+    directory does not stand where it says (the record's signature in a
+    member's bytes, a library's that reads zips or a note's on them,
+    followed by whatever the member holds, read as a size and an
+    offset), that places the zip before the file starts, or that does
+    not end the file with its comment (a zip stored in a tar, which the
+    tar's padding and end follow). zipfile reads such a record as a
+    zip's; the broken tar it stands in is read all the same."""
     tail = bytes(data[-ZIP_TAIL:])
     at = tail.rfind(b"PK\x05\x06")
     if at < 0 or len(tail) - at < 22:
@@ -1307,7 +1317,12 @@ def zip_extent(data):
     zip64 = zip64_record(tail, at)
     if zip64:
         size, offset, where = int.from_bytes(zip64[40:48], "little"), int.from_bytes(zip64[48:56], "little"), where - 76
-    return where - size - offset, where
+    start = where - size - offset
+    if start < 0 or bytes(data[where - size:where - size + 4]) != b"PK\x01\x02":
+        return None
+    if at + 22 + int.from_bytes(tail[at + 20:at + 22], "little") != len(tail):
+        return None
+    return start, where
 
 
 def ends_as_zip(data):
@@ -1468,23 +1483,27 @@ def credential_layers(data, needles, budget, depth=0, strict=True):
 def gives_anything(kind, data, budget):
     """Whether a weak sign met at DEEPEST_NESTING opens to anything: text
     that only starts like a zlib stream inflates to nothing and is left
-    as it is, where a stream that holds something refuses the file."""
+    as it is, where a stream that holds something refuses the file, as
+    does a container's member that stopped short, with bytes or none,
+    since its header read (as layers_through counts it)."""
     try:
         return any(content for _, content in UNPACKERS[kind](data, budget))
     except (LimitReached, MembersUnread):
         return True
     except Exception as problem:
-        return bool(getattr(problem, "partial", b""))
+        return bool(getattr(problem, "partial", b"")) or (kind in CONTAINERS and isinstance(problem, StoppedShort))
 
 
 def layers_through(kind, data, needles, budget, depth, strict):
     """credential_layers through one format. What a layer gives is
     searched, and so is what a stream gave before it stopped short
     (StoppedShort). A layer that does not open then refuses the file,
-    unless its sign is weak (WEAK_KINDS) and it never opened, a member
-    that stopped short with bytes counting as opened, or the bytes are a
-    repository's content, which are searched as far as they open; a limit
-    refuses it wherever it is met."""
+    unless its sign is weak (WEAK_KINDS) and it never opened, a stream
+    that gave bytes before it stopped, or a container's member that
+    stopped short, with bytes or with none, since its header read,
+    counting as opened, or the bytes are a repository's content, which
+    are searched as far as they open; a limit refuses it wherever it is
+    met."""
     layers, opened = UNPACKERS[kind](data, budget), False
     while True:
         try:
@@ -1498,7 +1517,8 @@ def layers_through(kind, data, needles, budget, depth, strict):
             found = credential_layers(partial, needles, budget, depth + 1, False) if partial else None
             if found is not None:
                 return [kind, *found]
-            if not strict or (kind in WEAK_KINDS and not opened and not partial):
+            stopped = kind in CONTAINERS and isinstance(problem, StoppedShort)
+            if not strict or (kind in WEAK_KINDS and not (opened or partial or stopped)):
                 return None
             raise
         opened = True
@@ -1614,8 +1634,10 @@ def tar_members(data, budget):
     is lost, and what tarfile stepped over is opened too (stepped_over),
     since it tries those blocks as headers and never reads them as a
     member. A header tarfile stops at (one after a pax or a long-name
-    header that does not read) has what follows it stepped over the same
-    way before the tar is refused."""
+    header that does not read, or a pax record it cannot read, a sparse
+    map among them) has what follows it stepped over the same way before
+    the tar is refused, whatever tarfile raised; a limit met inside it
+    is the limit, and nothing more is walked on what is left."""
     expected = 0
     try:
         with Reading(data) as source, tarfile.open(fileobj=source, mode="r:", ignore_zeros=True) as packed:
@@ -1626,7 +1648,9 @@ def tar_members(data, budget):
                 expected = packed.offset
                 if member.isreg() or member.type not in tarfile.SUPPORTED_TYPES:
                     yield "tar", tar_member(packed, member, data, budget)
-    except tarfile.ReadError:
+    except LimitReached:
+        raise
+    except Exception:
         yield from stepped_over(data, expected, len(data), budget)
         raise
     yield from stepped_over(data, expected, len(data), budget)
@@ -1650,7 +1674,10 @@ def stepped_over(data, start, end, budget):
     as GNU tar reads them, and a little past: past zero blocks, each
     header that reads as one (ustar's magic or a checksum that holds,
     where GNU tar needs the checksum) gives the member behind it, as long
-    as its size says, so a run of headers tarfile refuses loses no member.
+    as its size says, so a run of headers tarfile refuses loses no member;
+    past the member of a header whose checksum does not hold, which GNU
+    tar skips a block at a time, the walk goes on from the first header
+    inside it whose checksum holds, which GNU tar reads (past_member).
     Where a block first reads as no header, what follows is opened from
     that block, as what follows a tar's end is, and, when the block is
     shaped like a header (its checksum field a number), from the block
@@ -1676,7 +1703,7 @@ def stepped_over(data, start, end, budget):
         if content:
             budget.take(len(content))
             yield "what a tar stepped over", content
-        start = min(start + 512 + -(-size // 512) * 512, end)
+        start = past_member(data, start, size, end, block)
 
 
 def what_follows(data, start, end, block, budget):
@@ -1690,11 +1717,14 @@ def what_follows(data, start, end, block, budget):
     (past_unread_blocks): text whose every line is a block with ustar's
     magic would otherwise open itself a block shorter to the depth's
     end, and a stream behind two headers that do not read would be
-    stepped over blind."""
+    stepped over blind. The block that opening lands on is shaped or
+    not as a gap's block is, and opens the next block the same way,
+    since the walk, its one gap spent, steps over a stream behind it."""
+    if (start, end) == (0, len(data)):
+        start = past_unread_blocks(data, start + 512, end)
+        block = data[start:min(start + 512, end)]
     shaped = len(block) == 512 and TAR_CHECKSUM.fullmatch(block[148:156])
-    whole = (start, end) == (0, len(data))
-    begins = (past_unread_blocks(data, start + 512, end),) if whole else (start, start + 512) if shaped else (start,)
-    for begin in begins:
+    for begin in (start, start + 512) if shaped else (start,):
         if begin < end and ZEROS.match(data, begin, end).end() < end:
             budget.take(end - begin)
             yield "what a tar stepped over", data[begin:end]
@@ -1711,12 +1741,26 @@ def past_unread_blocks(data, start, end):
         block = data[start:min(start + 512, end)]
         size = header_size(block)
         if size is not None:
-            start += 512 + -(-size // 512) * 512
+            start = past_member(data, start, size, end, block)
         elif len(block) == 512 and (block[257:262] == b"ustar" or checksum_holds(block)):
             start += 512
         else:
             return start
     return end
+
+
+def past_member(data, start, size, end, block):
+    """Where the walk goes on after the member a header at start gives by
+    its size: past the member, or, for a header GNU tar refuses, its
+    checksum not holding, at the first header inside that member whose
+    checksum holds, which GNU tar, skipping a block at a time, reads."""
+    after = min(start + 512 + -(-size // 512) * 512, end)
+    if checksum_holds(block):
+        return after
+    for at in range(start + 512, after, 512):
+        if checksum_holds(data[at:at + 512]):
+            return at
+    return after
 
 
 def header_size(block):
@@ -1838,7 +1882,9 @@ def holds_members(kind, data, budget):
     a zip found by its end record, or a tar by its checksum alone, only
     when it opens with a member, and a tar whose first header does not
     read only when it opens to a layer, so a log whose bytes only look
-    like one is scrubbed as text. A zip's directory is charged to the
+    like one, and open to nothing, is scrubbed as text (one whose first
+    line puts ustar's magic at 257 opens to its own tail, and is left
+    whole, as it was by its magic alone). A zip's directory is charged to the
     scrub's budget, as the read-back charges it, and one past what is
     left is left whole for the read-back to refuse, as is a tar past it."""
     if kind == BROKEN_TAR:

@@ -136,9 +136,11 @@ by what its bytes say it is, whatever the file's name or place: gzip,
 xz, lzma (with any properties xz reads) and bzip2 streams, tar members
 (a ustar or v7 header; a member of a type tar does not know, as a
 regular file; past headers that do not read, as GNU tar steps over
-them, each member behind them by its size, a first header among them
-when a later one carries ustar's magic; and what follows the tar's
-end), zip members (a zipapp's too, one that does not read as unzip
+them, each member behind them by its size, or, where the header's
+checksum does not hold, to the first header inside that member whose
+checksum holds, which GNU tar reads, a first header among them when a
+later one carries ustar's magic; past a record tarfile cannot read, a
+sparse map among them; and what follows the tar's end), zip members (a zipapp's too, one that does not read as unzip
 decompresses it, a Deflate64 one as far as deflate reads it, and the
 members a split zip's last part holds whole, a zip64 split's too), ar
 members (a .deb, a BSD archive's, and what follows the last), git's
@@ -148,8 +150,12 @@ an archive, up to eight layers deep, with one budget for the whole
 directory (1 GiB unpacked, each stream, member or object counting 1
 KiB and a delta the larger of what it makes and 32 bytes an
 instruction). A layer is found where a file, a stream or a member
-starts, or by a zip's end record where no format that accounts for all
-of the bytes opens them (a tar whose first header does not read, found
+starts, or by a zip's end record, one that ends the file and places a
+directory where it says (the record's signature in a member's bytes, a
+library's that reads zips or a note's on them, and the record of a zip
+stored in a tar, which the tar's padding follows, mark no zip of the
+whole), where no format that accounts for all of the bytes opens them
+(a tar whose first header does not read, found
 by ustar's magic or by a later header, is a weak sign too: looked for
 after the end record, and not at all where the zip that record ends
 has its first member in the first block, as a zipapp has after its
