@@ -205,6 +205,9 @@ def main(argv=None):
     parser.add_argument("--pairs", default="flash")
     parser.add_argument("--published", help="the website's coop/index.json, for the published difficulty")
     parser.add_argument("--by", default="language,conflict", help="the keys of a stratum, from " + ", ".join(KEYS))
+    parser.add_argument("--skip", default="",
+                        help="REPO/TASK entries, comma separated, left out before the strata are read, as queue.py add "
+                             "--skip leaves them out before its draw, so the same skip here reproduces the queue's order")
     sub = parser.add_subparsers(dest="command", required=True)
     table = sub.add_parser("table")
     table.add_argument("--md", action="store_true")
@@ -214,7 +217,9 @@ def main(argv=None):
     sample.add_argument("--seed", type=int, default=0)
     args = parser.parse_args(argv)
     dataset = dataset_dir(args)
-    rows = describe(dataset, flash_pairs(dataset, args.pairs), published_results(args.published))
+    skip = set(filter(None, args.skip.split(",")))
+    pairs = [p for p in flash_pairs(dataset, args.pairs) if f"{p[0]}/{p[1]}" not in skip]
+    rows = describe(dataset, pairs, published_results(args.published))
     try:
         if args.command == "table":
             command_table(args, rows)

@@ -188,7 +188,7 @@ def place_missing_markers(run_dir, returned, dead):
     driver expires it; bring a lost one's deadline forward; say what was
     done in harness.json."""
     plan = read_plan(run_dir)
-    notes = {"placed_markers": [], "overran": [], "expired": [], "at": time.time()}
+    notes = {"placed_markers": [], "overran": [], "expired": [], "gone_workspaces": [], "at": time.time()}
     changed = False
     for agent in plan["agents"]:
         handle = agent.get("handle") or {}
@@ -197,7 +197,12 @@ def place_missing_markers(run_dir, returned, dead):
             continue
         marker = Path(workspace) / MARKER
         if agent["id"] in returned and not marker.exists():
-            if time.time() > float(handle.get("deadline") or 0):
+            if not Path(workspace).is_dir():
+                # The run's teardown has taken the workspace: a finish run
+                # again after one that scored the pair and died, as a full
+                # disk made one do; there is nothing left to mark.
+                notes["gone_workspaces"].append(agent["id"])
+            elif time.time() > float(handle.get("deadline") or 0):
                 notes["overran"].append(agent["id"])
             else:
                 marker.touch()

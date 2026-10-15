@@ -22,10 +22,12 @@ from pathlib import Path
 
 LEFT_OUT = ("_session.jsonl", "_traj.json", "trajectory.json.gz", "conversation.json",
             "conversation_store.json", "finish.out", "finish.pid", ".session-prompt.md", "_prompt.md",
-            ".out", "plan.json", "_session_outcome.json")
+            ".out", "plan.json", "_session_outcome.json", ".tar.gz")
 # The wrappers under bin/ and plan.json carry the hub's run tokens, the
-# outcome files the orchestrating session's transcript paths, and the
-# hub directory a second copy of each run's events: all left out.
+# outcome files the orchestrating session's transcript paths, the hub
+# directory a second copy of each run's events, and a previous-*.tar.gz
+# an earlier attempt that finish set aside (the attempt that counts is
+# the one in the directory): all left out.
 LEFT_OUT_DIRS = ("bin", "hub")
 ARMS = ("solo", "coop", "coop-nocomm", "sdlc", "sdlc-watch", "coop-git", "team")
 
