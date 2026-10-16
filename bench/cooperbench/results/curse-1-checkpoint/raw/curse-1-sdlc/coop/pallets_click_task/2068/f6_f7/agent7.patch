@@ -1,0 +1,170 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..554806a 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -478,6 +478,25 @@ def _nullpager(
+         stream.write(text)
+ 
+ 
++# The editor's process priority by name. On Unix a priority is a nice
++# value, where a lower number gets more CPU time. On Windows it is a
++# priority class, passed to CreateProcess as a creation flag.
++_PRIORITY_NICE = {
++    "low": 19,
++    "below_normal": 10,
++    "normal": 0,
++    "above_normal": -5,
++    "high": -10,
++}
++_PRIORITY_WINDOWS_CLASS = {
++    "low": 0x00000040,  # IDLE_PRIORITY_CLASS
++    "below_normal": 0x00004000,  # BELOW_NORMAL_PRIORITY_CLASS
++    "normal": 0x00000020,  # NORMAL_PRIORITY_CLASS
++    "above_normal": 0x00008000,  # ABOVE_NORMAL_PRIORITY_CLASS
++    "high": 0x00000080,  # HIGH_PRIORITY_CLASS
++}
++
++
+ class Editor:
+     def __init__(
+         self,
+@@ -485,11 +504,20 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        process_priority: str | None = None,
++        escape_shell: bool = False,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        # An unknown priority is dropped here, so that a typo never
++        # stops anyone from editing.
++        if isinstance(process_priority, str) and process_priority in _PRIORITY_NICE:
++            self.process_priority: str | None = process_priority
++        else:
++            self.process_priority = None
++        self.escape_shell = escape_shell
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,18 +533,66 @@ class Editor:
+                 return editor
+         return "vi"
+ 
++    def _set_process_priority(self, process: t.Any) -> None:
++        """Lower or raise the priority of a Unix process just started.
++        Windows sets it at creation instead (see ``edit_file``).
++
++        Setting a priority is a request: raising it usually needs
++        privileges, and some platforms cannot do it at all. A refusal is
++        ignored, so that the editor always runs.
++        """
++        if WIN or self.process_priority is None:
++            return
++
++        try:
++            os.setpriority(
++                os.PRIO_PROCESS, process.pid, _PRIORITY_NICE[self.process_priority]
++            )
++        except Exception:
++            pass
++
++    def get_command(self, editor: str, filename: str) -> str:
++        """Build the shell command that opens ``filename`` in ``editor``.
++
++        With ``escape_shell`` each word of the editor and the filename are
++        quoted with :func:`shlex.quote`, so shell metacharacters in them
++        are literal text. The editor is split into words first so that an
++        editor setting with arguments, like ``code --wait``, keeps working.
++        """
++        if not self.escape_shell:
++            return f'{editor} "{filename}"'
++
++        import shlex
++
++        try:
++            words = shlex.split(editor)
++        except ValueError:
++            # Unbalanced quotes: treat the whole setting as one word.
++            words = [editor]
++
++        words.append(filename)
++        return " ".join(shlex.quote(word) for word in words)
++
+     def edit_file(self, filename: str) -> None:
+         import subprocess
+ 
+         editor = self.get_editor()
+         environ: dict[str, str] | None = None
++        popen_kwargs: dict[str, t.Any] = {}
+ 
+         if self.env:
+             environ = os.environ.copy()
+             environ.update(self.env)
+ 
++        if WIN and self.process_priority is not None:
++            popen_kwargs["creationflags"] = _PRIORITY_WINDOWS_CLASS[
++                self.process_priority
++            ]
++
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
++            command = self.get_command(editor, filename)
++            c = subprocess.Popen(command, env=environ, shell=True, **popen_kwargs)
++            self._set_process_priority(c)
+             exit_code = c.wait()
+             if exit_code != 0:
+                 raise ClickException(
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..18edcda 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,8 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    process_priority: str | None = None,
++    escape_shell: bool = False,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +679,36 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param process_priority: the CPU priority to start the editor with, one
++                             of ``"low"``, ``"below_normal"``, ``"normal"``,
++                             ``"above_normal"`` or ``"high"``.  Defaults to
++                             ``None``, which leaves the priority alone.
++                             Raising it above normal usually needs
++                             privileges.  If the platform does not support
++                             the priority, or refuses it, or it is not one
++                             of these names, it is ignored and the editor
++                             starts as usual.
++    :param escape_shell: if this is true, shell metacharacters in the file
++                         name and in the editor command are escaped with
++                         :func:`shlex.quote` before the command is run by
++                         the shell, so a name like ``a.txt; rm -rf /`` is
++                         passed to the editor as one literal name.  This
++                         defaults to false.
++
++    .. versionchanged:: 8.2
++        Added the ``process_priority`` and ``escape_shell``
++        parameters.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        process_priority=process_priority,
++        escape_shell=escape_shell,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

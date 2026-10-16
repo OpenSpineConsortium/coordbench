@@ -1,0 +1,4 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/dottxt_ai_outlines_task/1655/f6_f7", "verdict": "fail"}
+coordbench run: solo-1655-f6_f7-3e69e7: an earlier attempt's files in the pair directory were packed into previous-20261016T003107.tar.gz
+coordbench run: solo-1655-f6_f7-3e69e7: timings: hub 0.1 s, run_create 0.0 s, provision 1.7 s, agents 121 s, close 0.0 s, score 129 s, teardown 0.9 s
+coordbench run: summary: 1 completed, 0 skipped, 0 failed; evals: 1 evaluated, 0 passed, 1 failed, 0 errors (0.0%); cost: unknown

@@ -1,0 +1,19 @@
+diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py
+index 85af9adc..64c1ddce 100644
+--- a/outlines/types/__init__.py
++++ b/outlines/types/__init__.py
+@@ -68,3 +68,14 @@ email = Regex(
+ isbn = Regex(
+     r"(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]"
+ )
++
++# Matches a 16-digit credit card number written either with no separators, with
++# single spaces between the four groups of four digits, or with single hyphens
++# between them. The separator must be the same throughout: "1234 5678-9012 3456"
++# does not match. The three forms are spelled out as alternatives rather than
++# written with a backreference to the first separator, since backreferences
++# cannot be compiled to the finite-state machine used for structured generation.
++#
++# Only the format is checked, not the Luhn check digit, so not every match is a
++# real card number.
++credit_card = Regex(r"([0-9]{16}|[0-9]{4}( [0-9]{4}){3}|[0-9]{4}(-[0-9]{4}){3})")

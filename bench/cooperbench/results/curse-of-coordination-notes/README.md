@@ -6,6 +6,40 @@ one in bench/cooperbench/PLAN.md: does Symphony's claim protocol (the
 sdlc arm) let two Claude Code agents finish CooperBench's task pairs as
 often as one agent does, and at what cost in time and tokens.
 
+## 2026-10-16: the reruns, and a pause for the grant
+
+- The effort. Every agent of the pilot, the step and the screen ran at
+  effort xhigh, inherited from the orchestrating session; this day's
+  session ran at max. lane.js now takes args.effort (#22), every
+  curse-1 lane names "xhigh" (step 3 below), and the two runs made at
+  max were made again: solo on the outlines pair, which had passed, and
+  coop on it, whose agents the harness lost.
+- The image loop. With more than one task open it prepared the last
+  open task's image over and over and never the one the lanes waited
+  for; #23 fixed it.
+- The arms' order. At 08:42 UTC, before the reruns resumed, each
+  pair's arms were put in a seeded order (step 5 below), so the order
+  covers click 2068 f6_f7 too.
+- The reruns. 7 of the 12 are done: the outlines pair under all five
+  arms and sdlc on click 2068 f5_f11 for the step, and solo on click
+  2068 f6_f7 for the pilot. They and the first runs of the full run,
+  the other three arms of click 2068 f6_f7, are in
+  ../curse-1-checkpoint/. Left: coop and sdlc on jinja 1559 f4_f10,
+  solo on jinja 1621 f2_f9, sdlc and coop-git on go_chi 56 f1_f5, and
+  coop-git on click 2068 f6_f7, which the session limit cut.
+- The pause. At 08:58 UTC the owner paused the bench until the AIDaS
+  grant is submitted (03:59 UTC on 2026-10-17), to leave the account's
+  five-hour window to it. The runs in flight were finished and the
+  rest of the queue paused: run/curse-1-queue.jsonl is the queue at
+  the pause, 54 items done and 161 paused. At 09:37 UTC the owner
+  wrote "Just continue", and the bench ran again from about 09:41 UTC,
+  after a restart of the container: the rest of the reruns, then the
+  step's figures with the harness errors left out, then the four
+  batches back to back, as the owner chose at 00:56 UTC ("All
+  batches"). By 10:05 UTC the five reruns left and coop-git on click
+  2068 f6_f7 had run, every one clean by its audit, and batch-9-16
+  had begun; their runs go into the full run's bundle.
+
 ## What is here
 
 - Copies of the working notes kept in the project's shared folder on
@@ -26,22 +60,24 @@ often as one agent does, and at what cost in time and tokens.
     folder's layout. XBloom.pdf, the paper the user attached, is not
     copied.
 - run/: the state of the full run on the container that ran it.
-  - curse-1-queue.jsonl: the queue as it stood at 22:35 UTC.
-    - 44 items done.
-    - 12 pending: the harness errors, put back by requeue.
-    - 159 paused: the full run, chosen and not started.
+  - curse-1-queue.jsonl: the queue at the pause of 2026-10-16,
+    09:15 UTC: 54 items done and 161 paused, the rest of the reruns
+    and of the full run.
   - order-43.txt: the 43 gradable pairs in the nested stratified order.
   - batch-9-16.txt, batch-17-24.txt, batch-25-32.txt and
     batch-33-43.txt: the pairs of each batch, comma separated, in the
     form that `queue.py resume --pairs` takes.
   - images-full.sh: the loop that prepares task images one at a time
     ahead of the lanes, keeping the disk free.
+  - restore-bundles.py: puts the bundled runs back into a logs
+    directory on a new container (below).
   - audit-backfill.jsonl: the audit's verdict on each of the 68 runs
     that had been made, 56 of the tag curse-1 and 12 of the screen.
 - The bundled results beside this folder each carry the audit.json of
   every run:
   - ../curse-1-pilot/
   - ../curse-1-step-8/
+  - ../curse-1-checkpoint/, the runs of 2026-10-16 up to the pause
   - ../xblossom-screen/
 
 ## Where things stand
@@ -112,12 +148,25 @@ audit.json files are the audit's verdicts.
 On a new container:
 
 1. Run bench/cooperbench/setup.sh.
-2. Copy run/curse-1-queue.jsonl to ~/cooperbench/logs/.
-3. Before a report that spans the old and the new runs, copy each
-   bundle's raw/<tag>/ directories into the logs directory, and check
-   that report.py reads them.
+2. Make the logs directory (`mkdir -p ~/cooperbench/logs`) and copy
+   run/curse-1-queue.jsonl into it.
+3. Before a report that spans the old and the new runs, put the bundled
+   runs back into the logs directory, from this folder:
+   `python3 run/restore-bundles.py .. ~/cooperbench/logs --bundles curse-1-pilot,curse-1-step-8,curse-1-checkpoint`.
+   Those three bundles are its default. It copies each bundled run whose
+   audit is clean and never replaces a run the logs already hold, so
+   name every bundle in the one call. Where two bundles hold a run at
+   one path, only the later start counts: the pilot's click 2068 f5_f11
+   under coop, sdlc, coop-git and team was cut by a restart and run
+   again in the step, and both bundles keep a copy. A bundle holds no
+   transcripts, so the figures read from them (tool calls, the
+   communication overhead) cover only the runs made on the container at
+   hand.
 
 ## The next steps, in order
+
+At the pause of 2026-10-16, steps 1 to 3 and 5 are done and step 4 is
+part done; the section at the top lists what is left of it.
 
 Q below is ~/cooperbench/logs/curse-1-queue.jsonl, and CHECKOUT is a
 coordbench checkout at main with #21 merged.

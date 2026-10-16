@@ -1,0 +1,47 @@
+commit cfcaa19d7522b38828f4265e02bcbd7f67d8921f (agent2)
+Merge: 4d612cc 060ae97
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 04:58:42 2026 +0000
+
+    Merge team/agent1
+
+commit 4d612ccefe9865ec07bdce7646e781f1813c44ff
+Merge: c1b0f51 893d41d
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 04:58:20 2026 +0000
+
+    Merge team/agent1
+
+commit 060ae972dfe2e599a674e70fbe792c9795792ed1 (agent1)
+Merge: 44f71dc c1b0f51
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 04:58:13 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 44f71dcb4884f242c18f976ada4f28662b396875
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 04:58:13 2026 +0000
+
+    move url type after isbn
+
+ outlines/types/__init__.py | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+commit 893d41d0d5dfc29fe0bc07b98771de9083b7f280
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 04:58:06 2026 +0000
+
+    feat(types): add url type for HTTP and HTTPS URL validation
+
+ outlines/types/__init__.py | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+commit c1b0f5170c1f9f410a2b6318bb49c900662891ba
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 04:57:24 2026 +0000
+
+    Add credit_card regex type
+
+ outlines/types/__init__.py | 8 ++++++++
+ 1 file changed, 8 insertions(+)
