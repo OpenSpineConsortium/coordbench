@@ -50,6 +50,10 @@ ready() {
 free_gb() { df -BG --output=avail / | tail -1 | tr -dc 0-9; }
 
 remove_unneeded() {
+  # Local, since the caller loops over task too: a global task here
+  # leaves the caller holding the last open task, whose image it then
+  # prepares again and again in place of the one it found missing.
+  local image task
   local needed=" $(open_tasks) "
   for image in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^akhatua/cooperbench-'); do
     local keep=no
@@ -93,6 +97,9 @@ while :; do
     rc=${PIPESTATUS[0]}
     log "done $task rc=$rc, $(free_gb) GB free"
     [ "$rc" = 0 ] && requeue_image_failures "$task"
+    # An image a prepare left unready (a failed pull, no overlay label)
+    # is tried again after a pause, so a lasting failure cannot spin.
+    ready "$task" || sleep 120
     continue 2
   done
   [ "$pending" = 0 ] && { log "no open item left; the image loop ends"; break; }
