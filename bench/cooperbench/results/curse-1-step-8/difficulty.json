@@ -2,7 +2,7 @@
   "format": "coordbench-difficulty/1",
   "method": {
     "solo_success": "share of the model's scored Solo runs of the pair that passed (binary with one run)",
-    "scored": "eval.json present without an error; unscored attempts are left out",
+    "scored": "eval.json present without an error and no harness error in audit.json; the rest are left out",
     "d": "1 - mean over the models that scored the pair Solo of Solo_m(t)",
     "d_tilde": "min-max rescale of d over the pairs scored here, not the paper's 652",
     "buckets": "10 equal-width buckets over [0, 1], bucket = floor(10 d~), 1.0 in the last",
@@ -223,24 +223,24 @@
           "n_solo": 3,
           "k_solo": 0,
           "n_arm": 3,
-          "k_arm": 1,
+          "k_arm": 2,
           "rate_solo": 0.0,
           "wilson_solo": [
             0.0,
             0.5615060804490177
           ],
-          "rate_arm": 0.3333333333333333,
+          "rate_arm": 0.6666666666666666,
           "wilson_arm": [
-            0.0614903152761605,
-            0.7923450448735121
+            0.2076549551264879,
+            0.9385096847238394
           ]
         }
       ],
       "summary": {
         "auc_solo": 0.44999999999999996,
-        "auc_arm": 0.5999999999999999,
-        "delta_auc": -0.1499999999999999,
-        "retention": 1.3333333333333333,
+        "auc_arm": 0.7499999999999999,
+        "delta_auc": -0.29999999999999993,
+        "retention": 1.6666666666666665,
         "limits": [
           0.05,
           0.95
@@ -383,24 +383,24 @@
           "n_solo": 3,
           "k_solo": 0,
           "n_arm": 3,
-          "k_arm": 1,
+          "k_arm": 2,
           "rate_solo": 0.0,
           "wilson_solo": [
             0.0,
             0.5615060804490177
           ],
-          "rate_arm": 0.3333333333333333,
+          "rate_arm": 0.6666666666666666,
           "wilson_arm": [
-            0.0614903152761605,
-            0.7923450448735121
+            0.2076549551264879,
+            0.9385096847238394
           ]
         }
       ],
       "summary": {
         "auc_solo": 0.44999999999999996,
-        "auc_arm": 0.5999999999999999,
-        "delta_auc": -0.1499999999999999,
-        "retention": 1.3333333333333333,
+        "auc_arm": 0.7499999999999999,
+        "delta_auc": -0.29999999999999993,
+        "retention": 1.6666666666666665,
         "limits": [
           0.05,
           0.95
@@ -703,24 +703,24 @@
           "n_solo": 3,
           "k_solo": 0,
           "n_arm": 3,
-          "k_arm": 1,
+          "k_arm": 2,
           "rate_solo": 0.0,
           "wilson_solo": [
             0.0,
             0.5615060804490177
           ],
-          "rate_arm": 0.3333333333333333,
+          "rate_arm": 0.6666666666666666,
           "wilson_arm": [
-            0.0614903152761605,
-            0.7923450448735121
+            0.2076549551264879,
+            0.9385096847238394
           ]
         }
       ],
       "summary": {
         "auc_solo": 0.44999999999999996,
-        "auc_arm": 0.5999999999999999,
-        "delta_auc": -0.1499999999999999,
-        "retention": 1.3333333333333333,
+        "auc_arm": 0.7499999999999999,
+        "delta_auc": -0.29999999999999993,
+        "retention": 1.6666666666666665,
         "limits": [
           0.05,
           0.95
@@ -863,24 +863,24 @@
           "n_solo": 3,
           "k_solo": 0,
           "n_arm": 3,
-          "k_arm": 1,
+          "k_arm": 2,
           "rate_solo": 0.0,
           "wilson_solo": [
             0.0,
             0.5615060804490177
           ],
-          "rate_arm": 0.3333333333333333,
+          "rate_arm": 0.6666666666666666,
           "wilson_arm": [
-            0.0614903152761605,
-            0.7923450448735121
+            0.2076549551264879,
+            0.9385096847238394
           ]
         }
       ],
       "summary": {
         "auc_solo": 0.44999999999999996,
-        "auc_arm": 0.5999999999999999,
-        "delta_auc": -0.1499999999999999,
-        "retention": 1.3333333333333333,
+        "auc_arm": 0.7499999999999999,
+        "delta_auc": -0.29999999999999993,
+        "retention": 1.6666666666666665,
         "limits": [
           0.05,
           0.95
@@ -1021,24 +1021,24 @@
           "n_solo": 3,
           "k_solo": 0,
           "n_arm": 3,
-          "k_arm": 1,
+          "k_arm": 2,
           "rate_solo": 0.0,
           "wilson_solo": [
             0.0,
             0.5615060804490177
           ],
-          "rate_arm": 0.3333333333333333,
+          "rate_arm": 0.6666666666666666,
           "wilson_arm": [
-            0.0614903152761605,
-            0.7923450448735121
+            0.2076549551264879,
+            0.9385096847238394
           ]
         }
       ],
       "summary": {
         "auc_solo": 0.44999999999999996,
-        "auc_arm": 0.5999999999999999,
-        "delta_auc": -0.1499999999999999,
-        "retention": 1.3333333333333333,
+        "auc_arm": 0.7499999999999999,
+        "delta_auc": -0.29999999999999993,
+        "retention": 1.6666666666666665,
         "limits": [
           0.05,
           0.95
@@ -1337,24 +1337,24 @@
           "n_solo": 3,
           "k_solo": 0,
           "n_arm": 3,
-          "k_arm": 1,
+          "k_arm": 2,
           "rate_solo": 0.0,
           "wilson_solo": [
             0.0,
             0.5615060804490177
           ],
-          "rate_arm": 0.3333333333333333,
+          "rate_arm": 0.6666666666666666,
           "wilson_arm": [
-            0.0614903152761605,
-            0.7923450448735121
+            0.2076549551264879,
+            0.9385096847238394
           ]
         }
       ],
       "summary": {
         "auc_solo": 0.44999999999999996,
-        "auc_arm": 0.5999999999999999,
-        "delta_auc": -0.1499999999999999,
-        "retention": 1.3333333333333333,
+        "auc_arm": 0.7499999999999999,
+        "delta_auc": -0.29999999999999993,
+        "retention": 1.6666666666666665,
         "limits": [
           0.05,
           0.95

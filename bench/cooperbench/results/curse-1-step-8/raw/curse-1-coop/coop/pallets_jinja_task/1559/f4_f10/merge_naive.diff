@@ -1,5 +1,5 @@
 diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
-index d21b83aa..6901b224 100644
+index d21b83aa..2a2f2727 100644
 --- a/src/jinja2/ext.py
 +++ b/src/jinja2/ext.py
 @@ -1,4 +1,5 @@
@@ -8,27 +8,18 @@ index d21b83aa..6901b224 100644
  import pprint
  import re
  import typing as t
-@@ -50,6 +51,9 @@ GETTEXT_FUNCTIONS: t.Tuple[str, ...] = (
- )
- _ws_re = re.compile(r"\s*\n\s*")
- 
-+# the parameters of a trans tag that carry translation workflow metadata
-+_TRANS_METADATA_NAMES = ("note", "created", "modified")
-+
- 
- class Extension:
-     """Extensions can be used to add extra functionality to the Jinja template
-@@ -257,6 +261,9 @@ class InternationalizationExtension(Extension):
+@@ -257,6 +258,10 @@ class InternationalizationExtension(Extension):
      def __init__(self, environment: Environment) -> None:
          super().__init__(environment)
          environment.globals["_"] = _gettext_alias
-+        # Versions of translation strings, keyed by the MD5 hash of the
-+        # message so that long or odd strings cost the same to look up.
++        # Versions are keyed by the MD5 hash of the message, so that
++        # very long messages cost no more to store or look up than short
++        # ones. Identical hashes are treated as the same message.
 +        self._translation_versions: t.Dict[str, str] = {}
          environment.extend(
              install_gettext_translations=self._install,
              install_null_translations=self._install_null,
-@@ -264,8 +271,40 @@ class InternationalizationExtension(Extension):
+@@ -264,8 +269,38 @@ class InternationalizationExtension(Extension):
              uninstall_gettext_translations=self._uninstall,
              extract_translations=self._extract,
              newstyle_gettext=False,
@@ -40,10 +31,6 @@ index d21b83aa..6901b224 100644
  
 +    @staticmethod
 +    def _version_key(message: str) -> str:
-+        """The storage key of a message: the MD5 hash of its UTF-8 text.
-+        Identical text always gives the same key, and two messages whose
-+        hashes collide are treated as the same message.
-+        """
 +        return hashlib.md5(message.encode("utf-8")).hexdigest()
 +
 +    def _set_translation_version(self, message: str, version: str) -> None:
@@ -51,48 +38,45 @@ index d21b83aa..6901b224 100644
 +        self._translation_versions[self._version_key(message)] = version
 +
 +    def _get_translation_version(self, message: str) -> t.Optional[str]:
-+        """Return the version stored for ``message``, or ``None`` if the
-+        message has no version.
-+        """
++        """Return the version stored for ``message``, or ``None``."""
 +        return self._translation_versions.get(self._version_key(message))
 +
 +    def _compare_translation_versions(self, message1: str, message2: str) -> bool:
-+        """Return ``True`` if both messages have the same version. A message
-+        with no version never matches, not even another unversioned one.
++        """Return ``True`` if both messages have the same version set.
++
++        A message with no version never compares equal, not even to
++        another message with no version.
 +        """
 +        version1 = self._get_translation_version(message1)
 +        version2 = self._get_translation_version(message2)
++
 +        if version1 is None or version2 is None:
 +            return False
++
 +        return version1 == version2
 +
      def _install(
          self, translations: "_SupportedTranslations", newstyle: t.Optional[bool] = None
      ) -> None:
-@@ -362,10 +401,15 @@ class InternationalizationExtension(Extension):
+@@ -362,9 +397,12 @@ class InternationalizationExtension(Extension):
          plural_expr: t.Optional[nodes.Expr] = None
          plural_expr_assignment: t.Optional[nodes.Assign] = None
          variables: t.Dict[str, nodes.Expr] = {}
++        # translation workflow information, kept on the node for tools; it
++        # never takes part in rendering.
 +        metadata: t.Dict[str, str] = {}
          trimmed = None
          while parser.stream.current.type != "block_end":
 -            if variables:
 +            if variables or metadata:
                  parser.stream.expect("comma")
-+            elif trimmed is not None:
-+                # a leading ``trimmed`` may be followed by a comma too, so
-+                # ``trimmed, note="..."`` reads like ``note="...", trimmed``.
-+                parser.stream.skip_if("comma")
  
              # skip colon for python compatibility
-             if parser.stream.skip_if("colon"):
-@@ -379,6 +423,18 @@ class InternationalizationExtension(Extension):
+@@ -379,12 +417,26 @@ class InternationalizationExtension(Extension):
                      exc=TemplateAssertionError,
                  )
  
-+            # translation workflow metadata, stored on the node and never
-+            # used for rendering
-+            if token.value in _TRANS_METADATA_NAMES:
++            if token.value in ("note", "created", "modified"):
 +                if token.value in metadata:
 +                    parser.fail(
 +                        f"metadata parameter {token.value!r} defined twice.",
@@ -105,7 +89,17 @@ index d21b83aa..6901b224 100644
              # expressions
              if parser.stream.current.type == "assign":
                  next(parser.stream)
-@@ -459,6 +515,7 @@ class InternationalizationExtension(Extension):
+                 variables[token.value] = var = parser.parse_expression()
+             elif trimmed is None and token.value in ("trimmed", "notrimmed"):
+                 trimmed = token.value == "trimmed"
++                # a leading flag may be followed by a comma, so that the
++                # parameters can come in any order: "trimmed, note=...".
++                if not variables and not metadata:
++                    parser.stream.skip_if("comma")
+                 continue
+             else:
+                 variables[token.value] = var = nodes.Name(token.value, "load")
+@@ -459,6 +511,7 @@ class InternationalizationExtension(Extension):
              plural_expr,
              bool(referenced),
              num_called_num and have_plural,
@@ -113,54 +107,55 @@ index d21b83aa..6901b224 100644
          )
          node.set_lineno(lineno)
          if plural_expr_assignment is not None:
-@@ -466,6 +523,38 @@ class InternationalizationExtension(Extension):
+@@ -466,6 +519,32 @@ class InternationalizationExtension(Extension):
          else:
              return node
  
 +    def _parse_metadata_value(self, parser: "Parser", name_token: "Token") -> str:
-+        """Parse the ``= "value"`` after a metadata parameter name. Only a
-+        string literal is accepted, since the value is stored as it is
-+        written and is never evaluated.
++        """Parse the ``= "string"`` that follows a metadata parameter name
++        (``note``, ``created`` or ``modified``) and return the string.
 +        """
 +        name = name_token.value
 +
 +        if parser.stream.current.type != "assign":
 +            parser.fail(
-+                f"metadata parameter {name!r} requires a value assignment.",
++                f"metadata parameter '{name}' requires a value assignment.",
 +                name_token.lineno,
 +                exc=TemplateAssertionError,
 +            )
 +
 +        next(parser.stream)
-+        value_lineno = parser.stream.current.lineno
-+        value: t.Optional[nodes.Expr] = None
++        expr = parser.parse_expression()
++        value = expr.value if isinstance(expr, nodes.Const) else None
 +
-+        # only a string token can start a literal; anything else is not
-+        # parsed, so the error names the parameter and not a stray token.
-+        if parser.stream.current.type == "string":
-+            value = parser.parse_expression()
++        if not isinstance(value, str):
++            parser.fail(
++                f"metadata parameter '{name}' must be a string literal.",
++                name_token.lineno,
++                exc=TemplateAssertionError,
++            )
 +
-+        if isinstance(value, nodes.Const) and isinstance(value.value, str):
-+            return value.value
-+
-+        parser.fail(
-+            f"metadata parameter {name!r} must be a string literal.",
-+            value_lineno,
-+            exc=TemplateAssertionError,
-+        )
++        return value
 +
      def _trim_whitespace(self, string: str, _ws_re: t.Pattern[str] = _ws_re) -> str:
          return _ws_re.sub(" ", string.strip())
  
-@@ -514,6 +603,7 @@ class InternationalizationExtension(Extension):
+@@ -514,8 +593,13 @@ class InternationalizationExtension(Extension):
          plural_expr: t.Optional[nodes.Expr],
          vars_referenced: bool,
          num_called_num: bool,
 +        metadata: t.Dict[str, str],
      ) -> nodes.Output:
-         """Generates a useful node from the data provided."""
+-        """Generates a useful node from the data provided."""
++        """Generates a useful node from the data provided.
++
++        If ``metadata`` is not empty, it is stored as ``trans_metadata`` on the
++        returned node. A node without metadata has no such attribute.
++        """
          newstyle = self.environment.newstyle_gettext  # type: ignore
-@@ -568,7 +658,15 @@ class InternationalizationExtension(Extension):
+         node: nodes.Expr
+ 
+@@ -568,7 +652,13 @@ class InternationalizationExtension(Extension):
                          ]
                      ),
                  )
@@ -168,8 +163,6 @@ index d21b83aa..6901b224 100644
 +
 +        output_node = nodes.Output([node])
 +
-+        # translation tools read the metadata from the node; a node without
-+        # metadata does not carry the attribute at all.
 +        if metadata:
 +            output_node.trans_metadata = metadata  # type: ignore[attr-defined]
 +

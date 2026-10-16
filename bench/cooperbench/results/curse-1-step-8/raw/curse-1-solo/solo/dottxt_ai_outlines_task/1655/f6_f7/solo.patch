@@ -1,39 +1,32 @@
 diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py
-index 85af9adc..61cfff7e 100644
+index 85af9adc..56781ba9 100644
 --- a/outlines/types/__init__.py
 +++ b/outlines/types/__init__.py
-@@ -68,3 +68,34 @@ email = Regex(
+@@ -68,3 +68,27 @@ email = Regex(
  isbn = Regex(
      r"(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]"
  )
 +
-+
-+# Matches HTTP and HTTPS web URLs: the scheme, an optional "user:password@",
-+# a host, an optional port, and an optional path, query and fragment.
-+#
-+# - The host is a domain name (two or more dot-separated labels of letters,
-+#   digits and inner hyphens, which also covers subdomains and dotted IPv4
-+#   addresses) or a bracketed IPv6 address. A bare name such as "localhost" is
-+#   not accepted, so that "http://example" is rejected as malformed.
-+# - The path, query and fragment are made of the characters RFC 3986 allows
-+#   without escaping, plus "%" for percent-encoding. Spaces, quotes and other
-+#   characters that need escaping are rejected, which also keeps every URL the
-+#   type generates safe to put inside a JSON string.
-+#
-+# This checks the shape of a URL, not that its host exists or that an IP
-+# address is in range. The pattern uses no lookarounds so that it can be
-+# compiled into a finite state machine for structured generation.
++# Matches HTTP and HTTPS web URLs: a scheme, a host, then an optional port,
++# path, query and fragment. The host is either a domain name (dot-separated
++# labels of letters, digits and inner hyphens, ending in a top-level domain
++# that starts with a letter, so short domains such as `a.co` match) or an IPv4
++# address whose four octets are at most 255. Neither `localhost` nor a host
++# with a user name is accepted. The path, query and fragment take any
++# character but whitespace, which keeps `?` and `#` in their own parts.
 +url = Regex(
 +    r"https?://"
-+    r"([-a-zA-Z0-9._~%!$&'()*+,;=:]+@)?"
-+    r"(([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?\.)+[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?"
-+    r"|\[[0-9a-fA-F:.]+\])"
++    r"(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]*[a-zA-Z0-9])?"
++    r"|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}"
++    r"(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))"
 +    r"(:[0-9]{1,5})?"
-+    r"([/?#][-a-zA-Z0-9._~%!$&'()*+,;=:@/?#\[\]]*)?"
++    r"(/[^\s?#]*)?"
++    r"(\?[^\s#]*)?"
++    r"(#[^\s]*)?"
 +)
 +
 +# Matches a 16-digit credit card number written as four groups of four digits.
-+# The groups are joined by nothing, by single spaces or by single hyphens, but
-+# never by a mix: "1234 5678-9012 3456" is rejected. Only the shape is checked;
-+# the number's check digit (Luhn) and its issuer are not.
-+credit_card = Regex(r"[0-9]{4}([0-9]{12}|( [0-9]{4}){3}|(-[0-9]{4}){3})")
++# The groups are either joined with no separator, with a single space between
++# each pair, or with a single hyphen between each pair; mixing separators is
++# refused. Only the format is checked, not the Luhn checksum or the issuer.
++credit_card = Regex(r"[0-9]{16}|([0-9]{4}-){3}[0-9]{4}|([0-9]{4} ){3}[0-9]{4}")

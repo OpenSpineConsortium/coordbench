@@ -1,24 +1,24 @@
 {
   "events": {
     "run_started": 1,
-    "tool": 21,
-    "message": 4,
-    "tool_done": 21,
-    "receive": 7
+    "tool": 38,
+    "tool_done": 38,
+    "receive": 10,
+    "message": 7
   },
   "tool_surface": "mcp",
-  "messages_sent": 4,
+  "messages_sent": 7,
   "messages_by_agent": {
-    "agent1": 2,
-    "agent2": 2
+    "agent1": 4,
+    "agent2": 3
   },
-  "message_chars": 1934,
-  "message_words": 241,
+  "message_chars": 3739,
+  "message_words": 495,
   "tool_calls": {
-    "broadcast": 1,
-    "peek_messages": 9,
     "list_agents": 1,
-    "receive_messages": 7,
-    "send_message": 3
+    "peek_messages": 20,
+    "receive_messages": 10,
+    "broadcast": 2,
+    "send_message": 5
   }
 }

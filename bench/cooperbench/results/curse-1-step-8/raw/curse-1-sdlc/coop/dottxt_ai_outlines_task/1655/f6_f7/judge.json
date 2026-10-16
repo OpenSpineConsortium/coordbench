@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-sdlc",
-    "run_id": "sdlc-1655-f6_f7-b754a9"
+    "run_id": "sdlc-1655-f6_f7-e92ce4"
   },
   "calls": {},
   "skipped": {},
@@ -22,9 +22,10 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "17": "Plan",
-      "27": "Plan",
-      "48": null
+      "12": "Plan",
+      "33": null,
+      "40": "Plan",
+      "55": "Update"
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
@@ -68,31 +69,41 @@
       }
     ],
     "insertion_markers": [],
-    "missing_final_status": [
-      "agent1"
-    ],
+    "missing_final_status": [],
     "git_disasters": [],
     "git_broken": [],
     "git_impatience": [
       {
         "agent": "agent1",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-1655-f6_f7-b754a9-agent1 bash -lc 'git fetch team",
-        "at": 1792062550.881,
-        "partner_first_push_at": 1792062621.662
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-1655-f6_f7-e92ce4-agent1 bash -lc 'git fetch team",
+        "at": 1792125328.553,
+        "partner_first_push_at": 1792125367.409
       },
       {
         "agent": "agent2",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-1655-f6_f7-b754a9-agent2 bash -lc 'git fetch team",
-        "at": 1792062552.459,
-        "partner_first_push_at": 1792062695.149
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-1655-f6_f7-e92ce4-agent2 bash -lc 'git fetch team",
+        "at": 1792125326.512,
+        "partner_first_push_at": 1792125516.298
+      },
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-1655-f6_f7-e92ce4-agent2 bash -lc 'git fetch team",
+        "at": 1792125377.371,
+        "partner_first_push_at": 1792125516.298
+      },
+      {
+        "agent": "agent2",
+        "command": "do docker exec -w /workspace/repo coordbench-sdlc-1655-f6_f7-e92ce4-agent2 bash -lc 'git fetch -q team",
+        "at": 1792125405.058,
+        "partner_first_push_at": 1792125516.298
       }
     ],
     "git_destructive": []
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T11:24:15+00:00",
+    "computed_at": "2026-10-16T04:55:51+00:00",
     "conversation_source": "events.jsonl",
-    "message_count": 3,
+    "message_count": 4,
     "not_computed": {
       "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
     },
@@ -114,12 +125,12 @@
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": 1792062645.49,
-        "last_message_at": 1792062615.7923696
+        "last_edit_at": 1792125489.761,
+        "last_message_at": 1792125531.7471557
       },
       "agent2": {
         "last_edit_at": null,
-        "last_message_at": 1792062651.445975
+        "last_message_at": 1792125387.5201766
       }
     },
     "git_blog_names": {

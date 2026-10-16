@@ -39,6 +39,23 @@ often as one agent does, and at what cost in time and tokens.
   batches"). By 10:05 UTC the five reruns left and coop-git on click
   2068 f6_f7 had run, every one clean by its audit, and batch-9-16
   had begun; their runs go into the full run's bundle.
+- The step's figures. ../curse-1-step-8/ is regenerated over its 40
+  clean runs, the 11 made again among them: solo passed 5 of 8, coop
+  7, sdlc 7, coop-git 6 and team 7, and no exact McNemar p on passes is
+  below 0.5. sdlc's outlines run counts as a pass once scored again:
+  its first scoring's run of feature 1's suite hit the sandbox's
+  600-second limit with no test counted, the time going to the runner's
+  download of packages, not to the tests, and `run.py rescore --force`
+  scored the same patches again from 11:43 to 11:55 UTC, starting no
+  agent; both suites passed (step 6 below makes that the rule, where
+  the time plainly went outside the tests). Its README says
+  what changed and which figures cover only the runs whose transcripts
+  the container at hand holds.
+- Batch 9-16. Its 35 runs other than typst 6554 f4_f9 ran on three
+  lanes from about 10:00 to 11:37 UTC, every one clean by its audit
+  and none with a timed-out suite; 17 passed. The typst pair was held
+  back, as typst runs need the disk to themselves, and runs alone on one
+  lane after them, from about 12:00 UTC.
 
 ## What is here
 
@@ -62,7 +79,9 @@ often as one agent does, and at what cost in time and tokens.
 - run/: the state of the full run on the container that ran it.
   - curse-1-queue.jsonl: the queue at the pause of 2026-10-16,
     09:15 UTC: 54 items done and 161 paused, the rest of the reruns
-    and of the full run.
+    and of the full run. Its item for sdlc's outlines run still holds
+    the first scoring's fail; ../curse-1-step-8/queue.jsonl holds the
+    second scoring's pass.
   - order-43.txt: the 43 gradable pairs in the nested stratified order.
   - batch-9-16.txt, batch-17-24.txt, batch-25-32.txt and
     batch-33-43.txt: the pairs of each batch, comma separated, in the
@@ -83,9 +102,12 @@ often as one agent does, and at what cost in time and tokens.
 ## Where things stand
 
 - The pilot (../curse-1-pilot/) and the step of 8 pairs
-  (../curse-1-step-8/, #19). The step ran 40 runs and reported:
+  (../curse-1-step-8/, #19). The step ran 40 runs and first reported
+  solo 5 of 8 and every two-agent arm 6 of 8, nothing significant.
+  Over its 40 clean runs (below), sdlc's outlines run scored again, it
+  reports:
   - solo passed 5 of 8;
-  - every two-agent arm passed 6 of 8;
+  - coop, sdlc and team passed 7 of 8, coop-git 6 of 8;
   - nothing was significant.
 - The audit that #21 adds found 11 of the step's 40 runs to be harness
   errors, not the arms' results:
@@ -95,15 +117,9 @@ often as one agent does, and at what cost in time and tokens.
     - coop and sdlc on jinja 1559 f4_f10;
     - solo on jinja 1621 f2_f9.
   - A respawned pair of agents: sdlc on click 2068 f5_f11.
-  - The step's figures count these 11 as results. They are to be
-    regenerated once the reruns are done.
-  - The clean runs alone give these counts, which are too uneven to
-    compare:
-    - solo 4 of 6;
-    - coop 5 of 6;
-    - sdlc 3 of 4;
-    - coop-git 5 of 6;
-    - team 6 of 7.
+  - The step's first figures counted these 11 as results. All 11 were
+    made again on 2026-10-16, each clean by its audit, and the step's
+    figures are regenerated over the 40 clean runs.
 - One run outside the step is also a harness error: solo on click 2068
   f6_f7, where the harness lost agent1.
 - The X-Blossom screen (../xblossom-screen/; the arm merged as #20) ran
@@ -165,8 +181,10 @@ On a new container:
 
 ## The next steps, in order
 
-At the pause of 2026-10-16, steps 1 to 3 and 5 are done and step 4 is
-part done; the section at the top lists what is left of it.
+By 12:00 UTC on 2026-10-16 steps 1 to 5 are done; of step 6, the full
+run, batch 9-16 is done but its typst pair, which is running, and
+batches 17-24, 25-32 and 33-43 are to come; and of step 7 the step of
+8's figures are done.
 
 Q below is ~/cooperbench/logs/curse-1-queue.jsonl, and CHECKOUT is a
 coordbench checkout at main with #21 merged.
@@ -197,12 +215,51 @@ coordbench checkout at main with #21 merged.
 6. Resume the full run batch by batch:
    - `queue.py resume Q --pairs "$(cat run/batch-9-16.txt)"`, then the
      later batches as each one ends, on about 3 lanes.
+   - Hold each batch's typst pairs back (`queue.py set Q ID
+     status=paused`, one item at a time, never `pause` while lanes run)
+     until the batch's other pairs have finished, then run them on one
+     lane: a two-agent typst run's workspaces take about 11 GB beside
+     its 10 GB image. Batch 17-24 holds two typst pairs and outlines
+     1655 f7_f10, whose image takes about 13 GB and whose evaluation 7
+     to 10 GB more: hold that pair back too, and run it alone on one
+     lane before the typst pairs.
    - After each batch, `queue.py requeue Q --harness-only` puts back any
      new harness error.
+   - After each batch, score again from its own patches, once, starting
+     no agent, a run whose scoring cut a suite off at the sandbox's 600
+     seconds with no test counted, where the time plainly went outside
+     the tests: its task's runner limits its own tests below 600
+     seconds (`timeout 300` in runner.sh; among the full run's tasks,
+     outlines 1655, dspy 8394, go_chi 26 and 56 and datasets 6252), or
+     the merge cascade's fresh run of the same patch finished that
+     suite. The second scoring counts and a second timeout keeps the
+     fail; elsewhere CooperBench's fail stands, since a patch that
+     hangs a test is cut off the same way (../curse-1-step-8/README.md
+     says why, and PARITY.md row 23 states the difference). In order:
+     - Find them with
+       `grep -l "Command timed out after" ~/cooperbench/logs/curse-1-*/*/*/*/*/eval.json`
+       and read each match's feature1 and feature2 (a match can be
+       patch text or a cascade test). Skip a run that already has
+       eval.first-scoring.json: its second scoring stands.
+     - Stop images-full.sh, let no lane run, and put the task's image
+       back if the loop removed it:
+       `COORDBENCH_SKIP_GRADEABLE=1 bash bench/cooperbench/prepare_task.sh REPO TASK`
+       (outlines 1655's image took about 5 minutes and 13 GB).
+     - `cp -p RUN_DIR/eval.json RUN_DIR/eval.first-scoring.json`, then
+       `python3 coordbench/run.py rescore --run-dir RUN_DIR --force > RUN_DIR/rescore.txt 2>&1`
+       (a .txt, since audit.py reads every *.log in a run directory but
+       scoring.log as an agent's log).
+     - Record it on the queue's item:
+       `python3 bench/cooperbench/session/queue.py set Q ID verdict=VERDICT 'rescored={"at": "...", "first_verdict": "fail", "why": "..."}'`,
+       VERDICT being the second scoring's pass or fail.
+     - Rebuild the arm's summary.json with
+       `python3 bench/cooperbench/session/audit.py RUN_DIR`, which audits
+       the run again from its transcripts and then rebuilds it.
 7. Report with the commands in bench/cooperbench/session/README.md,
    "How much to run":
    - subset.py, then report.py and summary.py on the sample;
    - bundle.py into results/;
-   - the step of 8's figures again, with the harness errors left out.
+   - the step of 8's figures again, with the harness errors left out
+     (done on 2026-10-16: ../curse-1-step-8/).
 8. After the full run, the user decides what comes next. The candidates
    are steps 4 and 5 of trial-order.md, which they have not chosen.

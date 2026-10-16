@@ -1,60 +1,78 @@
-{"seq": 0, "t": 0.0, "kind": "run_started", "agent": null, "epoch": 1792061152.290171, "iso": "2026-10-15T10:45:52.290171+00:00", "arm": "sdlc", "agents": [{"id": "agent1", "role": "peer", "features": [4]}, {"id": "agent2", "role": "peer", "features": [10]}], "tool_surface": "mcp"}
-{"seq": 1, "t": 18.262, "kind": "tool", "agent": "agent1", "tool": "board", "via": "shell"}
-{"seq": 2, "t": 18.688, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
-{"seq": 3, "t": 19.149, "kind": "tool_done", "agent": "agent1", "tool": "board", "duration_ms": 886.564, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 4, "t": 19.227, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 538.873, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 5, "t": 23.936, "kind": "tool", "agent": "agent1", "tool": "claim_issue", "via": "shell"}
-{"seq": 6, "t": 23.936, "kind": "claim", "agent": "agent1", "issue": 4}
-{"seq": 7, "t": 23.936, "kind": "tool_done", "agent": "agent1", "tool": "claim_issue", "duration_ms": 0.053, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 8, "t": 27.114, "kind": "tool", "agent": "agent2", "tool": "claim_issue", "via": "shell"}
-{"seq": 9, "t": 27.114, "kind": "claim", "agent": "agent2", "issue": 10}
-{"seq": 10, "t": 27.114, "kind": "tool_done", "agent": "agent2", "tool": "claim_issue", "duration_ms": 0.066, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 11, "t": 27.219, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"}
-{"seq": 12, "t": 27.219, "kind": "receive", "agent": "agent2", "count": 0, "message_ids": [], "call_id": 11}
-{"seq": 13, "t": 27.219, "kind": "tool_done", "agent": "agent2", "tool": "receive_messages", "duration_ms": 0.07, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 14, "t": 33.74, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"}
-{"seq": 15, "t": 33.74, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 743, "content": "agent2 (issue #10) here. I touch only src/jinja2/ext.py: (1) 'import hashlib' in the import block at the top, (2) a '_translation_versions' attribute and three extra entries (set/get/compare_translation_versions, translation_version_control=True) in the environment.extend() call inside InternationalizationExtension.__init__, (3) three new methods placed right after _extract/before the module-level helpers... actually directly after __init__. I do not touch parse(), _parse_block, _make_node or the trans tag handling, so those are yours (#4). To keep the merge simple, please leave __init__ alone, or if you must add to it, add your lines AFTER the environment.extend(...) call. I will mark ready soon; whoever lands second merges main in.", "timestamp": 1792061186.0301847, "timestamp_iso": "2026-10-15T10:46:26.030188", "message_id": 15, "send_id": 14}
-{"seq": 16, "t": 33.74, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 0.094, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 17, "t": 57.397, "kind": "tool", "agent": "agent1", "tool": "receive_messages", "via": "shell"}
-{"seq": 18, "t": 57.397, "kind": "receive", "agent": "agent1", "count": 1, "message_ids": [15], "call_id": 17}
-{"seq": 19, "t": 57.398, "kind": "tool_done", "agent": "agent1", "tool": "receive_messages", "duration_ms": 0.084, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 20, "t": 57.582, "kind": "tool", "agent": "agent1", "tool": "list_agents", "via": "shell"}
-{"seq": 21, "t": 57.582, "kind": "tool_done", "agent": "agent1", "tool": "list_agents", "duration_ms": 0.012, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 22, "t": 57.708, "kind": "tool", "agent": "agent1", "tool": "board", "via": "shell"}
-{"seq": 23, "t": 57.778, "kind": "tool_done", "agent": "agent1", "tool": "board", "duration_ms": 70.485, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 24, "t": 62.248, "kind": "tool", "agent": "agent2", "tool": "open_pull_request", "via": "shell"}
-{"seq": 25, "t": 62.37, "kind": "pr_opened", "agent": "agent2", "issue": 10}
-{"seq": 26, "t": 62.37, "kind": "tool_done", "agent": "agent2", "tool": "open_pull_request", "duration_ms": 122.314, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 27, "t": 62.498, "kind": "tool", "agent": "agent2", "tool": "pull_request_status", "via": "shell"}
-{"seq": 28, "t": 62.575, "kind": "tool_done", "agent": "agent2", "tool": "pull_request_status", "duration_ms": 76.429, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 29, "t": 62.692, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"}
-{"seq": 30, "t": 62.692, "kind": "receive", "agent": "agent2", "count": 0, "message_ids": [], "call_id": 29}
-{"seq": 31, "t": 62.692, "kind": "tool_done", "agent": "agent2", "tool": "receive_messages", "duration_ms": 0.033, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 32, "t": 65.124, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "shell"}
-{"seq": 33, "t": 65.124, "kind": "message", "agent": "agent1", "to": "agent2", "chars": 478, "content": "agent1 (#4): agreed. I touch only src/jinja2/ext.py inside InternationalizationExtension.parse() (new 'metadata' dict, a branch for note/created/modified in the parameter loop, the comma check) and _make_node() (new last parameter 'metadata', sets output_node.trans_metadata). I leave __init__, imports and your methods alone. Plus tests in tests/test_ext.py appended at the end of TestInternationalization (I will not commit tests to the patch). I expect to mark ready shortly.", "timestamp": 1792061217.4144807, "timestamp_iso": "2026-10-15T10:46:57.414482", "message_id": 33, "send_id": 32}
-{"seq": 34, "t": 65.124, "kind": "tool_done", "agent": "agent1", "tool": "send_message", "duration_ms": 0.079, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 35, "t": 67.053, "kind": "tool", "agent": "agent2", "tool": "mark_ready", "via": "shell"}
-{"seq": 36, "t": 67.153, "kind": "ready", "agent": "agent2", "issue": 10}
-{"seq": 37, "t": 67.154, "kind": "merge_attempt", "agent": "agent2", "issue": 10, "branch_commit": "75070f49f5e76094686541e644502c961051ba7f", "main_before": "896a62135bcc151f2997e028c5125bec2cb2431f"}
-{"seq": 38, "t": 67.363, "kind": "merge", "agent": "agent2", "issue": 10, "commit": "c0a0736af40fcb1929cecc86f6e7ba63c0913e70"}
-{"seq": 39, "t": 67.363, "kind": "tool_done", "agent": "agent2", "tool": "mark_ready", "duration_ms": 309.055, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 40, "t": 67.521, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
-{"seq": 41, "t": 67.585, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 63.611, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 42, "t": 67.708, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"}
-{"seq": 43, "t": 67.708, "kind": "receive", "agent": "agent2", "count": 1, "message_ids": [33], "call_id": 42}
-{"seq": 44, "t": 67.708, "kind": "tool_done", "agent": "agent2", "tool": "receive_messages", "duration_ms": 0.087, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 45, "t": 75.482, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"}
-{"seq": 46, "t": 75.483, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 281, "content": "agent2: #10 is merged into main as c0a0736. When you mark #4 ready and main moved, merge team/main into claude/4 (my edits are in __init__ and right after it, yours in parse/_make_node, so it should be clean). I am waiting for your merge to build my patch from the integrated main.", "timestamp": 1792061227.7726595, "timestamp_iso": "2026-10-15T10:47:07.772661", "message_id": 46, "send_id": 45}
-{"seq": 47, "t": 75.483, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 0.074, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 48, "t": 77.744, "kind": "tool", "agent": "agent2", "tool": "wait_for_message", "via": "shell"}
-{"seq": 49, "t": 121.971, "kind": "tool", "agent": "agent1", "tool": "open_pull_request", "via": "shell"}
-{"seq": 50, "t": 122.085, "kind": "pr_opened", "agent": "agent1", "issue": 4}
-{"seq": 51, "t": 122.085, "kind": "tool_done", "agent": "agent1", "tool": "open_pull_request", "duration_ms": 114.688, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 52, "t": 126.815, "kind": "tool", "agent": "agent1", "tool": "pull_request_status", "via": "shell"}
-{"seq": 53, "t": 126.926, "kind": "tool_done", "agent": "agent1", "tool": "pull_request_status", "duration_ms": 111.166, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 54, "t": 127.062, "kind": "tool", "agent": "agent1", "tool": "mark_ready", "via": "shell"}
-{"seq": 55, "t": 127.221, "kind": "ready", "agent": "agent1", "issue": 4}
-{"seq": 56, "t": 127.221, "kind": "merge_attempt", "agent": "agent1", "issue": 4, "branch_commit": "8d177db9c031292eddc78a9dd648567ef7461db4", "main_before": "c0a0736af40fcb1929cecc86f6e7ba63c0913e70"}
-{"seq": 57, "t": 127.434, "kind": "merge", "agent": "agent1", "issue": 4, "commit": "ad2abea74cc269db190db9a220fe4a34733d23d1"}
-{"seq": 58, "t": 127.434, "kind": "tool_done", "agent": "agent1", "tool": "mark_ready", "duration_ms": 371.99, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
-{"seq": 59, "t": 317.745, "kind": "tool_done", "agent": "agent2", "tool": "wait_for_message", "duration_ms": 240000.372, "blocked_ms": 240000.314, "is_error": false, "cancelled": false}
+{"seq": 0, "t": 0.0, "kind": "run_started", "agent": null, "epoch": 1792143657.7860422, "iso": "2026-10-16T09:40:57.786042+00:00", "arm": "sdlc", "agents": [{"id": "agent1", "role": "peer", "features": [4]}, {"id": "agent2", "role": "peer", "features": [10]}], "tool_surface": "mcp"}
+{"seq": 1, "t": 21.553, "kind": "tool", "agent": "agent1", "tool": "board", "via": "shell"}
+{"seq": 2, "t": 22.492, "kind": "tool_done", "agent": "agent1", "tool": "board", "duration_ms": 938.985, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 3, "t": 27.78, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 4, "t": 27.841, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 60.37, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 5, "t": 32.388, "kind": "tool", "agent": "agent2", "tool": "claim_issue", "via": "shell"}
+{"seq": 6, "t": 32.389, "kind": "claim", "agent": "agent2", "issue": 10}
+{"seq": 7, "t": 32.389, "kind": "tool_done", "agent": "agent2", "tool": "claim_issue", "duration_ms": 0.051, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 8, "t": 32.501, "kind": "tool", "agent": "agent2", "tool": "list_agents", "via": "shell"}
+{"seq": 9, "t": 32.501, "kind": "tool_done", "agent": "agent2", "tool": "list_agents", "duration_ms": 0.006, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 10, "t": 32.601, "kind": "tool", "agent": "agent2", "tool": "peek_messages", "via": "shell"}
+{"seq": 11, "t": 32.601, "kind": "tool_done", "agent": "agent2", "tool": "peek_messages", "duration_ms": 0.009, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 12, "t": 33.028, "kind": "tool", "agent": "agent1", "tool": "claim_issue", "via": "shell"}
+{"seq": 13, "t": 33.028, "kind": "claim", "agent": "agent1", "issue": 4}
+{"seq": 14, "t": 33.028, "kind": "tool_done", "agent": "agent1", "tool": "claim_issue", "duration_ms": 0.067, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 15, "t": 49.754, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"}
+{"seq": 16, "t": 49.754, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 679, "content": "agent2 (issue #10, translation version control) here. I touch only src/jinja2/ext.py: one 'import hashlib' at the top, in InternationalizationExtension.__init__ a new self._translation_versions dict and a SECOND environment.extend(...) call placed right AFTER the existing extend(...) block, plus three new methods (_set_translation_version, _get_translation_version, _compare_translation_versions) placed right after _uninstall, before _extract. I do not touch parse()/_parse_block/_make_node or the trans tag. If you add things in __init__, please put them before the existing extend(...) block or inside it, so our hunks do not collide. Tell me which parts of ext.py you edit.", "timestamp": 1792143707.5398738, "timestamp_iso": "2026-10-16T09:41:47.539876", "message_id": 16, "send_id": 15}
+{"seq": 17, "t": 49.754, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 0.077, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 18, "t": 76.168, "kind": "tool", "agent": "agent1", "tool": "receive_messages", "via": "shell"}
+{"seq": 19, "t": 76.168, "kind": "receive", "agent": "agent1", "count": 1, "message_ids": [16], "call_id": 18}
+{"seq": 20, "t": 76.169, "kind": "tool_done", "agent": "agent1", "tool": "receive_messages", "duration_ms": 0.071, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 21, "t": 96.882, "kind": "tool", "agent": "agent2", "tool": "open_pull_request", "via": "shell"}
+{"seq": 22, "t": 96.992, "kind": "pr_opened", "agent": "agent2", "issue": 10}
+{"seq": 23, "t": 96.992, "kind": "tool_done", "agent": "agent2", "tool": "open_pull_request", "duration_ms": 109.869, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 24, "t": 97.125, "kind": "tool", "agent": "agent2", "tool": "peek_messages", "via": "shell"}
+{"seq": 25, "t": 97.125, "kind": "tool_done", "agent": "agent2", "tool": "peek_messages", "duration_ms": 0.01, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 26, "t": 102.957, "kind": "tool", "agent": "agent2", "tool": "pull_request_status", "via": "shell"}
+{"seq": 27, "t": 103.026, "kind": "tool_done", "agent": "agent2", "tool": "pull_request_status", "duration_ms": 68.742, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 28, "t": 103.145, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 29, "t": 103.215, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 70.813, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 30, "t": 109.446, "kind": "tool", "agent": "agent2", "tool": "mark_ready", "via": "shell"}
+{"seq": 31, "t": 109.517, "kind": "ready", "agent": "agent2", "issue": 10}
+{"seq": 32, "t": 109.517, "kind": "merge_attempt", "agent": "agent2", "issue": 10, "branch_commit": "c3e04412072815175997d235c186cce9eda9ddf0", "main_before": "896a62135bcc151f2997e028c5125bec2cb2431f"}
+{"seq": 33, "t": 109.682, "kind": "merge", "agent": "agent2", "issue": 10, "commit": "56aba2fd5587028fa23b888f797b29b273260cc2"}
+{"seq": 34, "t": 109.682, "kind": "tool_done", "agent": "agent2", "tool": "mark_ready", "duration_ms": 235.108, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 35, "t": 109.815, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"}
+{"seq": 36, "t": 109.815, "kind": "receive", "agent": "agent2", "count": 0, "message_ids": [], "call_id": 35}
+{"seq": 37, "t": 109.815, "kind": "tool_done", "agent": "agent2", "tool": "receive_messages", "duration_ms": 0.05, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 38, "t": 112.22, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "shell"}
+{"seq": 39, "t": 112.22, "kind": "message", "agent": "agent1", "to": "agent2", "chars": 425, "content": "agent1 (issue #4, trans metadata) here. Agreed. In src/jinja2/ext.py I edit only InternationalizationExtension.parse() (the while-loop that reads trans parameters, plus the _make_node call at its end) and _make_node() (one new last parameter 'metadata' and its return). No imports, no __init__, no class attributes, nothing near _uninstall/_extract. If you ever need to change the _make_node call or signature, tell me first.", "timestamp": 1792143770.006352, "timestamp_iso": "2026-10-16T09:42:50.006354", "message_id": 39, "send_id": 38}
+{"seq": 40, "t": 112.22, "kind": "tool_done", "agent": "agent1", "tool": "send_message", "duration_ms": 0.075, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 41, "t": 115.094, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 42, "t": 115.155, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 60.925, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 43, "t": 123.862, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"}
+{"seq": 44, "t": 123.862, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 391, "content": "agent2: #10 is merged into team/main as 56aba2f (ext.py only: import hashlib, _translation_versions + second extend() in InternationalizationExtension.__init__, three methods between _uninstall and _extract). Before sdlc-ready 4, run git fetch team && git merge team/main; the hunks should not collide if your edits are in parse/_make_node. I am done with ext.py and will not touch it again.", "timestamp": 1792143781.648256, "timestamp_iso": "2026-10-16T09:43:01.648257", "message_id": 44, "send_id": 43}
+{"seq": 45, "t": 123.862, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 0.047, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 46, "t": 128.926, "kind": "tool", "agent": "agent2", "tool": "wait_for_message", "via": "shell"}
+{"seq": 47, "t": 128.926, "kind": "receive", "agent": "agent2", "count": 1, "message_ids": [39], "call_id": 46}
+{"seq": 48, "t": 128.926, "kind": "tool_done", "agent": "agent2", "tool": "wait_for_message", "duration_ms": 0.095, "blocked_ms": 0.014, "is_error": false, "cancelled": false}
+{"seq": 49, "t": 129.04, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 50, "t": 129.101, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 60.997, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 51, "t": 134.744, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 52, "t": 134.801, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 57.071, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 53, "t": 159.927, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 54, "t": 159.991, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 63.937, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 55, "t": 185.125, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 56, "t": 185.195, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 69.447, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 57, "t": 203.648, "kind": "tool", "agent": "agent1", "tool": "open_pull_request", "via": "shell"}
+{"seq": 58, "t": 203.758, "kind": "pr_opened", "agent": "agent1", "issue": 4}
+{"seq": 59, "t": 203.758, "kind": "tool_done", "agent": "agent1", "tool": "open_pull_request", "duration_ms": 109.26, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 60, "t": 207.892, "kind": "tool", "agent": "agent1", "tool": "receive_messages", "via": "shell"}
+{"seq": 61, "t": 207.892, "kind": "receive", "agent": "agent1", "count": 1, "message_ids": [44], "call_id": 60}
+{"seq": 62, "t": 207.893, "kind": "tool_done", "agent": "agent1", "tool": "receive_messages", "duration_ms": 0.072, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 63, "t": 208.008, "kind": "tool", "agent": "agent1", "tool": "pull_request_status", "via": "shell"}
+{"seq": 64, "t": 208.089, "kind": "tool_done", "agent": "agent1", "tool": "pull_request_status", "duration_ms": 80.961, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 65, "t": 208.203, "kind": "tool", "agent": "agent1", "tool": "board", "via": "shell"}
+{"seq": 66, "t": 208.275, "kind": "tool_done", "agent": "agent1", "tool": "board", "duration_ms": 71.313, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 67, "t": 210.338, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 68, "t": 210.414, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 76.297, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 69, "t": 220.258, "kind": "tool", "agent": "agent1", "tool": "mark_ready", "via": "shell"}
+{"seq": 70, "t": 220.394, "kind": "ready", "agent": "agent1", "issue": 4}
+{"seq": 71, "t": 220.394, "kind": "merge_attempt", "agent": "agent1", "issue": 4, "branch_commit": "2b22ed1c7b190e3fd7438cfc66ac6db4f846e347", "main_before": "56aba2fd5587028fa23b888f797b29b273260cc2"}
+{"seq": 72, "t": 220.57, "kind": "merge", "agent": "agent1", "issue": 4, "commit": "1a4294ef36f852a9cdefa2874a60b7c21f501903"}
+{"seq": 73, "t": 220.57, "kind": "tool_done", "agent": "agent1", "tool": "mark_ready", "duration_ms": 311.718, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 74, "t": 235.512, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 75, "t": 235.574, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 62.085, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 76, "t": 235.67, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 77, "t": 235.728, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 57.339, "blocked_ms": 0.0, "is_error": false, "cancelled": false}

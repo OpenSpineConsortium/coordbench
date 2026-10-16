@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-sdlc",
-    "run_id": "sdlc-2068-f5_f11-a96d43"
+    "run_id": "sdlc-2068-f5_f11-4fb562"
   },
   "calls": {},
   "skipped": {},
@@ -22,14 +22,32 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "17": "Plan",
-      "23": "Plan",
-      "32": null
+      "15": "Plan",
+      "20": null,
+      "42": null
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
     "contradictions": [],
     "overlapping_hunks": [
+      {
+        "file": "src/click/_termui_impl.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            8,
+            13
+          ],
+          [
+            8,
+            13
+          ]
+        ],
+        "same_heading": "from __future__ import annotations"
+      },
       {
         "file": "src/click/_termui_impl.py",
         "agents": [
@@ -159,34 +177,34 @@
     ],
     "insertion_markers": [],
     "missing_final_status": [
-      "agent1"
+      "agent2"
     ],
     "git_disasters": [],
     "git_broken": [],
     "git_impatience": [
       {
         "agent": "agent1",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-2068-f5_f11-a96d43-agent1 bash -lc 'git fetch team 2>&1",
-        "at": 1792061532.167,
-        "partner_first_push_at": null
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-2068-f5_f11-4fb562-agent1 bash -lc 'git fetch team",
+        "at": 1792140465.922,
+        "partner_first_push_at": 1792140622.447
       },
       {
         "agent": "agent1",
-        "command": "git fetch team",
-        "at": 1792061616.111,
-        "partner_first_push_at": null
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-2068-f5_f11-4fb562-agent1 bash -lc 'git fetch team 2>&1",
+        "at": 1792140595.75,
+        "partner_first_push_at": 1792140622.447
       },
       {
         "agent": "agent2",
-        "command": "git fetch team 2>&1",
-        "at": 1792061529.772,
-        "partner_first_push_at": null
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-2068-f5_f11-4fb562-agent2 bash -lc 'git fetch team",
+        "at": 1792140467.346,
+        "partner_first_push_at": 1792140556.362
       }
     ],
     "git_destructive": []
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T12:16:24+00:00",
+    "computed_at": "2026-10-16T08:56:01+00:00",
     "conversation_source": "events.jsonl",
     "message_count": 3,
     "not_computed": {
@@ -210,12 +228,12 @@
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": 1792061616.111,
-        "last_message_at": 1792060885.3017588
+        "last_edit_at": 1792140536.684,
+        "last_message_at": 1792140597.9661813
       },
       "agent2": {
-        "last_edit_at": null,
-        "last_message_at": 1792060777.1059632
+        "last_edit_at": 1792140670.121,
+        "last_message_at": 1792140518.3081324
       }
     },
     "git_blog_names": {

@@ -1,11 +1,11 @@
 {
   "events": {
     "run_started": 1,
-    "tool": 21,
-    "tool_done": 21,
+    "tool": 30,
+    "tool_done": 30,
     "claim": 2,
-    "receive": 4,
     "message": 3,
+    "receive": 4,
     "pr_opened": 2,
     "ready": 2,
     "merge_attempt": 2,
@@ -17,14 +17,15 @@
     "agent2": 2,
     "agent1": 1
   },
-  "message_chars": 1502,
-  "message_words": 214,
+  "message_chars": 1495,
+  "message_words": 205,
   "tool_calls": {
-    "board": 4,
+    "board": 12,
     "claim_issue": 2,
-    "receive_messages": 4,
-    "send_message": 3,
     "list_agents": 1,
+    "peek_messages": 2,
+    "send_message": 3,
+    "receive_messages": 3,
     "open_pull_request": 2,
     "pull_request_status": 2,
     "mark_ready": 2,
@@ -35,5 +36,5 @@
   "merge_attempts": 2,
   "merges": 2,
   "merge_conflicts": 0,
-  "time_to_first_merge_seconds": 67.363
+  "time_to_first_merge_seconds": 109.682
 }

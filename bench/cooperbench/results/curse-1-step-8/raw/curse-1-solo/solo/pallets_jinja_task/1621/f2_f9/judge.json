@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-solo",
-    "run_id": "solo-1621-f2_f9-0ef055"
+    "run_id": "solo-1621-f2_f9-5df2eb"
   },
   "calls": {},
   "skipped": {},
@@ -31,7 +31,7 @@
     ]
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T12:39:44+00:00",
+    "computed_at": "2026-10-16T09:52:31+00:00",
     "conversation_source": "events.jsonl",
     "message_count": 0,
     "not_computed": {
@@ -51,7 +51,7 @@
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": 1792067937.701,
+        "last_edit_at": 1792144317.15,
         "last_message_at": null
       }
     },

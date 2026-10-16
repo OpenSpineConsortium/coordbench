@@ -1,25 +1,25 @@
 {
   "run_name": "curse-1-coop-git",
-  "completed_at": "2026-10-15T17:15:58.013914",
+  "completed_at": "2026-10-16T10:28:01.269626",
   "pass_rate": 0.75,
   "total_tasks": 8,
   "completed": 8,
   "skipped": 0,
   "failed": 0,
   "total_cost": null,
-  "total_time_seconds": 20527.71536,
+  "total_time_seconds": 83980.579129,
   "results": [
     {
       "task": "dottxt_ai_outlines_task/1655/6,7",
       "status": "done",
       "cost": null,
-      "eval": "fail"
+      "eval": "pass"
     },
     {
       "task": "go_chi_task/56/1,5",
       "status": "done",
       "cost": null,
-      "eval": "pass"
+      "eval": "fail"
     },
     {
       "task": "huggingface_datasets_task/6252/4,6",
@@ -69,8 +69,8 @@
   },
   "pass_rate_over_evaluated": 0.75,
   "run_totals": {
-    "wall_time": 20527.71536,
-    "run_time": 2861.632258,
+    "wall_time": 83980.579129,
+    "run_time": 2755.698083,
     "total_cost": 0.0,
     "task_count": 8
   },
@@ -81,7 +81,8 @@
   "total_time_source": "run_totals wall_time",
   "claude_code": {
     "claude_code_versions": [
-      "2.1.300"
+      "2.1.300",
+      "2.1.301"
     ],
     "models": [
       "claude-sonnet-5-5"

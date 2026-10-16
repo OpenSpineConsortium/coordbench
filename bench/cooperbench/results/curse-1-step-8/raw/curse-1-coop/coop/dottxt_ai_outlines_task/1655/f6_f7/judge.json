@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-coop",
-    "run_id": "coop-1655-f6_f7-171517"
+    "run_id": "coop-1655-f6_f7-11c6bd"
   },
   "calls": {},
   "skipped": {},
@@ -22,27 +22,26 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "2": "Question",
-      "7": "Plan",
+      "2": "Plan",
+      "8": "Plan",
       "16": null,
-      "19": "Answer",
-      "27": null,
-      "39": "Update"
+      "22": "Update"
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
     "contradictions": [],
     "overlapping_hunks": [],
     "insertion_markers": [],
-    "clean_merge_failed": true
+    "clean_merge_failed": false,
+    "missing_final_status": [
+      "agent1"
+    ]
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T11:14:47+00:00",
+    "computed_at": "2026-10-16T04:34:38+00:00",
     "conversation_source": "events.jsonl",
-    "message_count": 6,
-    "not_computed": {
-      "missing_final_status": "no transcript with timed edits, or no message text"
-    },
+    "message_count": 4,
+    "not_computed": {},
     "definitions": {
       "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
       "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
@@ -53,16 +52,17 @@
       "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
       "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
       "insertion_markers": "App D: added comment lines marking where another agent inserts code",
-      "clean_merge_failed": "Divergent architecture signal: a clean naive merge whose tests fail"
+      "clean_merge_failed": "Divergent architecture signal: a clean naive merge whose tests fail",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it"
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": null,
-        "last_message_at": 1792062519.173993
+        "last_edit_at": 1792124437.3,
+        "last_message_at": 1792124360.0606925
       },
       "agent2": {
         "last_edit_at": null,
-        "last_message_at": 1792062419.2340515
+        "last_message_at": 1792124427.7023652
       }
     },
     "git_blog_names": null

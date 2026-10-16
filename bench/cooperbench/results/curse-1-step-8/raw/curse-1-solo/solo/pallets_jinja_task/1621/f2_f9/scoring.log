@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_jinja_task/1621/f2_f9", "verdict": "pass"}
+coordbench run: solo-1621-f2_f9-5df2eb: timings: hub 0.1 s, run_create 0.0 s, provision 2.6 s, agents 392 s, close 0.0 s, score 22 s, teardown 0.3 s
+coordbench run: summary: 12 completed, 0 skipped, 0 failed; evals: 12 evaluated, 8 passed, 4 failed, 0 errors (66.7%); cost: unknown

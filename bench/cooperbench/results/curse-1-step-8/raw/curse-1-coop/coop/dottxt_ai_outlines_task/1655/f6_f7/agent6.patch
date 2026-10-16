@@ -1,32 +1,25 @@
 diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py
-index 85af9adc..29b3fcfa 100644
+index 85af9adc..efd30200 100644
 --- a/outlines/types/__init__.py
 +++ b/outlines/types/__init__.py
-@@ -59,6 +59,29 @@ email = Regex(
+@@ -59,6 +59,22 @@ email = Regex(
      r"""(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])"""
  )
  
-+# Matches web URLs that use the http or https scheme, in the form
-+# scheme://[userinfo@]host[:port][/path][?query][#fragment]. The host is a
-+# domain name with at least one dot and an alphabetic top-level domain (so
-+# short ones like a.co work and a bare "example" does not), an IPv4 address
-+# with octets up to 255, a bracketed IPv6 address, or localhost. Path, query
-+# and fragment accept any character but whitespace, quotes, angle brackets and
-+# backslashes, which cannot appear in a URL and would break a JSON string.
++# Matches HTTP and HTTPS web URLs: the scheme, a host (an IPv4 address or a
++# domain name, `localhost` included), an optional port of up to five digits,
++# then an optional path, query string and fragment, which run on to the first
++# whitespace. Domain labels start and end with a letter or digit and may hold
++# hyphens inside; the last label must start with a letter, so that a made-up
++# address such as 999.999.999.999 is not read as a domain name.
++# It does not check that the host exists or that the port is in range.
++_url_ipv4_octet = r"(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
++_url_label = r"[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?"
++_url_last_label = r"[a-zA-Z]([a-zA-Z0-9-]*[a-zA-Z0-9])?"
 +url = Regex(
-+    r"https?://"
-+    r"(?:[a-zA-Z0-9._~%!$&'()*+,;=-]+(?::[a-zA-Z0-9._~%!$&'()*+,;=:-]*)?@)?"
-+    r"(?:"
-+    r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9]"
-+    r"|(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}"
-+    r"(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
-+    r"|\[(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\]"
-+    r"|localhost"
-+    r")"
-+    r"(?::[0-9]{1,5})?"
-+    r'(?:/[^\s"<>\\?#]*)?'
-+    r'(?:\?[^\s"<>\\#]*)?'
-+    r'(?:#[^\s"<>\\]*)?'
++    rf"https?://({_url_ipv4_octet}(\.{_url_ipv4_octet}){{3}}|({_url_label}\.)*{_url_last_label})"
++    r"(:[0-9]{1,5})?"
++    r"([/?#][^\s]*)?"
 +)
 +
  # Matches any ISBN number. Note that this is not completely correct as not all

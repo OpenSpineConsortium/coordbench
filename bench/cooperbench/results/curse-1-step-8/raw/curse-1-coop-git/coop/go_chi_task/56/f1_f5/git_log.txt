@@ -1,43 +1,20 @@
-commit 4c2c98a69a63d729586f78e8509cbbc733d170b6 (agent2)
-Merge: 2d41679 2f95a96
+commit b5f93b18e61d36b27017cb451f1f719ddd14705e (agent2, agent1)
 Author: agent2 <agent@cooperbench.local>
-Date:   Thu Oct 15 12:40:17 2026 +0000
-
-    Merge remote-tracking branch 'team/agent1' into agent2
-
-commit 2f95a968d922fee5c990461fed2669cc06ae79b9 (agent1)
-Merge: 13406bd ece2acb
-Author: agent1 <agent@cooperbench.local>
-Date:   Thu Oct 15 12:39:29 2026 +0000
-
-    Merge remote-tracking branch 'team/agent2' into agent1
-
-commit 2d4167980ab2caa2c1d3a98d45bbb753d60c63e7
-Merge: ece2acb 13406bd
-Author: agent2 <agent@cooperbench.local>
-Date:   Thu Oct 15 12:39:06 2026 +0000
-
-    Merge remote-tracking branch 'team/agent1' into agent2
-
-commit ece2acba79f573747a405b47ea4101637a6c6226
-Author: agent2 <agent@cooperbench.local>
-Date:   Thu Oct 15 12:39:02 2026 +0000
+Date:   Fri Oct 16 09:57:11 2026 +0000
 
     Add built-in CORS support
 
- cors.go | 243 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- mux.go  |  49 +++++++++++++
- tree.go |  30 ++++++++
- 3 files changed, 322 insertions(+)
+ cors.go | 270 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 270 insertions(+)
 
-commit 13406bd429db8faac35e7dad30ad5e855c0d3ed9
+commit 8e87bad455daf8405d0c272a2d32fd81286228c7
 Author: agent1 <agent@cooperbench.local>
-Date:   Thu Oct 15 12:36:25 2026 +0000
+Date:   Fri Oct 16 09:55:48 2026 +0000
 
-    Add Allow header on 405 responses (core + middleware)
+    Add Allow header on 405 responses (core + middleware.SetAllowHeader)
 
- context.go                    |  6 ++++
- middleware/allowed_methods.go | 74 +++++++++++++++++++++++++++++++++++++++++++
- mux.go                        | 58 ++++++++++++++++++++++++++++-----
- tree.go                       | 33 +++++++++++++++++--
- 4 files changed, 161 insertions(+), 10 deletions(-)
+ context.go                    | 21 ++++++++++++++
+ middleware/allowed_methods.go | 67 +++++++++++++++++++++++++++++++++++++++++++
+ mux.go                        | 29 +++++++++++++------
+ tree.go                       | 32 +++++++++++++++++++++
+ 4 files changed, 141 insertions(+), 8 deletions(-)

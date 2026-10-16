@@ -18,6 +18,7 @@ size_of() {
   case "$1" in
     typst_task:*) echo 11 ;;
     huggingface_datasets_task:*) echo 14 ;;
+    dottxt_ai_outlines_task:*) echo 13 ;;
     *) echo 3 ;;
   esac
 }
