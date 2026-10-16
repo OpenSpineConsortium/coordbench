@@ -6,7 +6,7 @@ one in bench/cooperbench/PLAN.md: does Symphony's claim protocol (the
 sdlc arm) let two Claude Code agents finish CooperBench's task pairs as
 often as one agent does, and at what cost in time and tokens.
 
-## 2026-10-16: the reruns, paused for the grant
+## 2026-10-16: the reruns, and a pause for the grant
 
 - The effort. Every agent of the pilot, the step and the screen ran at
   effort xhigh, inherited from the orchestrating session; this day's
@@ -30,10 +30,12 @@ often as one agent does, and at what cost in time and tokens.
   grant is submitted (03:59 UTC on 2026-10-17), to leave the account's
   five-hour window to it. The runs in flight were finished and the
   rest of the queue paused: run/curse-1-queue.jsonl is the queue at
-  the pause, 54 items done and 161 paused. The session resumes at
-  04:05 UTC on 2026-10-17 with the rest of the reruns, then the step's
-  figures with the harness errors left out, then the four batches back
-  to back, as the owner chose at 00:56 UTC ("All batches").
+  the pause, 54 items done and 161 paused. At 09:37 UTC the owner
+  wrote "Just continue", and the bench ran again from about 09:41 UTC,
+  after a restart of the container: the rest of the reruns, then the
+  step's figures with the harness errors left out, then the four
+  batches back to back, as the owner chose at 00:56 UTC ("All
+  batches").
 
 ## What is here
 
