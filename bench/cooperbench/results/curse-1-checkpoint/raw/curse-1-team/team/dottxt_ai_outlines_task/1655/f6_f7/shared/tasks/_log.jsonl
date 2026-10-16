@@ -1,0 +1,6 @@
+{"kind": "create", "task_id": "d1aea9a90a", "by": "bench-runner", "title": "Implement feature 7", "ts": 1792127247.9651074}
+{"kind": "create", "task_id": "79aed688fd", "by": "bench-runner", "title": "Lead-only: integrate and submit feature 6", "ts": 1792127247.9651544}
+{"kind": "claim", "task_id": "d1aea9a90a", "by": "agent2", "ts": 1792127305.0694351}
+{"kind": "update", "task_id": "d1aea9a90a", "by": "agent2", "status": "done", "note": "patch at /workspace/shared/agent2.patch", "ts": 1792127344.5495124}
+{"kind": "claim", "task_id": "79aed688fd", "by": "agent1", "ts": 1792127371.37919}
+{"kind": "update", "task_id": "79aed688fd", "by": "agent1", "status": "in_progress", "note": "implementing url type", "ts": 1792127371.4861436}

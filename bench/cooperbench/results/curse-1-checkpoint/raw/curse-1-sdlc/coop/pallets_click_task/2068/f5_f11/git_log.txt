@@ -1,0 +1,65 @@
+commit ead2b480ee7148e8c0fb1ef703e79158accd1c41 (claude/11)
+Merge: 7962dfb c01c8ad
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 08:51:24 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/11
+    
+    # Conflicts:
+    #       src/click/_termui_impl.py
+    #       src/click/termui.py
+
+commit 16f386209d7b11330f90c3a3b0cd8082ac10a152 (main)
+Merge: c01c8ad ead2b48
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 08:51:24 2026 +0000
+
+    Merge claude/11: closes #11
+
+commit 7962dfb806567f00f3ed067e82df3b822bc4975f
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 08:50:25 2026 +0000
+
+    Add editor process monitoring to click.edit
+    
+    A new monitor_process parameter takes a callback, or a configuration
+    object holding the callback and a polling interval. A background thread
+    reports start, suspend, resume and terminate events with the process id,
+    the editor command and a timestamp while the caller keeps blocking on the
+    editor. A callback that raises causes a UserWarning and monitoring goes
+    on.
+
+ src/click/_termui_impl.py | 162 +++++++++++++++++++++++++++++++++++++++++++++-
+ src/click/termui.py       |  30 ++++++++-
+ 2 files changed, 190 insertions(+), 2 deletions(-)
+
+commit c01c8add6918ce8a3c9336aa6cdc44ddd36868d7
+Merge: d791537 3e2068f
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 08:49:52 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit 3e2068f0136f958b8439f8f10cc714cb4aeacd17 (claude/5)
+Author: agent1 <agent1@example.com>
+Date:   Fri Oct 16 08:49:47 2026 +0000
+
+    Keep edit_file small: lock before the try, remove in its finally
+
+ src/click/_termui_impl.py | 48 ++++++++++++++++++-----------------------------
+ 1 file changed, 18 insertions(+), 30 deletions(-)
+
+commit 36ff6485109a3790291b9f938558a5d45d086e0e
+Author: agent1 <agent1@example.com>
+Date:   Fri Oct 16 08:49:18 2026 +0000
+
+    Add lock_files to click.edit to prevent concurrent edits
+    
+    With lock_files=True, Editor.edit_file creates .NAME.lock next to the
+    file with O_CREAT|O_EXCL before the editor opens, holding the PID and
+    the time, and removes it afterwards however the editor ends. An existing
+    lock makes the edit fail with a ClickException.
+
+ src/click/_termui_impl.py | 98 ++++++++++++++++++++++++++++++++++++++++++-----
+ src/click/termui.py       | 20 +++++++++-
+ 2 files changed, 107 insertions(+), 11 deletions(-)

@@ -1,0 +1,39 @@
+diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py
+index 85af9adc..6810beac 100644
+--- a/outlines/types/__init__.py
++++ b/outlines/types/__init__.py
+@@ -68,3 +68,34 @@ email = Regex(
+ isbn = Regex(
+     r"(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]"
+ )
++
++# Matches HTTP and HTTPS web URLs: the scheme, a host, then an optional port,
++# path, query string and fragment. The host is `localhost`, an IPv4 address
++# (each octet 0-255) or a domain name of dot-separated labels (letters, digits
++# and inner hyphens) whose last label starts with a letter, so that `a.co` and
++# `sub.example.com` match while `example`, `.com` and `1.2.3` do not. The rest
++# of the URL is any run of characters but whitespace, so a URL with a space in
++# it never matches. The pattern uses no lookaround, so it can drive generation.
++url = Regex(
++    r"https?://"
++    r"(?:localhost"
++    r"|(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}"
++    r"(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
++    r"|(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+"
++    r"[a-zA-Z](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)"
++    r"(?::[0-9]{1,5})?"
++    r"(?:/[^\s?#]*)?"
++    r"(?:\?[^\s#]*)?"
++    r"(?:#[^\s]*)?"
++)
++
++# Matches a 16-digit credit card number written either with no separators, with
++# single spaces between the four groups of four digits, or with single hyphens
++# between them. The separator must be the same throughout: "1234 5678-9012 3456"
++# does not match. The three forms are spelled out as alternatives rather than
++# written with a backreference to the first separator, since backreferences
++# cannot be compiled to the finite-state machine used for structured generation.
++#
++# Only the format is checked, not the Luhn check digit, so not every match is a
++# real card number.
++credit_card = Regex(r"([0-9]{16}|[0-9]{4}( [0-9]{4}){3}|[0-9]{4}(-[0-9]{4}){3})")

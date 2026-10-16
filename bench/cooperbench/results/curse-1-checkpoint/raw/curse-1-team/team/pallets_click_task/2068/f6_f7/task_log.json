@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "create",
+    "task_id": "0b58573d21",
+    "by": "bench-runner",
+    "title": "Implement feature 7",
+    "ts": 1792140791.153672
+  },
+  {
+    "kind": "create",
+    "task_id": "14f66dcae5",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 6",
+    "ts": 1792140791.153733
+  },
+  {
+    "kind": "claim",
+    "task_id": "0b58573d21",
+    "by": "agent2",
+    "ts": 1792140817.404465
+  },
+  {
+    "kind": "claim",
+    "task_id": "14f66dcae5",
+    "by": "agent1",
+    "ts": 1792140824.2277339
+  },
+  {
+    "kind": "update",
+    "task_id": "14f66dcae5",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing process_priority in Editor + edit()",
+    "ts": 1792140824.3361635
+  },
+  {
+    "kind": "update",
+    "task_id": "0b58573d21",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792140926.9069495
+  },
+  {
+    "kind": "update",
+    "task_id": "14f66dcae5",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch (escape_shell) with process_priority; full test suite passes; patch.txt written",
+    "ts": 1792140979.9918776
+  }
+]

@@ -1,0 +1,50 @@
+commit 5bb0c46904c792c31e773f53abb6aea47394e280 (main)
+Merge: f71c0ee 5811110
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 08:49:53 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 581111035be1daea2b74b31fb24052d8b38f1b47 (claude/6)
+Merge: 3301482 f71c0ee
+Author: agent1 <agent1@coordbench.local>
+Date:   Fri Oct 16 08:49:49 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/6
+    
+    # Conflicts:
+    #       src/click/_termui_impl.py
+    #       src/click/termui.py
+
+commit 33014827873b82a0bffd2295ed11ce10ad2df3ae
+Author: agent1 <agent1@coordbench.local>
+Date:   Fri Oct 16 08:49:12 2026 +0000
+
+    Add process_priority to click.edit and Editor
+    
+    The editor can be started at a lower or higher CPU priority: low,
+    below_normal, normal, above_normal or high. Unix sets a nice value on
+    the started process, Windows passes a priority class at creation. An
+    unknown name is dropped and a refused or unsupported request is
+    ignored, so the editor always runs. The default, None, changes nothing.
+
+ src/click/_termui_impl.py | 55 ++++++++++++++++++++++++++++++++++++++++++++++-
+ src/click/termui.py       | 21 +++++++++++++++++-
+ 2 files changed, 74 insertions(+), 2 deletions(-)
+
+commit f71c0ee24c62d13983f685bd7a37072199e1d8aa
+Merge: d791537 0509eb2
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 08:48:56 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit 0509eb21352c413c66c031d45d3d0ee7c355146b (claude/7)
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 08:48:48 2026 +0000
+
+    Add escape_shell option to click.edit
+
+ src/click/_termui_impl.py | 27 ++++++++++++++++++++++++++-
+ src/click/termui.py       | 18 +++++++++++++++++-
+ 2 files changed, 43 insertions(+), 2 deletions(-)

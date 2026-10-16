@@ -1,0 +1,36 @@
+{
+  "agents": {
+    "agent1": {
+      "calls": 19,
+      "first_context": 71426,
+      "efforts": [
+        "xhigh"
+      ],
+      "refusals": 0,
+      "refusal_examples": [],
+      "disk_full": 0,
+      "transcript_copied": true,
+      "transcript_whole": true,
+      "attempts": 1,
+      "headless_transcripts": 0
+    },
+    "agent2": {
+      "calls": 19,
+      "first_context": 71426,
+      "efforts": [
+        "xhigh"
+      ],
+      "refusals": 1,
+      "refusal_examples": [
+        "Blocked: sleep 45 followed by: /root/cooperbench/logs/curse-1-coop/coop/pallets_click_task/2068/f6_f7/bin/agent2/coop-recv. To wait for a condition, use Monitor"
+      ],
+      "disk_full": 0,
+      "transcript_copied": true,
+      "transcript_whole": true,
+      "attempts": 1,
+      "headless_transcripts": 0
+    }
+  },
+  "disk_full_log_lines": 0,
+  "harness_error": null
+}
