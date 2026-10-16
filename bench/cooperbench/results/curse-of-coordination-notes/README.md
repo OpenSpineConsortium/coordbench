@@ -41,9 +41,19 @@ often as one agent does, and at what cost in time and tokens.
   had begun; their runs go into the full run's bundle.
 - The step's figures. ../curse-1-step-8/ is regenerated over its 40
   clean runs, the 11 made again among them: solo passed 5 of 8, coop
-  7, sdlc 6, coop-git 6 and team 7, and no exact McNemar p is below
-  0.5. Its README says what changed and which figures cover only the
-  runs whose transcripts the container at hand holds.
+  7, sdlc 7, coop-git 6 and team 7, and no exact McNemar p on passes is
+  below 0.5. sdlc's outlines run counts as a pass once scored again:
+  its first scoring's run of feature 1's suite hit the sandbox's
+  600-second limit with no test counted, and `run.py rescore --force`
+  scored the same patches again at 11:43 UTC, starting no agent; both
+  suites passed (step 6 below makes that the rule). Its README says
+  what changed and which figures cover only the runs whose transcripts
+  the container at hand holds.
+- Batch 9-16. Its 35 runs other than typst 6554 f4_f9 ran on three
+  lanes from about 10:00 to 11:37 UTC, every one clean by its audit
+  and none with a timed-out suite; 17 passed. The typst pair was held
+  back, as typst runs need the disk to themselves, and runs alone on one
+  lane after them, from about 12:00 UTC.
 
 ## What is here
 
@@ -90,9 +100,10 @@ often as one agent does, and at what cost in time and tokens.
 - The pilot (../curse-1-pilot/) and the step of 8 pairs
   (../curse-1-step-8/, #19). The step ran 40 runs and first reported
   solo 5 of 8 and every two-agent arm 6 of 8, nothing significant.
-  Over its 40 clean runs (below) it reports:
+  Over its 40 clean runs (below), sdlc's outlines run scored again, it
+  reports:
   - solo passed 5 of 8;
-  - coop and team passed 7 of 8, sdlc and coop-git 6 of 8;
+  - coop, sdlc and team passed 7 of 8, coop-git 6 of 8;
   - nothing was significant.
 - The audit that #21 adds found 11 of the step's 40 runs to be harness
   errors, not the arms' results:
@@ -166,8 +177,10 @@ On a new container:
 
 ## The next steps, in order
 
-By 10:45 UTC on 2026-10-16 steps 1 to 5 are done, step 6, the full
-run, is under way, and of step 7 the step of 8's figures are done.
+By 12:00 UTC on 2026-10-16 steps 1 to 5 are done; of step 6, the full
+run, batch 9-16 is done but its typst pair, which is running, and
+batches 17-24, 25-32 and 33-43 are to come; and of step 7 the step of
+8's figures are done.
 
 Q below is ~/cooperbench/logs/curse-1-queue.jsonl, and CHECKOUT is a
 coordbench checkout at main with #21 merged.
@@ -198,8 +211,28 @@ coordbench checkout at main with #21 merged.
 6. Resume the full run batch by batch:
    - `queue.py resume Q --pairs "$(cat run/batch-9-16.txt)"`, then the
      later batches as each one ends, on about 3 lanes.
+   - Hold each batch's typst pairs back (`queue.py set Q ID
+     status=paused`, one item at a time, never `pause` while lanes run)
+     until the batch's other pairs have finished, then run them on one
+     lane: a two-agent typst run's workspaces take about 11 GB beside
+     its 10 GB image. Batch 17-24 holds two typst pairs and outlines
+     1655 f7_f10, whose image takes about 13 GB and whose evaluation 7
+     to 10 GB more.
    - After each batch, `queue.py requeue Q --harness-only` puts back any
      new harness error.
+   - After each batch, a run whose scoring cut a suite off at the
+     sandbox's 600 seconds with no test counted is scored again from its
+     own patches, starting no agent, and the second scoring counts (a
+     second timeout keeps the fail; ../curse-1-step-8/README.md says
+     why). Find them with
+     `grep -l "Command timed out after" ~/cooperbench/logs/curse-1-*/*/*/*/*/eval.json`,
+     read each match's feature1 and feature2 (a match can be patch text
+     or a cascade test), and for each such run copy eval.json to
+     eval.first-scoring.json, run
+     `python3 coordbench/run.py rescore --run-dir RUN_DIR --force > RUN_DIR/rescore.txt 2>&1`
+     with its task image present and no lane running, record it on the
+     queue's item, and rebuild the arm's summary.json (audit.py's
+     refresh_summary).
 7. Report with the commands in bench/cooperbench/session/README.md,
    "How much to run":
    - subset.py, then report.py and summary.py on the sample;

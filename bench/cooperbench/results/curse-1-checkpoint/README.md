@@ -41,8 +41,7 @@ on click 2068 f6_f7's result.json gives 1006 seconds (duration_seconds),
 of which its agent took 185 (agents_seconds), since its finish waited
 out the account's session limit from 08:58 to 09:12 UTC; the other nine
 runs' wall times exceed their agents' by 12 to 44 seconds. A wall-time
-figure takes that run's agents' own time, as the step's README does for
-click 2068 f5_f11.
+figure takes that run's agents' own time.
 
 Three more runs started that day and are not here, since their audits
 call them harness errors (the harness lost both agents) and the queue

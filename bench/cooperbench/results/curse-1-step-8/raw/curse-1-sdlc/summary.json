@@ -1,7 +1,7 @@
 {
   "run_name": "curse-1-sdlc",
-  "completed_at": "2026-10-16T10:28:01.281643",
-  "pass_rate": 0.75,
+  "completed_at": "2026-10-16T11:56:43.684955",
+  "pass_rate": 0.875,
   "total_tasks": 8,
   "completed": 8,
   "skipped": 0,
@@ -13,7 +13,7 @@
       "task": "dottxt_ai_outlines_task/1655/6,7",
       "status": "done",
       "cost": null,
-      "eval": "fail"
+      "eval": "pass"
     },
     {
       "task": "go_chi_task/56/1,5",
@@ -61,13 +61,13 @@
   "infrastructure_errors": 0,
   "eval": {
     "total_evaluated": 8,
-    "passed": 6,
-    "failed": 2,
+    "passed": 7,
+    "failed": 1,
     "errors": 0,
     "skipped": 0,
-    "pass_rate": 0.75
+    "pass_rate": 0.875
   },
-  "pass_rate_over_evaluated": 0.75,
+  "pass_rate_over_evaluated": 0.875,
   "run_totals": {
     "wall_time": 83170.759125,
     "run_time": 3868.3413380000006,

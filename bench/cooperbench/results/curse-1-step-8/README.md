@@ -3,10 +3,13 @@
 Regenerated on 2026-10-16. The audit that #21 adds found 11 of the
 step's first 40 runs to be harness errors, ten of them a full disk and
 one a respawned pair of agents. Each was made again on 2026-10-16 and is
-clean by its audit, and every figure below is over the 40 clean runs:
-the 29 first runs the audit passed and the 11 made again. The first
-version of this directory, whose figures counted the 11 as the arms'
-results, is in the repository's history (#19, with #21's audits).
+clean by its audit, and one of them, sdlc's on the outlines pair, was
+scored again from its own patches, since its first scoring's run of one
+test suite timed out with no test counted (What happened on the way,
+below). Every figure below is over the 40 clean runs, the 29 first runs
+the audit passed and the 11 made again, unless it names another set.
+The first version of this directory, whose figures counted the 11 as the
+arms' results, is in the repository's history (#19, with #21's audits).
 ../curse-of-coordination-notes/README.md says how the runs were made
 again.
 
@@ -54,8 +57,8 @@ pilot's README offered (8, 16 or all 43 pairs).
   shared git remote), team (the authors' lead, task list and scratchpad
   harness). Every agent claude-sonnet-5-5 at effort xhigh (each run's
   audit.json lists its agents' efforts), through Claude Code 2.1.300,
-  and 2.1.301 for the runs made again (result.json records it for the
-  two-agent runs), on CooperBench 63b9d44 with its one patch (dataset
+  and 2.1.301 for the runs made again (each run's result.json records
+  it), on CooperBench 63b9d44 with its one patch (dataset
   tree 9c9e5802e0); WebFetch and WebSearch off; 45 minutes per agent;
   one seed. The sdlc arm's protocol is symphony-protocol main at
   c7f0d84, the pilot's, for every run, kept although F18 (0536cc3) and
@@ -69,11 +72,13 @@ pilot's README offered (8, 16 or all 43 pairs).
   and it is in the pilot's directory too. The other four arms of that
   pair were pilot runs its restart had cut, run again at 10:38 UTC;
   sdlc's, whose agents were spawned twice, is one of the 11 made again.
-  Those 11 ran from main as it stood on 2026-10-16 (each result.json's
-  provenance): c433d48 (#21) for solo and coop on the outlines pair,
-  with #22's effort knob in lane.js not yet committed; 2b93164 (#22's
-  head) for four; and 219645d (#23) for five, coop-git on go_chi 56 with
-  #25's relay prompts not yet committed. Between 43c2e3d and these the
+  Those 11 ran from the commits each result.json's provenance names:
+  c433d48, main with #21, for solo and coop on the outlines pair, with
+  #22's effort knob in lane.js not yet committed (and, for coop,
+  session/README.md too); 2b93164, #22's head, which merged as a491803
+  with the same tree, for four; and 219645d (#23) for five, coop-git on
+  go_chi 56 with #25's relay prompts not yet committed. Between 43c2e3d
+  and these the
   harness changed how a run is finished, audited and given disk room;
   the bench agents' prompt is the same.
 - The route is the session route (bench/cooperbench/session/README.md),
@@ -165,13 +170,36 @@ that day kept to be harness errors too, and they were made again on
   since it had filled the disk under all five; coop and sdlc on jinja
   1559 f4_f10, solo on jinja 1621 f2_f9, and sdlc and coop-git on go_chi
   56 f1_f5, all five cut by a full disk; and sdlc on click 2068 f5_f11,
-  whose agents were spawned twice. Two attempts on the outlines pair
-  were set aside on the way, both at effort max, the orchestrating
+  whose agents were spawned twice. Three attempts were set aside on the
+  way. Two were on the outlines pair at effort max, the orchestrating
   session's, before lane.js could name the bench agents' effort (#22):
-  solo's, which passed, and coop's, whose agents the harness lost. Both
-  were made again at xhigh, the effort of every other run, and solo's
-  run at xhigh failed, so solo's figures below count that pair as a
-  fail. ../curse-1-checkpoint/README.md lists that day's runs.
+  solo's, begun at 23:55 UTC on 2026-10-15, which passed, and coop's,
+  whose agents the harness lost. Both were made again at xhigh, the
+  effort of every other run, and solo's run at xhigh failed, so solo's
+  figures below count that pair as a fail. The third, coop's on jinja
+  1559 f4_f10 at 08:57 UTC, at xhigh, lost both agents when the
+  account's session limit cut it, and was made again from 09:40.
+  ../curse-1-checkpoint/README.md lists that day's runs up to the
+  08:58 UTC pause.
+- sdlc's run on the outlines pair, one of the 11, was scored a second
+  time. Its first scoring, at 04:52 UTC, failed it without a test
+  result: test_merged's run of feature 1's suite hit the sandbox's
+  600-second limit and counted no test (exit code -1, 0 passed, 0
+  failed), while feature 2's 84 tests passed. The merge cascade's
+  fresh runs of each agent's patch alone passed both suites, 100 and 84
+  tests, and the two agents had submitted identical patches, so the
+  patch the verdict is read from had passed in a fresh sandbox twice;
+  the other four arms' runs of the same suite took 4 to 7 seconds by
+  pytest's count. A suite cut off by the clock measured the sandbox, not
+  the patch, as a scoring on a full disk does, so at 11:43 UTC the run
+  was scored again from its own patches with `run.py rescore --force`,
+  which starts no agent: both suites passed, feature 1's 100 tests in
+  5.7 seconds, and the run counts as a pass. A second
+  timeout would have kept the fail. CooperBench counts a timed-out suite
+  as failed; PARITY.md (row 23) states the difference. The first
+  scoring is kept beside the run as eval.first-scoring.json, the
+  rescore's output as rescore.txt, and the queue's item records it. No
+  other suite has timed out in any curse-1 run made so far.
 
 ## The result
 
@@ -184,35 +212,35 @@ the latency, token and cost side; pairs.csv one row per (pair, arm).
 Pass is eval.json's both_passed under CooperBench 63b9d44: the merged
 patch passes both features' hidden tests or, where the merge conflicts,
 the lead's (agent1's) patch alone does. The lead-alone case decided 5
-of the 26 two-agent passes (team on outlines 1655, datasets 6252, click
+of the 27 two-agent passes (team on outlines 1655, datasets 6252, click
 2068 and typst; coop-git on typst).
 
 | arm | pairs | passed | rate | 95% Wilson |
 |---|---|---|---|---|
 | solo | 8 | 5 | 62.5% | 31-86% |
 | coop | 8 | 7 | 87.5% | 53-98% |
-| sdlc | 8 | 6 | 75.0% | 41-93% |
+| sdlc | 8 | 7 | 87.5% | 53-98% |
 | coop-git | 8 | 6 | 75.0% | 41-93% |
 | team | 8 | 7 | 87.5% | 53-98% |
 
 Every pair under every arm (report.md, Every pair): pillow 68 fails
 under all five arms; datasets 6252, click 2068 f5_f11, jinja 1559,
 jinja 1621 and typst 6554 pass under all five; two pairs separate them.
-outlines 1655 failed under solo and sdlc and passed under coop,
-coop-git and team (team's on the lead's patch alone); go_chi 56 failed
-under solo and coop-git and passed under coop, sdlc and team. No pair
-that solo passed failed under a two-agent arm, so the coordination gap
-of the paper (solo minus the arm) is -25 points for coop and team and
--12.5 for sdlc and coop-git, where the paper's Claude had +21: on these
-pairs two agents did not pass less often than one. Under the paper
-era's rule, which scored its Claude rows (naive merge, union, resolver,
-with no lead-alone fallback), team passes 6 of 8 and the other arms are
+outlines 1655 failed under solo and passed under the four two-agent
+arms (team's on the lead's patch alone); go_chi 56 failed under solo
+and coop-git and passed under coop, sdlc and team. No pair that solo
+passed failed under a two-agent arm, so the coordination gap of the
+paper (solo minus the arm) is -25 points for coop, sdlc and team and
+-12.5 for coop-git, where the paper's Claude had +21: on these pairs two
+agents did not pass less often than one. Under the paper era's rule,
+which scored its Claude rows (naive merge, union, resolver, with no
+lead-alone fallback), team passes 6 of 8 and the other arms are
 unchanged (report.md, Merge cascade). The paired tests cannot tell any
-two arms apart at this size (no exact McNemar p is below 0.5). On the
-seven of these pairs the paper's published Claude coop runs cover, they
-passed 2 (datasets 6252 and jinja 1559); ours passed 6 under coop, p =
-0.125, and 5 under sdlc, p = 0.25 (report.md, Against CooperBench's
-published runs).
+two arms apart at this size (no exact McNemar p on passes is below
+0.5). On the seven of these pairs the paper's published Claude coop
+runs cover, they passed 2 (datasets 6252 and jinja 1559); ours passed 6
+under coop and 6 under sdlc, p = 0.125 each (report.md, Against
+CooperBench's published runs).
 
 ### What the protocol did
 
@@ -251,11 +279,12 @@ eight pairs. The share of an arm's tool calls spent sending needs the
 agents' transcripts, which stayed on the container that made the first
 runs, so this version gives it only over the runs made again (report.md,
 Pairs with a transcript): coop 14.8% over 2 pairs, coop-git 16.9% over
-2, sdlc 7.3% over 4 and team 6.7% over 1, too few to compare. Over all
-40 first attempts, the 11 harness errors among them, the first version
-gave coop 17.6%, coop-git 12.5%, team 10.0% and sdlc 8.8%. These count
-message sends only: sdlc's agents also made about 13 protocol calls per
-pair (board, claim, pull request, status, ready) and team's about 11
+2, sdlc 7.3% over 4 and team 6.7% over 1, too few to compare. Over the
+32 two-agent first attempts, 9 of the 11 harness errors among them, the
+first version gave coop 17.6%, coop-git 12.5%, team 10.0% and sdlc
+8.8%. These count message sends only: sdlc's agents also made about
+13.5 protocol calls per pair (board, claim, pull request, status,
+ready) and team's about 11
 task-board calls, which the percentages do not count as coordination.
 
 ### Latency, tokens and cost
@@ -269,11 +298,11 @@ since nothing was billed:
 
 | arm | wall seconds per pair (median) | agent seconds, summed (median) | tokens per pair (mean) | cost per pair (mean) | cost per passing pair | messages per pair |
 |---|---|---|---|---|---|---|
-| solo | 219 | 195 | 1.59 M | $0.67 | $1.07 | 0 |
+| solo | 219 | 194 | 1.59 M | $0.67 | $1.07 | 0 |
 | coop | 266 | 356 | 3.11 M | $1.26 | $1.44 | 5.8 |
-| sdlc | 407 | 662 | 4.23 M | $1.49 | $1.99 | 3.9 |
+| sdlc | 407 | 662 | 4.23 M | $1.49 | $1.70 | 3.9 |
 | coop-git | 308 | 525 | 4.25 M | $1.49 | $1.98 | 6.2 |
-| team | 263 | 443 | 3.85 M | $1.40 | $1.60 | 3.9 |
+| team | 263 | 442 | 3.85 M | $1.40 | $1.60 | 3.9 |
 
 By the ratio of the arms' medians over the same eight pairs
 (summary.md's paired table), every two-agent arm took 1.7 to 2.6 times
@@ -287,16 +316,17 @@ prompt, below) and 1.2 times the cost (1.17 by medians, 1.18 by means).
 coop-git and team took 1.16 and 0.99 of coop's wall time for 1.50 and
 1.24 times its tokens.
 
-Where sdlc's extra time went: not into the protocol's calls, about 13
-per pair, 101 of the 108 back within a second (the slowest, a board
-call, took 7.8 seconds). Nearly a third of sdlc's agent time, 1,951 of
-6,374 agent-seconds, was spent blocked in wait_for_message, which the
-coop and coop-git arms do not offer (team's agents spent 426 of 4,094
-there), much of it after both pull requests had merged: on go_chi 56
-the second merge came at 627 seconds, and one agent then waited in
-wait_for_message from 672 to 972 seconds and ended at 1,014, its peer
-having ended at 638. sdlc's agents wait on each other under the arm's
-rule to submit the integrated main.
+Where sdlc's extra time went: not into the protocol's calls, 108 in
+all, about 13.5 per pair, 101 of them back within a second (the
+slowest, a board call, took 7.8 seconds). Nearly a third of sdlc's
+agent time, 1,951 of 6,374 agent-seconds, was spent blocked in
+wait_for_message, which the coop and coop-git arms do not offer (team's
+agents spent 426 of 4,094 there), much of it after both pull requests
+had merged: on go_chi 56, by the hub's clock, the second merge came at
+627 seconds, and one agent then waited in wait_for_message from 672 to
+972 seconds and ended at 1,019, its peer having ended at 644. sdlc's
+agents wait on each other under the arm's rule to submit the integrated
+main.
 
 The first runs' wall times were taken with four runs sharing four
 CPUs, image builds and two disk fills, while the typst runs ran alone;
@@ -319,8 +349,9 @@ take the fixed prompt out.
   solo results are unpublished (report.md, Difficulty), so this step
   cannot say which of these, if any, accounts for the paper's gap. With
   no curse to remove, it cannot show the protocol removing one.
-- The protocol arm passed 6 of 8, as coop-git did, one pair fewer than
-  coop and team: the outlines pair, which solo failed too. Every pull
+- The protocol arm passed 7 of 8, as coop and team did, failing only
+  pillow 68, which every arm failed; its outlines run counts as a pass
+  once scored again (above). Every pull
   request merged at its first attempt, and its agents sent the fewest
   messages, with team's. Its cost was latency, 1.5 times coop's wall
   time, mostly its agents waiting for each other, and 1.4 times coop's
@@ -329,7 +360,7 @@ take the fixed prompt out.
   merges never conflicted on these pairs, and sdlc's agents submitted
   the integrated main. A larger sample may hold pairs where coop
   conflicts.
-- Two agents cost about twice one agent's tokens under every
+- Two agents cost 1.7 to 2.7 times one agent's tokens under every
   coordination setting, because each agent re-reads its whole context
   on every turn: 95 to 96 percent of every arm's input is a prompt-cache
   read. In this route that context opens with the orchestrating
@@ -337,14 +368,16 @@ take the fixed prompt out.
   track its agents' turns, and the absolute figures are this route's,
   not a standalone agent's: the 52 agents of the first runs read 78,492
   to 81,683 tokens before any work, and the 20 of the runs made again,
-  orchestrated by another session, 71,028 to 72,203; that much again on
-  every later call is 74 to 79 percent of each arm's tokens and, at
-  cache-read prices, 36 to 44 percent of its dollars. The two agents of
-  a pair print only 6 to 25 percent of the same lines, by overlap.py over
-  34 two-agent first attempts before the audit
+  orchestrated by another session, 71,028 to 72,203; that much on every
+  call, the first included, is 74 to 79 percent of each arm's tokens
+  and, at cache-read prices, 36 to 44 percent of its dollars. The two
+  agents of a pair print only 6 to 25 percent of the same lines, by
+  overlap.py over 34 two-agent runs of the step's tasks before the
+  audit, the pilot's among them
   (../curse-of-coordination-notes/xblossom-README.md); it reads the
   transcripts, so it is not run again here.
-- The same code and the same queue grow the run: the owner chose the
+- The same queue grows the run, on the harness of the runs made again
+  (219645d and later): the owner chose the
   full run on 2026-10-15, the other 35 gradable pairs under the five
   arms, and it goes on in four batches of the same nested stratified
   order (../curse-of-coordination-notes/run/batch-*.txt), each released
@@ -362,16 +395,19 @@ take the fixed prompt out.
 - report.md: report.py's output over the step's 40 clean runs, every
   section.
 - summary.md, summary.json, pairs.csv: summary.py's latency, token and
-  cost side, per arm and per pair.
+  cost side, per arm and per pair; their tool-call figures need the
+  transcripts, so they cover only the runs made again.
 - strata.md: strata.py's table of the 50 flash pairs with their strata
   and the published results, and the step's draw.
 - difficulty.json: the difficulty curves' data.
 - queue.jsonl: the step's 40 items as the queue held them on 2026-10-16,
-  all done, the 11 made again among them (subset.py writes the sample's
-  lines; the tag's queue also holds the pilot's items and the full run).
+  all done, the 11 made again among them, sdlc's outlines item with its
+  second scoring recorded (subset.py writes the sample's lines; the
+  tag's queue also holds the pilot's items and the full run).
 - raw/: for each counted run, result.json, eval.json, metrics.json,
   judge.json, harness.json, events.jsonl, audit.json, the agents'
-  messages and patches, and for the runs made again scoring.log, as
+  messages and patches, for the runs made again scoring.log, and for
+  sdlc's outlines run eval.first-scoring.json and rescore.txt, as
   bundle.py copies them, held to the repository's plain-text rule (two
   patches of sdlc's typst run, agent5.patch and agent9.patch, are not
   plain text and were left out); raw/*/config.json are the run

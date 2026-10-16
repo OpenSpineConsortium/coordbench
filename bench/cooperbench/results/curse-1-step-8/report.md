@@ -8,7 +8,7 @@ Passed is eval.json's both_passed, CooperBench 63b9d44's verdict. A pair whose m
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | solo | curse-1-solo | claude-sonnet-5-5 | solo | session | solo | 8 | 8/652 | 63b9d44d9f | 9c9e5802e0 | advisory | 0 | 62.5% | 1670.3 |
 | coop | curse-1-coop | claude-sonnet-5-5 | coop | session | coop | 8 | 8/652 | 63b9d44d9f | 9c9e5802e0 | advisory | 0 | 87.5% | 1386.3 |
-| sdlc | curse-1-sdlc | claude-sonnet-5-5 | sdlc | session | coop | 8 | 8/652 | 63b9d44d9f | 9c9e5802e0 | advisory | 0 | 75.0% | 1386.2 |
+| sdlc | curse-1-sdlc | claude-sonnet-5-5 | sdlc | session | coop | 8 | 8/652 | 63b9d44d9f | 9c9e5802e0 | advisory | 0 | 87.5% | 1386.2 |
 | coop-git | curse-1-coop-git | claude-sonnet-5-5 | coop-git | session | coop | 8 | 8/652 | 63b9d44d9f | 9c9e5802e0 | advisory | 0 | 75.0% | 1399.7 |
 | team | curse-1-team | claude-sonnet-5-5 | team | session | team | 8 | 8/652 | 63b9d44d9f | 9c9e5802e0 | advisory | 0 | 87.5% | 1112.4 |
 
@@ -20,7 +20,7 @@ Of the benchmark counts the run's pairs among subsets/all.json's; the commit and
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | solo | claude-sonnet-5-5 | 8 | 5 | 62.5% | 30.6-86.3% | 25.0-87.5% | 5/8 | 62.5% | 30.6-86.3% | 0 | 24/50 |
 | coop | claude-sonnet-5-5 | 8 | 7 | 87.5% | 52.9-97.8% | 62.5-100.0% | 7/8 | 87.5% | 52.9-97.8% | 0 | 13/50 |
-| sdlc | claude-sonnet-5-5 | 8 | 6 | 75.0% | 40.9-92.9% | 37.5-100.0% | 6/8 | 75.0% | 40.9-92.9% | 0 | - |
+| sdlc | claude-sonnet-5-5 | 8 | 7 | 87.5% | 52.9-97.8% | 62.5-100.0% | 7/8 | 87.5% | 52.9-97.8% | 0 | - |
 | coop-git | claude-sonnet-5-5 | 8 | 6 | 75.0% | 40.9-92.9% | 37.5-100.0% | 6/8 | 75.0% | 40.9-92.9% | 0 | 28/50 |
 | team | claude-sonnet-5-5 | 8 | 7 | 87.5% | 52.9-97.8% | 62.5-100.0% | 7/8 | 87.5% | 52.9-97.8% | 0 | 31/50 |
 
@@ -34,7 +34,7 @@ Paper, Fig 4 Left and Table 5 (k/652): Solo claude 47.1% (307), gpt-5 48.3% (315
 | --- | --- | --- | --- | --- |
 | solo | claude-sonnet-5-5 | 62.5% | 62.5% | 62.5% |
 | coop | claude-sonnet-5-5 | 87.5% | 87.5% | 87.5% |
-| sdlc | claude-sonnet-5-5 | 75.0% | 75.0% | 75.0% |
+| sdlc | claude-sonnet-5-5 | 87.5% | 87.5% | 87.5% |
 | coop-git | claude-sonnet-5-5 | 75.0% | 75.0% | 75.0% |
 | team | claude-sonnet-5-5 | 87.5% | 87.5% | 87.5% |
 
@@ -57,14 +57,14 @@ Tokens per pair is over the pairs whose four counts are all known for every agen
 | Arms | Pairs both scored | Only the first passed | Only the second passed | Exact McNemar p |
 | --- | --- | --- | --- | --- |
 | solo (claude-sonnet-5-5) vs coop (claude-sonnet-5-5) | 8 | 0 | 2 | 0.500 |
-| solo (claude-sonnet-5-5) vs sdlc (claude-sonnet-5-5) | 8 | 0 | 1 | 1.000 |
+| solo (claude-sonnet-5-5) vs sdlc (claude-sonnet-5-5) | 8 | 0 | 2 | 0.500 |
 | solo (claude-sonnet-5-5) vs coop-git (claude-sonnet-5-5) | 8 | 0 | 1 | 1.000 |
 | solo (claude-sonnet-5-5) vs team (claude-sonnet-5-5) | 8 | 0 | 2 | 0.500 |
-| coop (claude-sonnet-5-5) vs sdlc (claude-sonnet-5-5) | 8 | 1 | 0 | 1.000 |
+| coop (claude-sonnet-5-5) vs sdlc (claude-sonnet-5-5) | 8 | 0 | 0 | 1.000 |
 | coop (claude-sonnet-5-5) vs coop-git (claude-sonnet-5-5) | 8 | 1 | 0 | 1.000 |
 | coop (claude-sonnet-5-5) vs team (claude-sonnet-5-5) | 8 | 0 | 0 | 1.000 |
-| sdlc (claude-sonnet-5-5) vs coop-git (claude-sonnet-5-5) | 8 | 1 | 1 | 1.000 |
-| sdlc (claude-sonnet-5-5) vs team (claude-sonnet-5-5) | 8 | 0 | 1 | 1.000 |
+| sdlc (claude-sonnet-5-5) vs coop-git (claude-sonnet-5-5) | 8 | 1 | 0 | 1.000 |
+| sdlc (claude-sonnet-5-5) vs team (claude-sonnet-5-5) | 8 | 0 | 0 | 1.000 |
 | coop-git (claude-sonnet-5-5) vs team (claude-sonnet-5-5) | 8 | 0 | 1 | 1.000 |
 
 On the pairs both arms scored (an eval.json without an error), the first attempt of each.
@@ -74,7 +74,7 @@ On the pairs both arms scored (an eval.json without an error), the first attempt
 | Arm | Model | Solo | Pairs both scored | Solo rate | Arm rate | Gap (points) | Relative gap | Only Solo passed | Only the arm passed | Exact McNemar p |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | coop | claude-sonnet-5-5 | solo | 8 | 62.5% | 87.5% | -25.0 | -40% | 0 | 2 | 0.500 |
-| sdlc | claude-sonnet-5-5 | solo | 8 | 62.5% | 75.0% | -12.5 | -20% | 0 | 1 | 1.000 |
+| sdlc | claude-sonnet-5-5 | solo | 8 | 62.5% | 87.5% | -25.0 | -40% | 0 | 2 | 0.500 |
 | coop-git | claude-sonnet-5-5 | solo | 8 | 62.5% | 75.0% | -12.5 | -20% | 0 | 1 | 1.000 |
 | team | claude-sonnet-5-5 | solo | 8 | 62.5% | 87.5% | -25.0 | -40% | 0 | 2 | 0.500 |
 
@@ -97,7 +97,7 @@ Blog (the-curious-case-of-miscoordination.mdx): Gemini 3 Flash, OpenHands SDK: g
 | Arm | Model | Passes | Naive merge (N) | Identical patches (N) | Lead alone (L) | Other | Cascade routes, all pairs | Features passed on clean or identical merges |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | coop | claude-sonnet-5-5 | 7 | 6 | 1 | 0 | 0 | naive 6, none 1 | 8/8, 7/8 |
-| sdlc | claude-sonnet-5-5 | 6 | 0 | 6 | 0 | 0 | naive 6, none 2 | 7/8, 7/8 |
+| sdlc | claude-sonnet-5-5 | 7 | 0 | 7 | 0 | 0 | naive 7, none 1 | 8/8, 7/8 |
 | coop-git | claude-sonnet-5-5 | 6 | 0 | 5 | 1 | 0 | naive 5, none 2, union 1 | 6/7, 6/7 |
 | team | claude-sonnet-5-5 | 7 | 3 | 0 | 4 | 0 | naive 3, none 2, union 3 | 3/3, 3/3 |
 
@@ -108,7 +108,7 @@ eval.json merge.strategy of each pass (naive, skip-merge-identical, solo-agent1)
 | Arm | Model | Pairs with a known merge | Conflicts | Conflict rate | 95% Wilson | Clean merges | Clean but tests fail | Semantic failure rate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | coop | claude-sonnet-5-5 | 8 | 0 | 0.0% | 0.0-32.4% | 8 | 1 | 12.5% |
-| sdlc | claude-sonnet-5-5 | 8 | 0 | 0.0% | 0.0-32.4% | 8 | 2 | 25.0% |
+| sdlc | claude-sonnet-5-5 | 8 | 0 | 0.0% | 0.0-32.4% | 8 | 1 | 12.5% |
 | coop-git | claude-sonnet-5-5 | 8 | 1 | 12.5% | 2.2-47.1% | 7 | 2 | 28.6% |
 | team | claude-sonnet-5-5 | 8 | 5 | 62.5% | 30.6-86.3% | 3 | 0 | 0.0% |
 
@@ -132,7 +132,7 @@ Conflicts compared on the pairs both arms merged (coop against coop-nocomm repro
 | Arm | Model | Pairs with a finished cascade | Cascade errors | Cascades not run | Naive % | +Union % (cumulative) | +LLM % (cumulative) | Paper-era verdict % | 63b9d44 verdict % |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | coop | claude-sonnet-5-5 | 7 | 1 | 0 | 85.71 | 85.71 (+0.0) | not run | 85.71 | 85.71 |
-| sdlc | claude-sonnet-5-5 | 8 | 0 | 0 | 75.00 | 75.00 (+0.0) | not run | 75.00 | 75.00 |
+| sdlc | claude-sonnet-5-5 | 8 | 0 | 0 | 87.50 | 87.50 (+0.0) | not run | 87.50 | 87.50 |
 | coop-git | claude-sonnet-5-5 | 8 | 0 | 0 | 62.50 | 75.00 (+12.5) | not run | 75.00 | 75.00 |
 | team | claude-sonnet-5-5 | 8 | 0 | 0 | 37.50 | 75.00 (+37.5) | not run | 75.00 | 87.50 |
 
@@ -207,7 +207,7 @@ Paper, Sec 5: Plan:Question 2.04 without conflict vs 1.31 with; a Plan in the fi
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | coop | claude-sonnet-5-5 | passed / failed | 7 / 1 | 1.1 / 1.0 | 1.000 | 8.3 / 10.0 | 0.375 |
 | coop | claude-sonnet-5-5 | no conflict / conflict | 8 / 0 | 1.1 / - | - | 8.5 / - | - |
-| sdlc | claude-sonnet-5-5 | passed / failed | 6 / 2 | 0.3 / 0.0 | 1.000 | 6.7 / 5.0 | 0.429 |
+| sdlc | claude-sonnet-5-5 | passed / failed | 7 / 1 | 0.3 / 0.0 | 1.000 | 6.4 / 5.0 | 1.000 |
 | sdlc | claude-sonnet-5-5 | no conflict / conflict | 8 / 0 | 0.2 / - | - | 6.2 / - | - |
 | coop-git | claude-sonnet-5-5 | passed / failed | 6 / 2 | 0.5 / 0.5 | 1.000 | 5.7 / 15.5 | 0.107 |
 | coop-git | claude-sonnet-5-5 | no conflict / conflict | 7 / 1 | 0.4 / 1.0 | 0.375 | 8.6 / 5.0 | 0.875 |
@@ -256,7 +256,7 @@ d~ is rescaled over the pairs scored here, not the paper's 652; the paper's per-
 | Arm | Model | Pairs | Filled buckets | Limits | AUC Solo | AUC arm | Delta AUC | Retention |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | coop | claude-sonnet-5-5 | 8 | 2 | 0.05-0.95 | 0.450 | 0.750 | -0.300 | 1.67 |
-| sdlc | claude-sonnet-5-5 | 8 | 2 | 0.05-0.95 | 0.450 | 0.600 | -0.150 | 1.33 |
+| sdlc | claude-sonnet-5-5 | 8 | 2 | 0.05-0.95 | 0.450 | 0.750 | -0.300 | 1.67 |
 | coop-git | claude-sonnet-5-5 | 8 | 2 | 0.05-0.95 | 0.450 | 0.600 | -0.150 | 1.33 |
 | team | claude-sonnet-5-5 | 8 | 2 | 0.05-0.95 | 0.450 | 0.750 | -0.300 | 1.67 |
 
@@ -267,7 +267,7 @@ Filled buckets, Solo and arm passes with their 95% Wilson intervals:
 | coop | claude-sonnet-5-5 | 0.05 | 5 | 5/5 | 56.6-100.0% | 5/5 | 56.6-100.0% |
 | coop | claude-sonnet-5-5 | 0.95 | 3 | 0/3 | 0.0-56.2% | 2/3 | 20.8-93.9% |
 | sdlc | claude-sonnet-5-5 | 0.05 | 5 | 5/5 | 56.6-100.0% | 5/5 | 56.6-100.0% |
-| sdlc | claude-sonnet-5-5 | 0.95 | 3 | 0/3 | 0.0-56.2% | 1/3 | 6.1-79.2% |
+| sdlc | claude-sonnet-5-5 | 0.95 | 3 | 0/3 | 0.0-56.2% | 2/3 | 20.8-93.9% |
 | coop-git | claude-sonnet-5-5 | 0.05 | 5 | 5/5 | 56.6-100.0% | 5/5 | 56.6-100.0% |
 | coop-git | claude-sonnet-5-5 | 0.95 | 3 | 0/3 | 0.0-56.2% | 1/3 | 6.1-79.2% |
 | team | claude-sonnet-5-5 | 0.05 | 5 | 5/5 | 56.6-100.0% | 5/5 | 56.6-100.0% |
@@ -285,7 +285,7 @@ Pass rate, errors as failures:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | solo | claude-sonnet-5-5 | 5/8 (62.5%) | 4/7 (57.1%) | 2/3 (66.7%) | 4/7 (57.1%) | 1/1 (100.0%) | 0/0 (-) |
 | coop | claude-sonnet-5-5 | 7/8 (87.5%) | 6/7 (85.7%) | 3/3 (100.0%) | 6/7 (85.7%) | 1/1 (100.0%) | 0/0 (-) |
-| sdlc | claude-sonnet-5-5 | 6/8 (75.0%) | 5/7 (71.4%) | 2/3 (66.7%) | 5/7 (71.4%) | 1/1 (100.0%) | 0/0 (-) |
+| sdlc | claude-sonnet-5-5 | 7/8 (87.5%) | 6/7 (85.7%) | 3/3 (100.0%) | 6/7 (85.7%) | 1/1 (100.0%) | 0/0 (-) |
 | coop-git | claude-sonnet-5-5 | 6/8 (75.0%) | 5/7 (71.4%) | 3/3 (100.0%) | 5/7 (71.4%) | 1/1 (100.0%) | 0/0 (-) |
 | team | claude-sonnet-5-5 | 7/8 (87.5%) | 6/7 (85.7%) | 3/3 (100.0%) | 6/7 (85.7%) | 1/1 (100.0%) | 0/0 (-) |
 
@@ -312,14 +312,14 @@ Each headline rate again over the pairs whose two features' feature.md, feature.
 | coop | claude-sonnet-5-5 | minimax | 5 | 80.0% | 20.0% | 3 | 0 | 0.250 | 0.0% | 0.0% |
 | coop | claude-sonnet-5-5 | qwen | 7 | 85.7% | 14.3% | 5 | 0 | 0.062 | 0.0% | 28.6% |
 | coop | claude-sonnet-5-5 | qwen_coder | 6 | 83.3% | 16.7% | 4 | 0 | 0.125 | 0.0% | 83.3% |
-| sdlc | claude-sonnet-5-5 | claude | 7 | 71.4% | 28.6% | 3 | 0 | 0.250 | 0.0% | 14.3% |
-| sdlc | claude-sonnet-5-5 | gemini_flash_miniswe | 8 | 75.0% | 25.0% | 5 | 1 | 0.219 | 0.0% | 37.5% |
-| sdlc | claude-sonnet-5-5 | gemini_flash_sdk | 8 | 75.0% | 50.0% | 3 | 1 | 0.625 | 0.0% | 50.0% |
-| sdlc | claude-sonnet-5-5 | gemini_pro_miniswe | 8 | 75.0% | 50.0% | 3 | 1 | 0.625 | 0.0% | 25.0% |
-| sdlc | claude-sonnet-5-5 | gpt5 | 6 | 66.7% | 50.0% | 2 | 1 | 1.000 | 0.0% | 16.7% |
-| sdlc | claude-sonnet-5-5 | minimax | 5 | 60.0% | 20.0% | 2 | 0 | 0.500 | 0.0% | 0.0% |
-| sdlc | claude-sonnet-5-5 | qwen | 7 | 71.4% | 14.3% | 4 | 0 | 0.125 | 0.0% | 28.6% |
-| sdlc | claude-sonnet-5-5 | qwen_coder | 6 | 66.7% | 16.7% | 3 | 0 | 0.250 | 0.0% | 83.3% |
+| sdlc | claude-sonnet-5-5 | claude | 7 | 85.7% | 28.6% | 4 | 0 | 0.125 | 0.0% | 14.3% |
+| sdlc | claude-sonnet-5-5 | gemini_flash_miniswe | 8 | 87.5% | 25.0% | 5 | 0 | 0.062 | 0.0% | 37.5% |
+| sdlc | claude-sonnet-5-5 | gemini_flash_sdk | 8 | 87.5% | 50.0% | 3 | 0 | 0.250 | 0.0% | 50.0% |
+| sdlc | claude-sonnet-5-5 | gemini_pro_miniswe | 8 | 87.5% | 50.0% | 3 | 0 | 0.250 | 0.0% | 25.0% |
+| sdlc | claude-sonnet-5-5 | gpt5 | 6 | 83.3% | 50.0% | 2 | 0 | 0.500 | 0.0% | 16.7% |
+| sdlc | claude-sonnet-5-5 | minimax | 5 | 80.0% | 20.0% | 3 | 0 | 0.250 | 0.0% | 0.0% |
+| sdlc | claude-sonnet-5-5 | qwen | 7 | 85.7% | 14.3% | 5 | 0 | 0.062 | 0.0% | 28.6% |
+| sdlc | claude-sonnet-5-5 | qwen_coder | 6 | 83.3% | 16.7% | 4 | 0 | 0.125 | 0.0% | 83.3% |
 | coop-git | claude-sonnet-5-5 | claude | 7 | 71.4% | 28.6% | 3 | 0 | 0.250 | 0.0% | 14.3% |
 | coop-git | claude-sonnet-5-5 | gemini_flash_miniswe | 8 | 75.0% | 25.0% | 4 | 0 | 0.125 | 12.5% | 37.5% |
 | coop-git | claude-sonnet-5-5 | gemini_flash_sdk | 8 | 75.0% | 50.0% | 2 | 0 | 0.500 | 12.5% | 50.0% |
@@ -343,7 +343,7 @@ The website's coop/index.json, rows with results only. Its paper models were sco
 
 | Pair | solo (claude-sonnet-5-5) | coop (claude-sonnet-5-5) | sdlc (claude-sonnet-5-5) | coop-git (claude-sonnet-5-5) | team (claude-sonnet-5-5) |
 | --- | --- | --- | --- | --- | --- |
-| dottxt_ai_outlines_task/1655/f6_f7 | fail | pass N | fail | pass N | pass L |
+| dottxt_ai_outlines_task/1655/f6_f7 | fail | pass N | pass N | pass N | pass L |
 | go_chi_task/56/f1_f5 | fail | pass N | pass N | fail | pass N |
 | huggingface_datasets_task/6252/f4_f6 | pass | pass N | pass N | pass N | pass L |
 | pallets_click_task/2068/f5_f11 | pass | pass N | pass N | pass N | pass L |
