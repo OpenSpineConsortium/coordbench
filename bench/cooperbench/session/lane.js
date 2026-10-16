@@ -19,11 +19,10 @@
 // agents think with a different budget than theirs did. Any other value
 // stops the lane before it takes an item, since the runtime drops an
 // effort it does not know without a word and the agents would inherit
-// the session's after all. resume: a plan
-// a prepare printed earlier (item, run_dir, arm, agents) whose bench
-// agents were never spawned, run first; the next prepare of the same
-// worker rebuilds such a plan itself, so resume is only for a lane
-// started under another name.
+// the session's after all. resume: a plan a prepare printed earlier
+// (item, run_dir, arm, agents) whose bench agents were never spawned,
+// run first; the next prepare of the same worker rebuilds such a plan
+// itself, so resume is only for a lane started under another name.
 export const meta = {
   name: 'curse-lane',
   description: 'One lane of the curse-of-coordination bench: prepare, spawn the bench agents, finish, until the queue is empty',
@@ -35,8 +34,8 @@ const LOG_DIR = args.log_dir || ''
 const MAX_ITEMS = args.max_items || 1000
 const BENCH_MODEL = args.bench_model || 'sonnet'
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
-const BENCH_EFFORT = args.effort || ''
-if (BENCH_EFFORT && !EFFORTS.includes(BENCH_EFFORT)) {
+const BENCH_EFFORT = args.effort ?? ''
+if (BENCH_EFFORT !== '' && !EFFORTS.includes(BENCH_EFFORT)) {
   throw new Error(`lane.js: args.effort must be one of ${EFFORTS.join(', ')}, not ${JSON.stringify(args.effort)}`)
 }
 const ROOT = args.root
