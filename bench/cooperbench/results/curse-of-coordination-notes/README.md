@@ -134,7 +134,11 @@ coordbench checkout at main with #21 merged.
    - `python3 bench/cooperbench/session/queue.py resume Q --pairs dottxt_ai_outlines_task/1655/f6_f7`
    - Start one lane, from the session: Workflow on
      bench/cooperbench/session/lane.js with args
-     `{queue: Q, worker: "lane-1", root: CHECKOUT, bench_model: "sonnet", log_dir: "/root/cooperbench/logs"}`.
+     `{queue: Q, worker: "lane-1", root: CHECKOUT, bench_model: "sonnet", effort: "xhigh", log_dir: "/root/cooperbench/logs"}`.
+     Every curse-1 lane names `effort: "xhigh"`, since the pilot's, the
+     step's and the screen's agents all ran at xhigh (each agent's
+     efforts in audit.json); left out, the bench agents think at the
+     orchestrating session's effort, whatever it is.
 4. Resume the other 7 reruns and run them on up to 3 lanes:
    - `queue.py resume Q --pairs pallets_jinja_task/1621/f2_f9,pallets_jinja_task/1559/f4_f10,pallets_click_task/2068/f5_f11,go_chi_task/56/f1_f5,pallets_click_task/2068/f6_f7`.
    - That resume also releases the 4 paused arms of click 2068 f6_f7,
