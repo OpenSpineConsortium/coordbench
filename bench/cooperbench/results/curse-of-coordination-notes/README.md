@@ -11,8 +11,9 @@ often as one agent does, and at what cost in time and tokens.
 - The effort. Every agent of the pilot, the step and the screen ran at
   effort xhigh, inherited from the orchestrating session; this day's
   session ran at max. lane.js now takes args.effort (#22), every
-  curse-1 lane names "xhigh" (step 3 below), and the one solo run made
-  at max was made again.
+  curse-1 lane names "xhigh" (step 3 below), and the two runs made at
+  max were made again: solo on the outlines pair, which had passed, and
+  coop on it, whose agents the harness lost.
 - The image loop. With more than one task open it prepared the last
   open task's image over and over and never the one the lanes waited
   for; #23 fixed it.
@@ -35,7 +36,9 @@ often as one agent does, and at what cost in time and tokens.
   after a restart of the container: the rest of the reruns, then the
   step's figures with the harness errors left out, then the four
   batches back to back, as the owner chose at 00:56 UTC ("All
-  batches").
+  batches"). By 10:05 UTC the five reruns left and coop-git on click
+  2068 f6_f7 had run, every one clean by its audit, and batch-9-16
+  had begun; their runs go into the full run's bundle.
 
 ## What is here
 
@@ -74,6 +77,7 @@ often as one agent does, and at what cost in time and tokens.
   every run:
   - ../curse-1-pilot/
   - ../curse-1-step-8/
+  - ../curse-1-checkpoint/, the runs of 2026-10-16 up to the pause
   - ../xblossom-screen/
 
 ## Where things stand
@@ -144,18 +148,20 @@ audit.json files are the audit's verdicts.
 On a new container:
 
 1. Run bench/cooperbench/setup.sh.
-2. Copy run/curse-1-queue.jsonl to ~/cooperbench/logs/.
-3. Before a report that spans the old and the new runs, put the
-   bundled runs back into the logs directory:
+2. Make the logs directory (`mkdir -p ~/cooperbench/logs`) and copy
+   run/curse-1-queue.jsonl into it.
+3. Before a report that spans the old and the new runs, put the bundled
+   runs back into the logs directory, from this folder:
    `python3 run/restore-bundles.py .. ~/cooperbench/logs --bundles curse-1-pilot,curse-1-step-8,curse-1-checkpoint`.
-   It copies each bundled run whose audit is clean and leaves alone a
-   run the logs already hold. Where two bundles hold a run at one path,
-   only the later start counts: the pilot's click 2068 f5_f11 under
-   coop, sdlc, coop-git and team was cut by a restart and run again in
-   the step, and both bundles keep a copy. A bundle holds no
+   Those three bundles are its default. It copies each bundled run whose
+   audit is clean and never replaces a run the logs already hold, so
+   name every bundle in the one call. Where two bundles hold a run at
+   one path, only the later start counts: the pilot's click 2068 f5_f11
+   under coop, sdlc, coop-git and team was cut by a restart and run
+   again in the step, and both bundles keep a copy. A bundle holds no
    transcripts, so the figures read from them (tool calls, the
-   communication overhead) cover only the runs made on the container
-   at hand.
+   communication overhead) cover only the runs made on the container at
+   hand.
 
 ## The next steps, in order
 
