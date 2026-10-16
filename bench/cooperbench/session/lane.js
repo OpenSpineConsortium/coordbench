@@ -65,12 +65,17 @@ const PLAN = {
 const VERDICT = { type: 'object', properties: { verdict: { type: 'string' }, pending: { type: 'boolean' }, note: { type: 'string' } }, required: [] }
 const BENCH = { type: 'object', properties: { finished: { type: 'boolean' }, summary: { type: 'string' } }, required: ['finished'] }
 
-const NO_HEARTH = 'Do not call any mcp__hearthbot__ tools. Do not run any other command.'
+// A relay that calls the thread's tools posts its step to the people
+// watching the project's thread (two did on 2026-10-16), so the rule
+// leads each relay prompt.
+const RELAY_RULES = 'This step posts nothing to the project\'s threads: never call any mcp__hearthbot__ tool, reply and no_reply_needed included. Your final answer goes back to the workflow script that started you, as data. Run no command but the ones below.'
 
 function preparePrompt() {
-  return `Run exactly this shell command with the Bash tool, with a timeout of 590000 milliseconds:
+  return `${RELAY_RULES}
+
+Run exactly this shell command with the Bash tool, with a timeout of 590000 milliseconds:
 cd ${ROOT} && python3 ${LANE} prepare ${QUEUE} --worker ${WORKER} --wait-image-min 8 ${LOG_DIR ? '--log-dir ' + LOG_DIR : ''}
-Its last stdout line is one JSON object. Return that object's fields exactly as printed: done, waiting, error, item, run_dir, arm and agents (each agent's id and model, copied character for character). ${NO_HEARTH}`
+Its last stdout line is one JSON object. Return that object's fields exactly as printed: done, waiting, error, item, run_dir, arm and agents (each agent's id and model, copied character for character).`
 }
 
 function promptFile(agent, plan) {
@@ -99,12 +104,14 @@ function benchOptions(agent, plan) {
 function finishPrompt(plan, returned, dead, unfinished) {
   const flags = [returned.length ? `--returned ${returned.join(' ')}` : '', dead.length ? `--dead ${dead.join(' ')}` : '',
     unfinished.length ? `--unfinished ${unfinished.join(' ')}` : ''].join(' ')
-  return `Run these shell commands with the Bash tool, in order.
+  return `${RELAY_RULES}
+
+Run these shell commands with the Bash tool, in order.
 1. Start the detached finish (timeout 60000 ms):
 cd ${ROOT} && python3 ${LANE} finish ${plan.run_dir} --item ${plan.item} --queue ${QUEUE} ${flags} --detach
 2. Then run this wait command (timeout 590000 ms), and run it again, up to eight times in all, until its JSON output has no "pending": true:
 cd ${ROOT} && python3 ${LANE} wait ${plan.run_dir} --seconds 540
-Return the last JSON object's verdict and note fields (pending=true only if all eight waits were pending). ${NO_HEARTH}`
+Return the last JSON object's verdict and note fields (pending=true only if all eight waits were pending).`
 }
 
 phase('Bench')

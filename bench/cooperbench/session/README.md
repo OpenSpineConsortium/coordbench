@@ -106,8 +106,13 @@ much of the benchmark a run takes, and the readers of what came out.
   can hold older code than the arm being run. The
   prepare and finish steps are small agents that run the two commands
   above and relay their JSON (the lane trusts the plan's agents, not the
-  relayed done flag, which one relay flipped); the bench agents are the
-  model the plan names. A lane runs one pair at a time (a workflow runs
+  relayed done flag, which one relay flipped). Each relay's prompt opens
+  with the rule that it posts nothing to the project's threads and that
+  its answer goes back to the script as data: a relay inherits the
+  session's tools, and on 2026-10-16 two relays told the thread's
+  watchers of their steps, when the rule came last. The bench agents'
+  prompt is unchanged, so their runs compare with the earlier ones. The
+  bench agents are the model the plan names. A lane runs one pair at a time (a workflow runs
   two agents at once on a four-CPU host); the run's width is the number
   of lanes started on the queue, `Workflow({script, args: {queue, root,
   worker}})` once per lane. `args.resume` takes a plan whose agents were
