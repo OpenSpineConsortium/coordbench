@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/typst_task/6554/f4_f9", "verdict": "pass"}
+coordbench run: sdlc-6554-f4_f9-b19f31: timings: hub 0.1 s, run_create 0.0 s, git_remote 4.3 s, provision 43 s, agents 299 s (agent1 254 s, agent2 299 s), close 0.4 s, score 137 s, cascade 234 s, teardown 13 s
+coordbench run: summary: 20 completed, 0 skipped, 0 failed; evals: 20 evaluated, 14 passed, 6 failed, 0 errors (70.0%); cost: unknown

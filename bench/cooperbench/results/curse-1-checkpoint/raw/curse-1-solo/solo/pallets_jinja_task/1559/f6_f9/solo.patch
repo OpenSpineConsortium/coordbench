@@ -1,0 +1,167 @@
+diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
+index d21b83aa..eb963a01 100644
+--- a/src/jinja2/ext.py
++++ b/src/jinja2/ext.py
+@@ -1,6 +1,7 @@
+ """Extension API for adding custom tags and behavior."""
+ import pprint
+ import re
++import threading
+ import typing as t
+ 
+ from markupsafe import Markup
+@@ -264,7 +265,77 @@ class InternationalizationExtension(Extension):
+             uninstall_gettext_translations=self._uninstall,
+             extract_translations=self._extract,
+             newstyle_gettext=False,
++            i18n_cache_size=128,
+         )
++        self._init_cache()
++
++    def bind(self, environment: Environment) -> "Extension":
++        """Bind a copy of this extension to another environment, such as
++        an overlay.  The copy gets a cache of its own, since the default
++        copy would share the dict and list of this one.
++        """
++        rv = super().bind(environment)
++        t.cast(InternationalizationExtension, rv)._init_cache()
++        return rv
++
++    def _init_cache(self) -> None:
++        """Create an empty translation cache sized by the environment's
++        ``i18n_cache_size``.
++        """
++        self._cache: t.Dict[str, str] = {}
++        # Keys from least to most recently used.
++        self._cache_order: t.List[str] = []
++        self._cache_size = 128
++        self._cache_lock = threading.RLock()
++        self._update_cache_size()
++
++    def _update_cache_size(self) -> None:
++        """Read the capacity from ``environment.i18n_cache_size`` and
++        evict the oldest entries if the cache now holds more than that.
++        A size of zero or less turns the cache off.
++        """
++        size = getattr(self.environment, "i18n_cache_size", 128)
++
++        with self._cache_lock:
++            self._cache_size = max(0, int(size))
++            self._evict_excess()
++
++    def _evict_excess(self) -> None:
++        while len(self._cache_order) > self._cache_size:
++            del self._cache[self._cache_order.pop(0)]
++
++    def _get_from_cache(self, key: str) -> t.Optional[str]:
++        """Return the cached result for ``key``, or ``None`` if there is
++        none, and mark the entry as the most recently used.
++        """
++        with self._cache_lock:
++            if key not in self._cache:
++                return None
++
++            self._cache_order.remove(key)
++            self._cache_order.append(key)
++            return self._cache[key]
++
++    def _put_in_cache(self, key: str, value: str) -> None:
++        """Store ``value`` under ``key`` as the most recently used entry,
++        evicting the least recently used ones beyond the capacity.
++        """
++        with self._cache_lock:
++            if self._cache_size <= 0:
++                return
++
++            if key in self._cache:
++                self._cache_order.remove(key)
++
++            self._cache[key] = value
++            self._cache_order.append(key)
++            self._evict_excess()
++
++    def clear_cache(self) -> None:
++        """Remove all cached translation results."""
++        with self._cache_lock:
++            self._cache.clear()
++            self._cache_order.clear()
+ 
+     def _install(
+         self, translations: "_SupportedTranslations", newstyle: t.Optional[bool] = None
+@@ -596,6 +667,70 @@ class LoopControlExtension(Extension):
+         return nodes.Continue(lineno=token.lineno)
+ 
+ 
++class TranslationExtractorExtension(Extension):
++    """Adds an ``{% extract %}...{% endextract %}`` block that attaches
++    metadata for translation tools to the content it wraps, such as a
++    comment, a context or a priority::
++
++        {% extract comment="Greeting on the home page", priority="high" %}
++          Hello, {{ name }}!
++        {% endextract %}
++
++    The block renders as its body does. The attributes are collected
++    while the template is compiled and read back with
++    ``environment.extraction_markers()``, one entry per block with its
++    line number, its attributes and its body nodes.
++    """
++
++    tags = {"extract"}
++
++    def __init__(self, environment: Environment) -> None:
++        super().__init__(environment)
++        environment.extend(extraction_markers=self._get_extraction_markers)
++
++        if not hasattr(environment, "_extraction_markers"):
++            setattr(environment, "_extraction_markers", [])
++
++    def parse(self, parser: "Parser") -> t.Union[nodes.Node, t.List[nodes.Node]]:
++        """Parse an extraction block."""
++        lineno = next(parser.stream).lineno
++        markers: t.Dict[str, nodes.Expr] = {}
++
++        while parser.stream.current.type != "block_end":
++            key = parser.stream.expect("name").value
++            parser.stream.expect("assign")
++            markers[key] = parser.parse_expression()
++
++            if not parser.stream.skip_if("comma"):
++                break
++
++        body = parser.parse_statements(("name:endextract",), drop_needle=True)
++        return self._create_extraction_marker_node(markers, body, lineno)
++
++    def _create_extraction_marker_node(
++        self, markers: t.Dict[str, nodes.Expr], body: t.List[nodes.Node], lineno: int
++    ) -> nodes.Node:
++        """Record the block's attributes on the environment and return a
++        node that renders the body unchanged.
++        """
++        marker_info: t.Dict[str, t.Any] = {}
++
++        for key, value_node in markers.items():
++            if isinstance(value_node, nodes.Const):
++                marker_info[key] = value_node.value
++            else:
++                marker_info[key] = str(value_node)
++
++        self._get_extraction_markers().append(
++            {"lineno": lineno, "markers": marker_info, "body": body}
++        )
++        return nodes.Scope(body, lineno=lineno)
++
++    def _get_extraction_markers(self) -> t.List[t.Dict[str, t.Any]]:
++        """Return the markers collected so far by this environment."""
++        return getattr(self.environment, "_extraction_markers", [])
++
++
+ class DebugExtension(Extension):
+     """A ``{% debug %}`` tag that dumps the available variables,
+     filters, and tests.
+@@ -851,4 +986,5 @@ def babel_extract(
+ i18n = InternationalizationExtension
+ do = ExprStmtExtension
+ loopcontrols = LoopControlExtension
++extractor = TranslationExtractorExtension
+ debug = DebugExtension

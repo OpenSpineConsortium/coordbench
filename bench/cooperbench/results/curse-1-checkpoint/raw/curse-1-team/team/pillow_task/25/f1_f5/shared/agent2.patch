@@ -1,0 +1,201 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..f12540244 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -743,6 +743,128 @@ class TestImage:
+ 
+                 im.save(temp_file)
+ 
++    def test_save_mark_corners(self, tmp_path: Path) -> None:
++        im = Image.new("RGB", (10, 8), "white")
++        out = tmp_path / "temp.png"
++
++        im.save(out, mark_corners=True)
++
++        with Image.open(out) as reloaded:
++            assert reloaded.getpixel((0, 0)) == (255, 0, 0)
++            assert reloaded.getpixel((9, 7)) == (255, 0, 0)
++            # Nothing else changes
++            assert reloaded.getpixel((9, 0)) == (255, 255, 255)
++            assert reloaded.getpixel((0, 7)) == (255, 255, 255)
++            assert reloaded.getpixel((5, 4)) == (255, 255, 255)
++        assert im.getpixel((0, 0)) == (255, 0, 0)
++
++    def test_save_mark_corners_off_by_default(self, tmp_path: Path) -> None:
++        im = Image.new("RGB", (10, 8), "white")
++        out = tmp_path / "temp.png"
++
++        im.save(out)
++        im.save(out, mark_corners=False)
++
++        assert_image_equal_tofile(im, out)
++        assert im.getpixel((0, 0)) == (255, 255, 255)
++
++    @pytest.mark.parametrize(
++        ("format", "options"),
++        (
++            ("BMP", {}),
++            ("GIF", {}),
++            ("JPEG", {"quality": 100, "subsampling": 0}),
++            ("PNG", {}),
++            ("TIFF", {}),
++            ("WEBP", {"lossless": True}),
++        ),
++    )
++    def test_save_mark_corners_formats(
++        self, format: str, options: dict[str, Any]
++    ) -> None:
++        if format == "WEBP" and not features.check("webp"):
++            pytest.skip("WebP support not available")
++
++        im = Image.new("RGB", (16, 16), "white")
++        b = io.BytesIO()
++
++        im.save(b, format, mark_corners=True, **options)
++
++        b.seek(0)
++        with Image.open(b) as reloaded:
++            rgb = reloaded.convert("RGB")
++            # JPEG does not keep the exact value
++            for xy in ((0, 0), (15, 15)):
++                r, g, blue = rgb.getpixel(xy)
++                assert r > 200
++                assert g < 50
++                assert blue < 50
++            assert rgb.getpixel((8, 8)) == (255, 255, 255)
++
++    @pytest.mark.parametrize(
++        ("mode", "format", "expected"),
++        (
++            ("1", "PNG", 0),
++            ("L", "PNG", 76),
++            ("LA", "PNG", (76, 255)),
++            ("I", "TIFF", 76),
++            ("F", "TIFF", 76.24500274658203),
++            ("RGBA", "PNG", (255, 0, 0, 255)),
++            ("CMYK", "TIFF", (0, 255, 255, 0)),
++        ),
++    )
++    def test_save_mark_corners_modes(
++        self, mode: str, format: str, expected: float | tuple[int, ...]
++    ) -> None:
++        # Red has no exact value in these modes, so the closest is used
++        im = Image.new(mode, (4, 4), 255 if mode == "1" else None)
++
++        im.save(io.BytesIO(), format, mark_corners=True)
++
++        assert im.getpixel((0, 0)) == expected
++        assert im.getpixel((3, 3)) == expected
++        assert im.getpixel((3, 0)) != expected or mode == "1"
++
++    def test_save_mark_corners_palette(self) -> None:
++        im = Image.new("P", (4, 4))
++        im.putpalette((255, 255, 255, 0, 0, 255))
++
++        b = io.BytesIO()
++        im.save(b, "PNG", mark_corners=True)
++
++        b.seek(0)
++        with Image.open(b) as reloaded:
++            rgb = reloaded.convert("RGB")
++            assert rgb.getpixel((0, 0)) == (255, 0, 0)
++            assert rgb.getpixel((3, 3)) == (255, 0, 0)
++            assert rgb.getpixel((1, 1)) == (255, 255, 255)
++
++    def test_save_mark_corners_full_palette(self) -> None:
++        # Every one of the 256 colours is in use, so there is no room for red
++        # and the closest colour, a dark grey, is used
++        im = Image.new("P", (16, 16))
++        im.putpalette([value for i in range(256) for value in (i, i, i)])
++        im.putdata(range(256))
++
++        im.save(io.BytesIO(), "PNG", mark_corners=True)
++
++        assert im.getpixel((0, 0)) == 85
++        assert im.getpixel((15, 15)) == 85
++        assert im.getpixel((1, 0)) == 1
++
++    def test_save_mark_corners_single_pixel(self) -> None:
++        im = Image.new("RGB", (1, 1), "white")
++
++        im.save(io.BytesIO(), "PNG", mark_corners=True)
++
++        assert im.getpixel((0, 0)) == (255, 0, 0)
++
++    def test_save_mark_corners_empty_image(self) -> None:
++        im = Image.new("RGB", (0, 0))
++
++        with pytest.raises(ValueError):
++            im.save(io.BytesIO(), "JPEG", mark_corners=True)
++
+     def test_no_new_file_on_error(self, tmp_path: Path) -> None:
+         temp_file = tmp_path / "temp.jpg"
+ 
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..22ecdbe95 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2095,6 +2095,40 @@ class Image:
+             value = (palette_index, alpha) if self.mode == "PA" else palette_index
+         return self.im.putpixel(xy, value)
+ 
++    def _mark_corners(self) -> None:
++        """
++        Sets the top-left and bottom-right pixels to red, or to the closest
++        equivalent in modes that have no red. See the ``mark_corners`` option
++        of :py:meth:`~PIL.Image.Image.save`.
++        """
++        if not self.width or not self.height:
++            return
++
++        red: Any = (255, 0, 0)
++        if self.mode in ("P", "PA"):
++            index = self._palette_index_of_red()
++            red = (index, 255) if self.mode == "PA" else index
++        elif self.mode != "RGB":
++            red = new("RGB", (1, 1), red).convert(self.mode).getpixel((0, 0))
++
++        self.putpixel((0, 0), red)
++        self.putpixel((self.width - 1, self.height - 1), red)
++
++    def _palette_index_of_red(self) -> int:
++        self.load()
++        try:
++            assert self.palette is not None
++            return self.palette.getcolor((255, 0, 0), self)
++        except ValueError:
++            # The palette is full, or holds raw data that cannot take a new
++            # colour: use the entry already there that is closest to red
++            palette = self.getpalette("RGB") or [0, 0, 0]
++            distances = [
++                (255 - r) ** 2 + g**2 + b**2
++                for r, g, b in zip(palette[0::3], palette[1::3], palette[2::3])
++            ]
++            return distances.index(min(distances))
++
+     def remap_palette(
+         self, dest_map: list[int], source_palette: bytes | bytearray | None = None
+     ) -> Image:
+@@ -2505,6 +2539,12 @@ class Image:
+              red = Image.new("RGB", (1, 1), "#f00")
+              red.encoderinfo = {"xmp": b"test"}
+              black.save("out.mpo", save_all=True, append_images=[red])
++        :param mark_corners: If true, the top-left and bottom-right pixels of the
++           image are set to red before it is saved, as a simple visual sign that
++           the image has been processed. This changes the image itself, not only
++           the saved file, and it works with any format. In a mode that has no
++           red, the closest equivalent is used, such as a grey level for "L".
++           Defaults to false.
+         :returns: None
+         :exception ValueError: If the output format could not be determined
+            from the file name.  Use the format option to solve this.
+@@ -2543,6 +2583,9 @@ class Image:
+         # may mutate self!
+         self._ensure_mutable()
+ 
++        if params.pop("mark_corners", False):
++            self._mark_corners()
++
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+         self.encoderconfig: tuple[Any, ...] = ()

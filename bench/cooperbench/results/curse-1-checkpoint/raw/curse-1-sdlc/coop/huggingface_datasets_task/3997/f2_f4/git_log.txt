@@ -1,0 +1,39 @@
+commit 86467a113a201ebd683a28cc76e3d06744b49afe (main)
+Merge: 56c08e83 66552992
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:42:31 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit 6655299216c9cd9a81a1bba549104c2db19ff595 (claude/2)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:42:23 2026 +0000
+
+    Add custom decoding criteria to require_decoding and Features
+
+ src/datasets/features/features.py | 50 +++++++++++++++++++++++++++++++++++----
+ 1 file changed, 46 insertions(+), 4 deletions(-)
+
+commit 56c08e83542a8bbea3dab44705b939c2f3d115c9
+Merge: e229fade aa51898d
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:41:58 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit aa51898d033271acce4b9c75c087291fd8a6d11b (claude/4)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:41:50 2026 +0000
+
+    Extend Features.update to take JSON strings and batches
+    
+    update now accepts a JSON string or bytes holding feature dicts, and a list
+    or tuple batching mappings, JSON strings and (column, feature) pairs. The
+    input is read in full before any column changes, and every column still goes
+    through __setitem__ so _column_requires_decoding stays in sync.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ src/datasets/features/features.py | 88 +++++++++++++++++++++++++++++++++++----
+ 1 file changed, 80 insertions(+), 8 deletions(-)

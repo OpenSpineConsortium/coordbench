@@ -1,0 +1,72 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..858135ce3 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2466,6 +2466,21 @@ class Image:
+             (w, h), Transform.AFFINE, matrix, resample, fillcolor=fillcolor
+         )
+ 
++    def _mark_corners(self) -> None:
++        """
++        Sets the top-left and bottom-right pixels to red, so that a saved
++        image can be recognised as processed. Red is converted to the
++        image's mode; P and PA images get the colour added to their palette.
++        """
++        if self.width < 1 or self.height < 1:
++            return
++
++        red: Any = (255, 0, 0)
++        if self.mode not in ("P", "PA", "RGB"):
++            red = new("RGB", (1, 1), red).convert(self.mode).getpixel((0, 0))
++        self.putpixel((0, 0), red)
++        self.putpixel((self.width - 1, self.height - 1), red)
++
+     def save(
+         self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
+     ) -> None:
+@@ -2490,6 +2505,10 @@ class Image:
+            format to use is determined from the filename extension.
+            If a file object was used instead of a filename, this
+            parameter should always be used.
++        :param mark_corners: Optional. If ``True``, the top-left and bottom-right
++           pixels of this image are set to red before saving, as a visual
++           sign that the image has been processed. This works for any format,
++           but changes this image as well as the saved file.
+         :param params: Extra parameters to the image writer. These can also be
+            set on the image itself through ``encoderinfo``. This is useful when
+            saving multiple images::
+@@ -2540,10 +2559,23 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
++        # Saving back to the file that this image was opened from may need the
++        # image to be mutable, as the file is about to be overwritten while an
++        # mmap of it may still be in use. Otherwise, leave a readonly image
++        # alone, so that an image from frombuffer() keeps reflecting its buffer.
+         # may mutate self!
+-        self._ensure_mutable()
++        opened_filename = getattr(self, "filename", None)
++        if (
++            filename
++            and is_path(opened_filename)
++            and os.fsdecode(opened_filename) == os.fsdecode(filename)
++        ):
++            self._ensure_mutable()
++        else:
++            self.load()
+ 
+         save_all = params.pop("save_all", None)
++        mark_corners = params.pop("mark_corners", False)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+         self.encoderconfig: tuple[Any, ...] = ()
+ 
+@@ -2558,6 +2590,9 @@ class Image:
+         else:
+             save_handler = SAVE[format.upper()]
+ 
++        if mark_corners:
++            self._mark_corners()
++
+         created = False
+         if open_fp:
+             created = not os.path.exists(filename)

@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/samuelcolvin_dirty_equals_task/43/f3_f7", "verdict": "pass"}
+coordbench run: solo-43-f3_f7-ef8ab4: timings: hub 0.2 s, run_create 0.0 s, provision 1.0 s, agents 76 s, close 0.0 s, score 16 s, teardown 0.3 s
+coordbench run: summary: 14 completed, 0 skipped, 0 failed; evals: 14 evaluated, 10 passed, 4 failed, 0 errors (71.4%); cost: unknown

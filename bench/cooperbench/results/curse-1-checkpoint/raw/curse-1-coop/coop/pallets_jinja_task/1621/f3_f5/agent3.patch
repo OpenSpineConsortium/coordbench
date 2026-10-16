@@ -1,0 +1,43 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..95b08de1 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -20,11 +20,38 @@ if t.TYPE_CHECKING:
+     from .environment import Environment
+     from .environment import Template
+ 
++_ASCII_LETTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
++
++
++def validate_template_path(template: str) -> None:
++    """Check a template path for sequences that must never be loaded and
++    raise :exc:`TemplateNotFound` if it contains one: an empty path, a
++    null byte, an absolute Unix or Windows path, a Windows drive letter
++    or an ASCII control character other than tab, newline and carriage
++    return.
++    """
++    if not template:
++        raise TemplateNotFound(template)
++
++    if "\x00" in template:
++        raise TemplateNotFound(template)
++
++    if template[0] in "/\\":
++        raise TemplateNotFound(template)
++
++    if len(template) >= 2 and template[1] == ":" and template[0] in _ASCII_LETTERS:
++        raise TemplateNotFound(template)
++
++    for char in template:
++        if ord(char) < 32 and char not in "\t\n\r":
++            raise TemplateNotFound(template)
++
+ 
+ def split_template_path(template: str) -> t.List[str]:
+     """Split a path into segments and perform a sanity check.  If it detects
+     '..' in the path it will raise a `TemplateNotFound` error.
+     """
++    validate_template_path(template)
+     pieces = []
+     for piece in template.split("/"):
+         if (

@@ -1,0 +1,46 @@
+commit 2c64eb471d21e4565d2a610db0d901580341953a (main)
+Merge: 22f2404 6300e8c
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:44:32 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit 6300e8ca6f9a460e86dc3f4f26fb8b96244f7f9f (claude/3)
+Merge: 84371e4 22f2404
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:44:17 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/3
+    
+    # Conflicts:
+    #       src/jinja2/filters.py
+
+commit 84371e4b3e232e75b85ef06b82e18d59459e7641
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:43:40 2026 +0000
+
+    Add separator parameter to the groupby filter
+    
+    The attribute path is split on a configurable string, a dot by default,
+    so nested fields written Django style (user__profile__name) can be
+    grouped by. make_attrgetter and _prepare_attribute_parts take the
+    separator; the sync and async filters pass it on.
+
+ src/jinja2/filters.py | 31 ++++++++++++++++++++++++++-----
+ 1 file changed, 26 insertions(+), 5 deletions(-)
+
+commit 22f240429a0055607bd758d22c26f148d3171407
+Merge: 20eb7f5 514847d
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:42:50 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit 514847d31568495606f8f16596eeae5eff908d1e (claude/2)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:42:44 2026 +0000
+
+    Add reverse parameter to groupby filter for descending group order
+
+ src/jinja2/filters.py | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)

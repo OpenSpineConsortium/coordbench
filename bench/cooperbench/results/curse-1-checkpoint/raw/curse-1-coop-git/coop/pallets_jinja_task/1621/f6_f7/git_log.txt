@@ -1,0 +1,33 @@
+commit 5adef9a4a879163d0fe7744ad24b00bbc187298b (agent2)
+Merge: fe08ddc fabba93
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:04:13 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit fabba936f09a291e7abbf9e148a6cf3b73f83ee4 (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:03:55 2026 +0000
+
+    Add path_transform to template loaders
+
+ src/jinja2/loaders.py | 116 ++++++++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 104 insertions(+), 12 deletions(-)
+
+commit fe08ddc34ca702dd46d8e7c13fc1a95f3acd8981
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:02:40 2026 +0000
+
+    Order versionchanged entries
+
+ src/jinja2/loaders.py | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+commit eac6e5379287fb723772886f19e468fbd0026482
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:01:55 2026 +0000
+
+    FileSystemLoader: expand env vars and ~ in search paths
+
+ src/jinja2/loaders.py | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)

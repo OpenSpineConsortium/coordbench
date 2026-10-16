@@ -1,0 +1,40 @@
+commit be5083d7d9b1a38dbf873f7970bd724f706dd194 (agent1)
+Merge: 3487d8d e3b9054
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:19:59 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 3487d8d31c7cff20338930a26c4ccf96034d15cf
+Merge: 3ad514a b0477a0
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:19:53 2026 +0000
+
+    Merge team/agent2 (IsHash)
+
+commit e3b90549dae530425ac189a003169334ee6dde3b (agent2)
+Merge: b0477a0 3ad514a
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:19:44 2026 +0000
+
+    Merge team/agent1 (IsEmail)
+
+commit b0477a021a124a1ab24d9c0ca9be56d155c4e828
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:19:19 2026 +0000
+
+    Add IsHash validator
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 52 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 54 insertions(+), 1 deletion(-)
+
+commit 3ad514ab325ce577b151a18ca1ce8dd9ca19e312
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:18:52 2026 +0000
+
+    Add IsEmail validator with optional domain filtering
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 47 ++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 48 insertions(+), 2 deletions(-)

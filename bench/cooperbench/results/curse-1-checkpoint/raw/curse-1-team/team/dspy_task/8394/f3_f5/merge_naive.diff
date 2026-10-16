@@ -1,0 +1,81 @@
+diff --cc dspy/clients/__init__.py
+index 26ee1ef53,d1ec5f8bc..000000000
+--- a/dspy/clients/__init__.py
++++ b/dspy/clients/__init__.py
+@@@ -33,6 -33,7 +33,10 @@@ def configure_cache
+      disk_size_limit_bytes: Optional[int] = DISK_CACHE_LIMIT,
+      memory_max_entries: Optional[int] = 1000000,
+      enable_litellm_cache: bool = False,
+++<<<<<<< HEAD
+++=======
++     ttl: Optional[int] = None,
+++>>>>>>> agent1
+      compress: Optional[Literal["gzip", "zlib"]] = None,
+      cull_limit: Optional[int] = None,
+      eviction_policy: Optional[str] = None,
+@@@ -46,6 -47,8 +50,11 @@@
+          disk_size_limit_bytes: The size limit of the on-disk cache.
+          memory_max_entries: The maximum number of entries in the in-memory cache.
+          enable_litellm_cache: Whether to enable LiteLLM cache.
+++<<<<<<< HEAD
+++=======
++         ttl: The time-to-live of a cache entry in seconds, for both the in-memory and the on-disk cache. `None`
++             (the default) means entries never expire.
+++>>>>>>> agent1
+          compress: The codec used to compress values in the on-disk cache: "gzip", "zlib", or None (the default) for
+              no compression. Entries written without compression, or before this option existed, stay readable.
+          cull_limit: How many entries DiskCache removes at once when the on-disk cache is over its size limit. None
+@@@ -81,6 -84,7 +90,10 @@@
+          disk_cache_dir,
+          disk_size_limit_bytes,
+          memory_max_entries,
+++<<<<<<< HEAD
+++=======
++         ttl=ttl,
+++>>>>>>> agent1
+          compress=compress,
+          cull_limit=cull_limit,
+          eviction_policy=eviction_policy,
+diff --cc dspy/clients/cache.py
+index ddafe1e34,40e64ab12..000000000
+--- a/dspy/clients/cache.py
++++ b/dspy/clients/cache.py
+@@@ -93,6 -96,7 +96,10 @@@ class Cache
+          disk_cache_dir: str,
+          disk_size_limit_bytes: Optional[int] = 1024 * 1024 * 10,
+          memory_max_entries: Optional[int] = 1000000,
+++<<<<<<< HEAD
+++=======
++         ttl: Optional[int] = None,
+++>>>>>>> agent1
+          compress: Optional[Literal["gzip", "zlib"]] = None,
+          cull_limit: Optional[int] = None,
+          eviction_policy: Optional[str] = None,
+@@@ -104,6 -108,8 +111,11 @@@
+              disk_cache_dir: The directory where the disk cache is stored.
+              disk_size_limit_bytes: The maximum size of the disk cache (in bytes).
+              memory_max_entries: The maximum size of the in-memory cache (in number of items).
+++<<<<<<< HEAD
+++=======
++             ttl: The time-to-live of a cache entry, in seconds, for both the in-memory and the on-disk cache. `None`
++                 (the default) means entries never expire.
+++>>>>>>> agent1
+              compress: The codec ("gzip" or "zlib") used to compress values on disk, or None to store them
+                  uncompressed. Only the on-disk layer is affected; entries written with another setting, or before
+                  this option existed, are still read correctly.
+@@@ -238,7 -277,11 +283,15 @@@
+  
+          if self.enable_disk_cache:
+              try:
+++<<<<<<< HEAD
+ +                self.disk_cache[key] = _encode_disk_value(value, self.compress)
+++=======
++                 encoded = _encode_disk_value(value, self.compress)
++                 if self.ttl is not None:
++                     self.disk_cache.set(key, encoded, expire=self.ttl)
++                 else:
++                     self.disk_cache[key] = encoded
+++>>>>>>> agent1
+              except Exception as e:
+                  # Disk cache writing can fail for different reasons, e.g. disk full or the `value` is not picklable.
+                  logger.debug(f"Failed to put value in disk cache: {value}, {e}")

@@ -1,0 +1,420 @@
+diff --git a/Tests/test_image_quantize.py b/Tests/test_image_quantize.py
+index bd9db362c..36ce265ce 100644
+--- a/Tests/test_image_quantize.py
++++ b/Tests/test_image_quantize.py
+@@ -85,3 +85,230 @@ def test_transparent_colors_equal():
+     converted = im.quantize()
+     converted_px = converted.load()
+     assert converted_px[0, 0] == converted_px[0, 1]
++
++
++def _palette_channels(im):
++    mode = im.im.getpalettemode()
++    return mode, im.im.getpalette(mode, mode)
++
++
++def test_lightness_factor_default():
++    image = hopper()
++    expected = image.quantize()
++
++    for converted in (image.quantize(lightness_factor=1.0), image.quantize()):
++        assert converted.tobytes() == expected.tobytes()
++        assert converted.getpalette() == expected.getpalette()
++
++
++def test_lightness_factor_brighter_and_darker():
++    image = hopper()
++    original = image.quantize()
++    brighter = image.quantize(lightness_factor=1.5)
++    darker = image.quantize(lightness_factor=0.5)
++
++    # Only the palette changes, so the indexes of the pixels stay the same
++    assert_image(brighter, "P", original.size)
++    assert brighter.tobytes() == original.tobytes()
++    assert darker.tobytes() == original.tobytes()
++
++    for before, after_bright, after_dark in zip(
++        original.getpalette(), brighter.getpalette(), darker.getpalette()
++    ):
++        assert after_bright == min(255, int(before * 1.5))
++        assert after_dark == int(before * 0.5)
++
++    assert sum(brighter.getpalette()) > sum(original.getpalette())
++    assert sum(darker.getpalette()) < sum(original.getpalette())
++
++    # The color count is not changed, and the image really is brighter
++    assert len(brighter.getcolors()) == len(original.getcolors())
++    assert sum(brighter.convert("L").getdata()) > sum(original.convert("L").getdata())
++
++
++def test_lightness_factor_clamps():
++    image = hopper()
++    original = image.quantize()
++
++    for factor in (1000, float("inf")):
++        converted = image.quantize(lightness_factor=factor)
++        for before, after in zip(original.getpalette(), converted.getpalette()):
++            assert after == (0 if before == 0 else 255)
++
++    converted = image.quantize(lightness_factor=1e-9)
++    assert set(converted.getpalette()) == {0}
++
++
++@pytest.mark.parametrize("factor", (0, -1, -0.5, float("nan")))
++def test_lightness_factor_invalid(factor):
++    image = hopper()
++    with pytest.raises(ValueError):
++        image.quantize(lightness_factor=factor)
++
++    # The factor is checked whichever way the image is quantized
++    with pytest.raises(ValueError):
++        image.quantize(palette=hopper("P"), lightness_factor=factor)
++    with pytest.raises(ValueError):
++        image.quantize(100, Image.FASTOCTREE, lightness_factor=factor)
++
++
++def test_lightness_factor_with_palette():
++    image = hopper()
++    with Image.open("Tests/images/caption_6_33_22.png") as palette:
++        palette = palette.convert("P")
++
++    original = image.quantize(dither=0, palette=palette)
++    converted = image.quantize(dither=0, palette=palette, lightness_factor=0.5)
++
++    assert_image(converted, "P", original.size)
++    assert converted.tobytes() == original.tobytes()
++    assert converted.getpalette() == [int(v * 0.5) for v in original.getpalette()]
++    # The reference palette is left alone
++    assert palette.palette.palette != converted.palette.palette
++
++    # The palette's own copy and the image's palette agree
++    assert converted.convert("RGB").getpixel((0, 0)) == tuple(
++        converted.getpalette()[converted.getpixel((0, 0)) * 3 :][:3]
++    )
++
++
++def test_lightness_factor_rgba_keeps_alpha():
++    image = hopper("RGBA")
++    image.putalpha(Image.linear_gradient("L").resize(image.size))
++
++    original = image.quantize()
++    converted = image.quantize(lightness_factor=0.5)
++
++    mode, before = _palette_channels(original)
++    assert mode == "RGBA"
++    _, after = _palette_channels(converted)
++
++    assert after[3::4] == before[3::4]
++    for band in range(3):
++        assert list(after[band::4]) == [int(v * 0.5) for v in before[band::4]]
++
++    # Pixels read the adjusted palette, with the same alpha as before
++    original_px = original.convert("RGBA").getdata()
++    converted_px = converted.convert("RGBA").getdata()
++    for (r, g, b, a), (r2, g2, b2, a2) in zip(original_px, converted_px):
++        assert (int(r * 0.5), int(g * 0.5), int(b * 0.5), a) == (r2, g2, b2, a2)
++
++
++def test_lightness_factor_image_palette_in_sync(tmp_path):
++    converted = hopper().quantize(16, lightness_factor=1.2)
++
++    # The palette that the image keeps and the one that the pixels are drawn
++    # with must be the same, or a saved file would use the old colors
++    assert list(converted.palette.palette) == converted.getpalette()
++
++    out = str(tmp_path / "out.png")
++    converted.save(out)
++    with Image.open(out) as reloaded:
++        assert reloaded.convert("RGB").tobytes() == converted.convert("RGB").tobytes()
++
++
++def _palette_colors(im, count):
++    palette = im.getpalette()
++    return [tuple(palette[i * 3 : i * 3 + 3]) for i in range(count)]
++
++
++def _brightness(color):
++    return 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2]
++
++
++def test_sort_palette_default_keeps_order():
++    image = hopper()
++    default = image.quantize(16)
++    assert default.tobytes() == image.quantize(16, sort_palette=None).tobytes()
++    assert default.getpalette() == image.quantize(16, sort_palette=None).getpalette()
++
++
++@pytest.mark.parametrize(
++    "method", (Image.MEDIANCUT, Image.MAXCOVERAGE, Image.FASTOCTREE)
++)
++def test_sort_palette_brightness(method):
++    image = hopper()
++    unsorted = image.quantize(16, method)
++    converted = image.quantize(16, method, sort_palette="brightness")
++    assert_image(converted, "P", converted.size)
++
++    colors = _palette_colors(converted, 16)
++    brightness = [_brightness(color) for color in colors]
++    assert brightness == sorted(brightness)
++
++    # The same colors in a new order, and the image looks the same
++    assert sorted(colors) == sorted(_palette_colors(unsorted, 16))
++    assert converted.convert("RGB").tobytes() == unsorted.convert("RGB").tobytes()
++
++
++def test_sort_palette_rgb():
++    image = hopper()
++    unsorted = image.quantize(16)
++    converted = image.quantize(16, sort_palette="rgb")
++
++    colors = _palette_colors(converted, 16)
++    assert colors == sorted(colors)
++    assert converted.convert("RGB").tobytes() == unsorted.convert("RGB").tobytes()
++
++
++def test_sort_palette_rgba():
++    image = hopper("RGBA")
++    image.putalpha(Image.linear_gradient("L").resize(image.size))
++    unsorted = image.quantize(16)
++    converted = image.quantize(16, sort_palette="brightness")
++
++    assert converted.palette.mode == "RGBA"
++    palette = converted.im.getpalette("RGBA", "RGBA")
++    colors = [tuple(palette[i * 4 : i * 4 + 4]) for i in range(16)]
++    brightness = [_brightness(color) for color in colors]
++    assert brightness == sorted(brightness)
++    assert converted.convert("RGBA").tobytes() == unsorted.convert("RGBA").tobytes()
++
++
++def test_sort_palette_few_colors():
++    # Unused entries at the end of the palette are not sorted in among the colors
++    image = Image.new("RGB", (2, 1), (200, 200, 200))
++    image.putpixel((1, 0), (10, 20, 30))
++
++    converted = image.quantize(256, sort_palette="brightness")
++
++    assert converted.getpalette()[:6] == [10, 20, 30, 200, 200, 200]
++    assert list(converted.getdata()) == [1, 0]
++    assert converted.convert("RGB").tobytes() == image.tobytes()
++
++
++def test_sort_palette_with_palette():
++    image = hopper()
++    with Image.open("Tests/images/caption_6_33_22.png") as palette:
++        palette = palette.convert("P")
++
++    unsorted = image.quantize(dither=0, palette=palette)
++    converted = image.quantize(dither=0, palette=palette, sort_palette="brightness")
++
++    assert_image(converted, "P", converted.size)
++    assert converted.convert("RGB").tobytes() == unsorted.convert("RGB").tobytes()
++    used = max(converted.getdata()) + 1
++    colors = _palette_colors(converted, used)
++    brightness = [_brightness(color) for color in colors]
++    assert brightness == sorted(brightness)
++
++
++def test_sort_palette_invalid():
++    image = hopper()
++    with pytest.raises(ValueError):
++        image.quantize(16, sort_palette="hue")
++    with pytest.raises(ValueError):
++        image.quantize(16, sort_palette=True)
++
++
++def test_sort_palette_after_lightness_factor():
++    image = hopper()
++    converted = image.quantize(16, lightness_factor=0.5, sort_palette="brightness")
++
++    colors = _palette_colors(converted, 16)
++    brightness = [_brightness(color) for color in colors]
++    assert brightness == sorted(brightness)
++
++    # The same image as without sorting, with the same darker colors
++    darker = image.quantize(16, lightness_factor=0.5)
++    assert converted.convert("RGB").tobytes() == darker.convert("RGB").tobytes()
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..c02a51f52 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -182,6 +182,12 @@ MAXCOVERAGE = 1
+ FASTOCTREE = 2
+ LIBIMAGEQUANT = 3
+ 
++# how quantize(sort_palette=...) orders a palette entry, a tuple of its channels
++_PALETTE_SORT_KEYS = {
++    "brightness": lambda color: 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2],
++    "rgb": tuple,
++}
++
+ if hasattr(core, "DEFAULT_STRATEGY"):
+     DEFAULT_STRATEGY = core.DEFAULT_STRATEGY
+     FILTERED = core.FILTERED
+@@ -1048,7 +1054,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        lightness_factor=1.0,
++        sort_palette=None,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1073,10 +1088,36 @@ class Image:
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+            Default: 1 (legacy setting)
++        :param lightness_factor: Brightness adjustment applied to the palette
++           colors after quantization, before the image is returned. Values
++           greater than 1.0 make the image brighter (1.1 is 10% brighter),
++           values less than 1.0 make it darker (0.9 is 10% darker), and
++           the default of 1.0 leaves the palette unchanged. The adjustment
++           is made to the palette, not to the pixels, so it adds no colors,
++           and each channel is clamped to the range 0-255. The alpha channel
++           of an RGBA palette is not changed. Must be greater than zero,
++           otherwise a :py:exc:`ValueError` is raised.
++        :param sort_palette: Order of the palette entries of the result, applied
++           after ``lightness_factor``.
++           ``None`` (default) keeps the order the quantization produced.
++           ``"brightness"`` sorts from the darkest to the brightest color,
++           using the luma ``0.299 * R + 0.587 * G + 0.114 * B``, and ``"rgb"``
++           sorts by red, then green, then blue. Colors that compare equal keep
++           their relative order. The pixels are remapped, so the image looks
++           the same; only the palette indexes change.
+         :returns: A new image
+ 
+         """
+ 
++        if not lightness_factor > 0:
++            raise ValueError("lightness_factor must be greater than 0")
++
++        if sort_palette is not None and sort_palette not in _PALETTE_SORT_KEYS:
++            raise ValueError(
++                "sort_palette must be None, "
++                + ", ".join(repr(name) for name in _PALETTE_SORT_KEYS)
++            )
++
+         self.load()
+ 
+         if method is None:
+@@ -1104,6 +1145,10 @@ class Image:
+             im = self.im.convert("P", dither, palette.im)
+             new_im = self._new(im)
+             new_im.palette = palette.palette.copy()
++            if lightness_factor != 1.0:
++                _scale_palette_lightness(new_im, lightness_factor)
++            if sort_palette is not None:
++                new_im = new_im._sorted_palette(sort_palette)
+             return new_im
+ 
+         im = self._new(self.im.quantize(colors, method, kmeans))
+@@ -1113,6 +1158,55 @@ class Image:
+         mode = im.im.getpalettemode()
+         im.palette = ImagePalette.ImagePalette(mode, im.im.getpalette(mode, mode))
+ 
++        if lightness_factor != 1.0:
++            _scale_palette_lightness(im, lightness_factor)
++
++        if sort_palette is not None:
++            im = im._sorted_palette(sort_palette)
++
++        return im
++
++    def _sorted_palette(self, sort_palette):
++        """
++        Reorders the palette entries of this "P" image by the named key of
++        ``_PALETTE_SORT_KEYS`` and remaps the pixels to match, so that every
++        pixel keeps its color.
++
++        Only the entries up to the highest index in use are sorted. The
++        quantizers pad the palette to 256 entries with black, and sorting
++        those with the real colors would put them among them.
++
++        :returns: A new image
++        """
++        from . import ImagePalette
++
++        mode = self.im.getpalettemode()
++        size = len(mode)
++        data = self.im.getpalette(mode, mode)
++
++        histogram = self.histogram()
++        used = max((i for i, count in enumerate(histogram) if count), default=-1) + 1
++        entries = [tuple(data[i * size : (i + 1) * size]) for i in range(used)]
++
++        key = _PALETTE_SORT_KEYS[sort_palette]
++        order = sorted(range(used), key=lambda i: key(entries[i]))
++
++        # order[new] is the old index of the entry that moves to position new
++        lut = list(range(256))
++        new_data = bytearray(data)
++        for new, old in enumerate(order):
++            lut[old] = new
++            new_data[new * size : (new + 1) * size] = bytes(entries[old])
++
++        im = self.point(lut)
++        if mode == "RGBA":
++            # the core takes the colors and the alpha values separately
++            rgb = bytes(value for i, value in enumerate(new_data) if i % 4 != 3)
++            im.im.putpalette("RGB", rgb)
++            im.im.putpalettealphas(bytes(new_data[3::4]))
++        else:
++            im.im.putpalette(mode, bytes(new_data))
++        im.palette = ImagePalette.ImagePalette(mode, bytes(new_data))
+         return im
+ 
+     def copy(self):
+@@ -2613,6 +2707,45 @@ def _wedge():
+     return Image()._new(core.wedge("L"))
+ 
+ 
++def _scale_palette_lightness(im, factor):
++    """
++    Multiply the color channels of a "P" image's palette by ``factor``, in place.
++
++    The scaled values are cut off at 255, and the alpha channel of an RGBA
++    palette is left as it is. Only the palette changes, never the pixels,
++    so no color is added.
++
++    :param im: A "P" image with a palette.
++    :param factor: A number greater than zero.
++    """
++    from . import ImagePalette
++
++    def scale(value):
++        # 0 stays 0 even for an infinite factor, where 0 * inf is not a number
++        if value == 0:
++            return 0
++        scaled = value * factor
++        return 255 if scaled >= 255 else int(scaled)
++
++    table = bytes(scale(value) for value in range(256))
++
++    mode = im.im.getpalettemode()
++    data = bytearray(im.im.getpalette(mode, mode))
++    step = len(mode)
++
++    # The color bands come first, and an alpha band, if there is one, last
++    colors = bytearray(len(data) // step * 3)
++    for band in range(3):
++        data[band::step] = data[band::step].translate(table)
++        colors[band::3] = data[band::step]
++
++    # The core takes a palette without alpha, and its alpha values apart
++    im.im.putpalette("RGB", bytes(colors))
++    if mode == "RGBA":
++        im.im.putpalettealphas(bytes(data[3::4]))
++    im.palette = ImagePalette.ImagePalette(mode, bytes(data))
++
++
+ def _check_size(size):
+     """
+     Common check to enforce type and sanity check on size tuples

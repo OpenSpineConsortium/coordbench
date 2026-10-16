@@ -1,0 +1,33 @@
+commit 1f95e28be8e750e63cfa76f1034e244d20443cfa (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:30:35 2026 +0000
+
+    Disable nesting validation for contexts made during shell completion
+
+ src/click/shell_completion.py | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+commit 74d780f47535819ad790fe9362f9fbe621fa10f5
+Merge: a37c763 ab1b19e
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:30:08 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit ab1b19e5827ddc8180cbe506ad506f56298d697f (agent2)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:29:49 2026 +0000
+
+    Add validate_nesting to Context to catch open child contexts on close
+
+ src/click/core.py | 89 ++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 82 insertions(+), 7 deletions(-)
+
+commit a37c763230173437cc234e953cd93517910c5c9b
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:28:22 2026 +0000
+
+    Close contexts created during shell completion
+
+ src/click/shell_completion.py | 69 ++++++++++++++++++++++++-------------------
+ 1 file changed, 38 insertions(+), 31 deletions(-)

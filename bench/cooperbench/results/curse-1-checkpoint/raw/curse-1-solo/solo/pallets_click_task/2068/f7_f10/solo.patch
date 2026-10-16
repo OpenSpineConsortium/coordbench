@@ -1,0 +1,117 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..f07a907 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -485,11 +485,15 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        escape_shell: bool = False,
++        working_dir: str | None = None,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.escape_shell = escape_shell
++        self.working_dir = working_dir
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -505,6 +509,36 @@ class Editor:
+                 return editor
+         return "vi"
+ 
++    def _quote_editor(self, editor: str) -> str:
++        """Quote an editor command for the shell, keeping its arguments.
++
++        An editor that names an executable as a whole (a path with spaces,
++        say) is quoted as one word. Anything else is split the way a
++        shell would split it and each word is quoted, so ``vim -p`` stays
++        a command with an argument while ``vim; rm -rf /`` cannot start a
++        second command.
++        """
++        import shlex
++        import shutil
++
++        if shutil.which(editor) is not None:
++            return shlex.quote(editor)
++
++        try:
++            words = shlex.split(editor)
++        except ValueError:
++            return shlex.quote(editor)
++
++        return " ".join(shlex.quote(word) for word in words)
++
++    def _build_command(self, editor: str, filename: str) -> str:
++        if not self.escape_shell:
++            return f'{editor} "{filename}"'
++
++        import shlex
++
++        return f"{self._quote_editor(editor)} {shlex.quote(filename)}"
++
+     def edit_file(self, filename: str) -> None:
+         import subprocess
+ 
+@@ -516,7 +550,12 @@ class Editor:
+             environ.update(self.env)
+ 
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
++            c = subprocess.Popen(
++                self._build_command(editor, filename),
++                env=environ,
++                shell=True,
++                cwd=self.working_dir,
++            )
+             exit_code = c.wait()
+             if exit_code != 0:
+                 raise ClickException(
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..05edcc3 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,8 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    escape_shell: bool = False,
++    working_dir: str | None = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +679,31 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param escape_shell: if this is true, the filename and the editor
++                         command are quoted with :func:`shlex.quote`
++                         before they reach the shell, so special
++                         characters such as ``;``, ``|`` or a backtick
++                         are taken literally and cannot run another
++                         command. The editor's own arguments are kept.
++                         This quotes for POSIX shells. Defaults to
++                         ``False``.
++    :param working_dir: the directory to run the editor in. A relative
++                        ``filename`` is resolved against it by the
++                        editor. If the directory does not exist or
++                        cannot be entered, editing fails with a
++                        :exc:`ClickException`. Defaults to the current
++                        working directory.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        escape_shell=escape_shell,
++        working_dir=working_dir,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

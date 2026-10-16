@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "create",
+    "task_id": "e62a29656f",
+    "by": "bench-runner",
+    "title": "Implement feature 5",
+    "ts": 1792147882.6166787
+  },
+  {
+    "kind": "create",
+    "task_id": "45378fab49",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792147882.6167328
+  },
+  {
+    "kind": "claim",
+    "task_id": "e62a29656f",
+    "by": "agent2",
+    "ts": 1792147910.2828817
+  },
+  {
+    "kind": "update",
+    "task_id": "45378fab49",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 1 implemented and tested in lead tree; waiting for agent2 patch to integrate",
+    "ts": 1792148021.2250102
+  },
+  {
+    "kind": "claim",
+    "task_id": "45378fab49",
+    "by": "agent1",
+    "ts": 1792148021.3262277
+  },
+  {
+    "kind": "update",
+    "task_id": "e62a29656f",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch (src/PIL/Image.py + Tests/test_image.py)",
+    "ts": 1792148217.4854858
+  },
+  {
+    "kind": "update",
+    "task_id": "45378fab49",
+    "by": "agent1",
+    "status": "done",
+    "note": "integrated agent2 patch (src) with feature 1; merged tree tests pass; patch.txt written",
+    "ts": 1792148272.6513982
+  }
+]

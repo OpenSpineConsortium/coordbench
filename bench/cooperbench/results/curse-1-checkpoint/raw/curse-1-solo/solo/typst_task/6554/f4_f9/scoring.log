@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/typst_task/6554/f4_f9", "verdict": "pass"}
+coordbench run: solo-6554-f4_f9-7fa9e5: timings: hub 0.1 s, run_create 0.0 s, provision 23 s, agents 220 s, close 0.0 s, score 132 s, teardown 6.4 s
+coordbench run: summary: 20 completed, 0 skipped, 0 failed; evals: 20 evaluated, 14 passed, 6 failed, 0 errors (70.0%); cost: unknown

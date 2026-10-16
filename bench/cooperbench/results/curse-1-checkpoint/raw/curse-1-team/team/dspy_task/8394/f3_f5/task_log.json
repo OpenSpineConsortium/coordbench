@@ -1,0 +1,46 @@
+[
+  {
+    "kind": "create",
+    "task_id": "6746f14fd6",
+    "by": "bench-runner",
+    "title": "Implement feature 5",
+    "ts": 1792146871.2079937
+  },
+  {
+    "kind": "create",
+    "task_id": "660c1d3058",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 3",
+    "ts": 1792146871.208044
+  },
+  {
+    "kind": "claim",
+    "task_id": "6746f14fd6",
+    "by": "agent2",
+    "ts": 1792146911.9284508
+  },
+  {
+    "kind": "update",
+    "task_id": "6746f14fd6",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "started feature 5 (compression)",
+    "ts": 1792146941.228974
+  },
+  {
+    "kind": "update",
+    "task_id": "6746f14fd6",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch (cache.py + clients/__init__.py; roundtrip gzip/zlib/None, legacy load, set_compression, eviction knobs tested)",
+    "ts": 1792147200.707076
+  },
+  {
+    "kind": "update",
+    "task_id": "660c1d3058",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch + feature 3; patch.txt written",
+    "ts": 1792147310.880714
+  }
+]

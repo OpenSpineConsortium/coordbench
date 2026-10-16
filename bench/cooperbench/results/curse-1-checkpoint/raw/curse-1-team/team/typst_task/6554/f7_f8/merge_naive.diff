@@ -1,0 +1,191 @@
+diff --cc crates/typst/src/foundations/str.rs
+index b9cebb5a5,7b531d5ac..000000000
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@@ -179,11 -179,27 +179,35 @@@ impl Str 
+      /// Extracts the first grapheme cluster of the string.
+      /// Fails with an error if the string is empty.
+      ///
+++<<<<<<< HEAD
+ +    /// Optionally transforms the extracted grapheme cluster to uppercase,
+ +    /// lowercase or title case with the `case` parameter.
+ +    #[func]
+ +    pub fn first(
+ +        &self,
+++=======
++     /// If a `pattern` is given, the first grapheme cluster whose leading
++     /// character belongs to that character class is extracted instead. Fails
++     /// with an error if no grapheme cluster matches.
++     ///
++     /// Optionally transforms the extracted grapheme cluster to uppercase,
++     /// lowercase or title case with the `case` parameter.
++     ///
++     /// ```example
++     /// #"123abc".first(pattern: "alpha") \
++     /// #"hello world".first(pattern: "whitespace") \
++     /// #"hello".first(case: "upper")
++     /// ```
++     #[func]
++     pub fn first(
++         &self,
++         /// A built-in character class to look for instead of the very first
++         /// grapheme cluster. One of `{"alpha"}`, `{"numeric"}`,
++         /// `{"alphanumeric"}`, `{"uppercase"}`, `{"lowercase"}` or
++         /// `{"whitespace"}`.
++         #[named]
++         pattern: Option<Str>,
+++>>>>>>> agent1
+          /// The case to transform the grapheme cluster to: `{"upper"}`,
+          /// `{"lower"}` or `{"title"}`. Title case uppercases the first
+          /// codepoint and lowercases the rest. If not given, the grapheme
+@@@ -191,18 -207,46 +215,58 @@@
+          #[named]
+          case: Option<Str>,
+      ) -> StrResult<Str> {
+++<<<<<<< HEAD
+ +        let grapheme = self.0.graphemes(true).next().ok_or_else(string_is_empty)?;
+++=======
++         let mut graphemes = self.0.graphemes(true);
++         let grapheme = match pattern {
++             None => graphemes.next().ok_or_else(string_is_empty)?,
++             Some(name) => {
++                 if self.0.is_empty() {
++                     return Err(string_is_empty());
++                 }
++                 let class = CharClass::parse(&name)?;
++                 graphemes
++                     .find(|g| class.matches_leading(g))
++                     .ok_or_else(|| no_char_matches_pattern(&name))?
++             }
++         };
+++>>>>>>> agent1
+          apply_case(grapheme, case.as_deref())
+      }
+  
+      /// Extracts the last grapheme cluster of the string.
+      /// Fails with an error if the string is empty.
+      ///
+++<<<<<<< HEAD
+ +    /// Optionally transforms the extracted grapheme cluster to uppercase,
+ +    /// lowercase or title case with the `case` parameter.
+ +    #[func]
+ +    pub fn last(
+ +        &self,
+++=======
++     /// If a `pattern` is given, the last grapheme cluster whose leading
++     /// character belongs to that character class is extracted instead. Fails
++     /// with an error if no grapheme cluster matches.
++     ///
++     /// Optionally transforms the extracted grapheme cluster to uppercase,
++     /// lowercase or title case with the `case` parameter.
++     ///
++     /// ```example
++     /// #"hello123".last(pattern: "alpha") \
++     /// #"hello123".last(pattern: "numeric") \
++     /// #"hello".last(case: "upper")
++     /// ```
++     #[func]
++     pub fn last(
++         &self,
++         /// A built-in character class to look for instead of the very last
++         /// grapheme cluster. One of `{"alpha"}`, `{"numeric"}`,
++         /// `{"alphanumeric"}`, `{"uppercase"}`, `{"lowercase"}` or
++         /// `{"whitespace"}`.
++         #[named]
++         pattern: Option<Str>,
+++>>>>>>> agent1
+          /// The case to transform the grapheme cluster to: `{"upper"}`,
+          /// `{"lower"}` or `{"title"}`. Title case uppercases the first
+          /// codepoint and lowercases the rest. If not given, the grapheme
+@@@ -210,7 -254,19 +274,23 @@@
+          #[named]
+          case: Option<Str>,
+      ) -> StrResult<Str> {
+++<<<<<<< HEAD
+ +        let grapheme = self.0.graphemes(true).next_back().ok_or_else(string_is_empty)?;
+++=======
++         let mut graphemes = self.0.graphemes(true);
++         let grapheme = match pattern {
++             None => graphemes.next_back().ok_or_else(string_is_empty)?,
++             Some(name) => {
++                 if self.0.is_empty() {
++                     return Err(string_is_empty());
++                 }
++                 let class = CharClass::parse(&name)?;
++                 graphemes
++                     .rfind(|g| class.matches_leading(g))
++                     .ok_or_else(|| no_char_matches_pattern(&name))?
++             }
++         };
+++>>>>>>> agent1
+          apply_case(grapheme, case.as_deref())
+      }
+  
+@@@ -874,6 -930,64 +954,67 @@@ fn apply_case(grapheme: &str, case: Opt
+      })
+  }
+  
+++<<<<<<< HEAD
+++=======
++ /// A built-in character class that `str.first` and `str.last` can look for.
++ #[derive(Debug, Copy, Clone, Eq, PartialEq)]
++ enum CharClass {
++     Alpha,
++     Numeric,
++     Alphanumeric,
++     Uppercase,
++     Lowercase,
++     Whitespace,
++ }
++ 
++ impl CharClass {
++     /// Looks up a class by the name callers pass as `pattern`.
++     fn parse(name: &str) -> StrResult<Self> {
++         Ok(match name {
++             "alpha" => Self::Alpha,
++             "numeric" => Self::Numeric,
++             "alphanumeric" => Self::Alphanumeric,
++             "uppercase" => Self::Uppercase,
++             "lowercase" => Self::Lowercase,
++             "whitespace" => Self::Whitespace,
++             _ => return Err(unknown_char_class(name)),
++         })
++     }
++ 
++     /// Whether a single character belongs to the class.
++     fn matches(self, c: char) -> bool {
++         match self {
++             Self::Alpha => c.is_alphabetic(),
++             Self::Numeric => c.is_numeric(),
++             Self::Alphanumeric => c.is_alphanumeric(),
++             Self::Uppercase => c.is_uppercase(),
++             Self::Lowercase => c.is_lowercase(),
++             Self::Whitespace => c.is_whitespace(),
++         }
++     }
++ 
++     /// Whether the first character of a grapheme cluster belongs to the class.
++     fn matches_leading(self, grapheme: &str) -> bool {
++         grapheme.chars().next().is_some_and(|c| self.matches(c))
++     }
++ }
++ 
++ /// The error message when no grapheme cluster matches the requested class.
++ #[cold]
++ fn no_char_matches_pattern(name: &str) -> EcoString {
++     eco_format!("no character matches pattern \"{}\"", name)
++ }
++ 
++ /// The error message when the requested character class does not exist.
++ #[cold]
++ fn unknown_char_class(name: &str) -> EcoString {
++     eco_format!(
++         "unknown pattern \"{}\" (expected \"alpha\", \"numeric\", \"alphanumeric\", \"uppercase\", \"lowercase\" or \"whitespace\")",
++         name
++     )
++ }
++ 
+++>>>>>>> agent1
+  /// A regular expression.
+  ///
+  /// Can be used as a [show rule selector]($styling/#show-rules) and with

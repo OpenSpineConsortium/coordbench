@@ -1,0 +1,37 @@
+{
+  "events": {
+    "run_started": 1,
+    "tool": 17,
+    "tool_done": 17,
+    "claim": 2,
+    "receive": 4,
+    "message": 2,
+    "pr_opened": 2,
+    "ready": 2,
+    "merge_attempt": 2,
+    "merge": 2
+  },
+  "tool_surface": "mcp",
+  "messages_sent": 2,
+  "messages_by_agent": {
+    "agent1": 1,
+    "agent2": 1
+  },
+  "message_chars": 897,
+  "message_words": 125,
+  "tool_calls": {
+    "board": 3,
+    "claim_issue": 2,
+    "receive_messages": 4,
+    "send_message": 2,
+    "open_pull_request": 2,
+    "pull_request_status": 2,
+    "mark_ready": 2
+  },
+  "claims": 2,
+  "prs_opened": 2,
+  "merge_attempts": 2,
+  "merges": 2,
+  "merge_conflicts": 0,
+  "time_to_first_merge_seconds": 151.058
+}

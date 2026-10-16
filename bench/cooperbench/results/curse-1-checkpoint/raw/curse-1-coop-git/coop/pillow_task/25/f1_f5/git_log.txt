@@ -1,0 +1,26 @@
+commit 03db2a4bcd4ff7d8990e812fcac14d916f7b9950 (agent2)
+Merge: 3ab30634b 766c83a2e
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:56:12 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 3ab30634b0949daf283243c490c91369316a2266
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:56:06 2026 +0000
+
+    Add mark_corners option to Image.save
+
+ Tests/test_image.py | 118 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py    |  23 ++++++++++
+ 2 files changed, 141 insertions(+)
+
+commit 766c83a2e45dc0558f3d3640ca5e8dd257ba38fb (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:54:32 2026 +0000
+
+    Only ensure mutable when saving to the opened filename
+
+ Tests/test_image.py | 25 +++++++++++++++++++++++++
+ src/PIL/Image.py    | 14 +++++++++++++-
+ 2 files changed, 38 insertions(+), 1 deletion(-)

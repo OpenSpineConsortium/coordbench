@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "9dc013bbe8",
+    "by": "bench-runner",
+    "title": "Implement feature 6",
+    "ts": 1792043539.2593994
+  },
+  {
+    "kind": "create",
+    "task_id": "6251382868",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792043539.2594593
+  },
+  {
+    "kind": "claim",
+    "task_id": "9dc013bbe8",
+    "by": "agent2",
+    "ts": 1792043564.301567
+  },
+  {
+    "kind": "update",
+    "task_id": "9dc013bbe8",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "started",
+    "ts": 1792043590.7617545
+  },
+  {
+    "kind": "claim",
+    "task_id": "6251382868",
+    "by": "agent1",
+    "ts": 1792043648.018374
+  },
+  {
+    "kind": "update",
+    "task_id": "6251382868",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 1 implemented and tested in my tree; waiting for agent2 patch to merge",
+    "ts": 1792043648.12418
+  },
+  {
+    "kind": "update",
+    "task_id": "9dc013bbe8",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792043678.3099096
+  },
+  {
+    "kind": "update",
+    "task_id": "6251382868",
+    "by": "agent1",
+    "status": "done",
+    "note": "integrated agent2.patch (process_priority) with feature 1 (multi-file edit); patch.txt written, tests pass",
+    "ts": 1792043734.578572
+  }
+]

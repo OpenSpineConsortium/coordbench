@@ -1,0 +1,118 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..7ab7e9bb 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -21,10 +21,38 @@ if t.TYPE_CHECKING:
+     from .environment import Template
+ 
+ 
++def validate_template_path(template: str) -> None:
++    """Check a template path for characters and sequences that must
++    never reach a loader, and raise `TemplateNotFound` if it has any.
++
++    A path is rejected when it is empty or ``None``, contains a null
++    byte, starts with ``/`` or ``\\`` (an absolute path), starts with a
++    Windows drive letter such as ``C:``, or contains an ASCII control
++    character other than tab, newline and carriage return.
++    """
++    if not template:
++        raise TemplateNotFound(template)
++
++    if "\x00" in template:
++        raise TemplateNotFound(template)
++
++    if template[0] in "/\\":
++        raise TemplateNotFound(template)
++
++    if template[1:2] == ":" and template[0].isascii() and template[0].isalpha():
++        raise TemplateNotFound(template)
++
++    for char in template:
++        if ord(char) < 32 and char not in "\t\n\r":
++            raise TemplateNotFound(template)
++
++
+ def split_template_path(template: str) -> t.List[str]:
+     """Split a path into segments and perform a sanity check.  If it detects
+-    '..' in the path it will raise a `TemplateNotFound` error.
++    '..' in the path, or a path that `validate_template_path` refuses,
++    it will raise a `TemplateNotFound` error.
+     """
++    validate_template_path(template)
+     pieces = []
+     for piece in template.split("/"):
+         if (
+@@ -187,30 +215,61 @@ class FileSystemLoader(BaseLoader):
+         self.searchpath = [os.fspath(p) for p in searchpath]
+         self.encoding = encoding
+         self.followlinks = followlinks
++        # Maps a template name to the path it was resolved to, or to
++        # None if it was searched for and not found.
++        self._path_cache: t.Dict[str, t.Optional[str]] = {}
++
++    def _read_source(
++        self, filename: str, f: t.BinaryIO
++    ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        """Read the opened template file ``f`` found at ``filename``
++        and return the tuple ``get_source`` returns for it.
++        """
++        try:
++            contents = f.read().decode(self.encoding)
++        finally:
++            f.close()
++
++        mtime = os.path.getmtime(filename)
++
++        def uptodate() -> bool:
++            try:
++                return os.path.getmtime(filename) == mtime
++            except OSError:
++                return False
++
++        return contents, filename, uptodate
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        if template in self._path_cache:
++            cached = self._path_cache[template]
++
++            if cached is None:
++                raise TemplateNotFound(template)
++
++            f = open_if_exists(cached)
++
++            if f is not None:
++                return self._read_source(cached, f)
++
++            # The file is gone, so forget it and resolve the name again.
++            del self._path_cache[template]
++
+         pieces = split_template_path(template)
++
+         for searchpath in self.searchpath:
+             filename = os.path.join(searchpath, *pieces)
+             f = open_if_exists(filename)
++
+             if f is None:
+                 continue
+-            try:
+-                contents = f.read().decode(self.encoding)
+-            finally:
+-                f.close()
+-
+-            mtime = os.path.getmtime(filename)
+ 
+-            def uptodate() -> bool:
+-                try:
+-                    return os.path.getmtime(filename) == mtime
+-                except OSError:
+-                    return False
++            self._path_cache[template] = filename
++            return self._read_source(filename, f)
+ 
+-            return contents, filename, uptodate
++        self._path_cache[template] = None
+         raise TemplateNotFound(template)
+ 
+     def list_templates(self) -> t.List[str]:

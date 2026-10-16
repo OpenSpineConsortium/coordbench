@@ -1,0 +1,57 @@
+{"seq": 0, "t": 0.0, "kind": "run_started", "agent": null, "epoch": 1792147200.7499094, "iso": "2026-10-16T10:40:00.749909+00:00", "arm": "sdlc", "agents": [{"id": "agent1", "role": "peer", "features": [2]}, {"id": "agent2", "role": "peer", "features": [4]}], "tool_surface": "mcp"}
+{"seq": 1, "t": 29.107, "kind": "tool", "agent": "agent1", "tool": "board", "via": "shell"}
+{"seq": 2, "t": 31.334, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 3, "t": 31.608, "kind": "tool_done", "agent": "agent1", "tool": "board", "duration_ms": 2500.618, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 4, "t": 31.668, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 334.235, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 5, "t": 38.86, "kind": "tool", "agent": "agent1", "tool": "claim_issue", "via": "shell"}
+{"seq": 6, "t": 38.86, "kind": "claim", "agent": "agent1", "issue": 2}
+{"seq": 7, "t": 38.86, "kind": "tool_done", "agent": "agent1", "tool": "claim_issue", "duration_ms": 0.064, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 8, "t": 39.206, "kind": "tool", "agent": "agent2", "tool": "claim_issue", "via": "shell"}
+{"seq": 9, "t": 39.206, "kind": "claim", "agent": "agent2", "issue": 4}
+{"seq": 10, "t": 39.206, "kind": "tool_done", "agent": "agent2", "tool": "claim_issue", "duration_ms": 0.059, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 11, "t": 82.209, "kind": "tool", "agent": "agent1", "tool": "receive_messages", "via": "shell"}
+{"seq": 12, "t": 82.209, "kind": "receive", "agent": "agent1", "count": 0, "message_ids": [], "call_id": 11}
+{"seq": 13, "t": 82.209, "kind": "tool_done", "agent": "agent1", "tool": "receive_messages", "duration_ms": 0.045, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 14, "t": 101.527, "kind": "tool", "agent": "agent1", "tool": "send_message", "via": "shell"}
+{"seq": 15, "t": 101.528, "kind": "message", "agent": "agent1", "to": "agent2", "chars": 426, "content": "agent1 (#2): I touch only src/datasets/features/features.py: require_decoding (new optional custom_criteria kwarg), Features.__init__, __setitem__, __reduce__ (+ a new __setstate__ and set_custom_decoding_criteria right after __reduce__). I do NOT edit Features.update; if your update() assigns via self[key] = value it will pick up my criteria through __setitem__. Tell me if you plan to edit __init__/__setitem__/__reduce__.", "timestamp": 1792147302.2774231, "timestamp_iso": "2026-10-16T10:41:42.277427", "message_id": 15, "send_id": 14}
+{"seq": 16, "t": 101.528, "kind": "tool_done", "agent": "agent1", "tool": "send_message", "duration_ms": 0.081, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 17, "t": 109.211, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"}
+{"seq": 18, "t": 109.211, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 288, "content": "agent2 here: issue #4 only changes Features.update (plus private helpers _update_pairs/_is_pair/_pairs_from_json right after it) in src/datasets/features/features.py. I do not touch require_decoding, Features.__init__, __setitem__ or __delitem__. If you edit those, our merges stay clean.", "timestamp": 1792147309.9611816, "timestamp_iso": "2026-10-16T10:41:49.961185", "message_id": 18, "send_id": 17}
+{"seq": 19, "t": 109.211, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 0.105, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 20, "t": 109.644, "kind": "tool", "agent": "agent2", "tool": "open_pull_request", "via": "shell"}
+{"seq": 21, "t": 109.78, "kind": "pr_opened", "agent": "agent2", "issue": 4}
+{"seq": 22, "t": 109.78, "kind": "tool_done", "agent": "agent2", "tool": "open_pull_request", "duration_ms": 135.782, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 23, "t": 116.681, "kind": "tool", "agent": "agent2", "tool": "receive_messages", "via": "shell"}
+{"seq": 24, "t": 116.681, "kind": "receive", "agent": "agent2", "count": 1, "message_ids": [15], "call_id": 23}
+{"seq": 25, "t": 116.681, "kind": "tool_done", "agent": "agent2", "tool": "receive_messages", "duration_ms": 0.081, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 26, "t": 116.786, "kind": "tool", "agent": "agent2", "tool": "pull_request_status", "via": "shell"}
+{"seq": 27, "t": 116.86, "kind": "tool_done", "agent": "agent2", "tool": "pull_request_status", "duration_ms": 73.309, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 28, "t": 116.961, "kind": "tool", "agent": "agent2", "tool": "mark_ready", "via": "shell"}
+{"seq": 29, "t": 117.035, "kind": "ready", "agent": "agent2", "issue": 4}
+{"seq": 30, "t": 117.035, "kind": "merge_attempt", "agent": "agent2", "issue": 4, "branch_commit": "aa51898d033271acce4b9c75c087291fd8a6d11b", "main_before": "e229fade6d1a5b8eedb02370b5e6605b9b8b44aa"}
+{"seq": 31, "t": 118.286, "kind": "merge", "agent": "agent2", "issue": 4, "commit": "56c08e83542a8bbea3dab44705b939c2f3d115c9"}
+{"seq": 32, "t": 118.286, "kind": "tool_done", "agent": "agent2", "tool": "mark_ready", "duration_ms": 1324.467, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 33, "t": 125.173, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 34, "t": 125.234, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 61.306, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 35, "t": 132.837, "kind": "tool", "agent": "agent2", "tool": "send_message", "via": "shell"}
+{"seq": 36, "t": 132.837, "kind": "message", "agent": "agent2", "to": "agent1", "chars": 236, "content": "agent2: #4 is merged into main as 56c08e8 (only Features.update changed). When you mark #2 ready, main will merge cleanly with your branch unless you touched update. I will wait for your merge to build my patch from the integrated main.", "timestamp": 1792147333.586894, "timestamp_iso": "2026-10-16T10:42:13.586896", "message_id": 36, "send_id": 35}
+{"seq": 37, "t": 132.837, "kind": "tool_done", "agent": "agent2", "tool": "send_message", "duration_ms": 0.057, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 38, "t": 132.933, "kind": "tool", "agent": "agent2", "tool": "wait_for_message", "via": "shell"}
+{"seq": 39, "t": 143.028, "kind": "tool", "agent": "agent1", "tool": "open_pull_request", "via": "shell"}
+{"seq": 40, "t": 143.156, "kind": "pr_opened", "agent": "agent1", "issue": 2}
+{"seq": 41, "t": 143.156, "kind": "tool_done", "agent": "agent1", "tool": "open_pull_request", "duration_ms": 128.169, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 42, "t": 143.283, "kind": "tool", "agent": "agent1", "tool": "receive_messages", "via": "shell"}
+{"seq": 43, "t": 143.283, "kind": "receive", "agent": "agent1", "count": 2, "message_ids": [18, 36], "call_id": 42}
+{"seq": 44, "t": 143.283, "kind": "tool_done", "agent": "agent1", "tool": "receive_messages", "duration_ms": 0.085, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 45, "t": 149.752, "kind": "tool", "agent": "agent1", "tool": "pull_request_status", "via": "shell"}
+{"seq": 46, "t": 149.838, "kind": "tool_done", "agent": "agent1", "tool": "pull_request_status", "duration_ms": 86.4, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 47, "t": 149.952, "kind": "tool", "agent": "agent1", "tool": "mark_ready", "via": "shell"}
+{"seq": 48, "t": 150.034, "kind": "ready", "agent": "agent1", "issue": 2}
+{"seq": 49, "t": 150.034, "kind": "merge_attempt", "agent": "agent1", "issue": 2, "branch_commit": "6655299216c9cd9a81a1bba549104c2db19ff595", "main_before": "56c08e83542a8bbea3dab44705b939c2f3d115c9"}
+{"seq": 50, "t": 150.795, "kind": "merge", "agent": "agent1", "issue": 2, "commit": "86467a113a201ebd683a28cc76e3d06744b49afe"}
+{"seq": 51, "t": 150.795, "kind": "tool_done", "agent": "agent1", "tool": "mark_ready", "duration_ms": 843.683, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 52, "t": 372.934, "kind": "tool_done", "agent": "agent2", "tool": "wait_for_message", "duration_ms": 240000.36, "blocked_ms": 240000.308, "is_error": false, "cancelled": false}
+{"seq": 53, "t": 378.528, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 54, "t": 378.593, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 65.001, "blocked_ms": 0.0, "is_error": false, "cancelled": false}
+{"seq": 55, "t": 378.718, "kind": "tool", "agent": "agent2", "tool": "board", "via": "shell"}
+{"seq": 56, "t": 378.785, "kind": "tool_done", "agent": "agent2", "tool": "board", "duration_ms": 66.754, "blocked_ms": 0.0, "is_error": false, "cancelled": false}

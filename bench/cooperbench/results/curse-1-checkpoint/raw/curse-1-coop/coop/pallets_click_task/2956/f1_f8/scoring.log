@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/pallets_click_task/2956/f1_f8", "verdict": "pass"}
+coordbench run: coop-2956-f1_f8-c08428: timings: hub 0.1 s, run_create 0.0 s, provision 2.1 s, agents 202 s (agent1 200 s, agent2 202 s), close 0.0 s, score 14 s, cascade 22 s, teardown 0.4 s
+coordbench run: summary: 21 completed, 0 skipped, 0 failed; evals: 21 evaluated, 15 passed, 6 failed, 0 errors (71.4%); cost: unknown

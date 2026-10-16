@@ -1,0 +1,283 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..03bf7bce1 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -257,6 +257,47 @@ class TestImage:
+         with Image.open(temp_file) as im:
+             assert im.readonly
+             im.save(temp_file)
++            assert not im.readonly
++
++    @pytest.mark.skipif(is_win32(), reason="Test requires opening tempfile twice")
++    @pytest.mark.skipif(
++        sys.platform == "cygwin",
++        reason="Test requires opening an mmaped file for writing",
++    )
++    def test_readonly_save_same_file_other_spelling(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.bmp"
++        shutil.copy("Tests/images/rgb32bf-rgba.bmp", temp_file)
++
++        with Image.open(temp_file) as im:
++            assert im.readonly
++            im.save(tmp_path / ".." / tmp_path.name / "temp.bmp")
++            assert not im.readonly
++
++    def test_readonly_save_other_file(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.bmp"
++        shutil.copy("Tests/images/rgb32bf-rgba.bmp", temp_file)
++
++        with Image.open(temp_file) as im:
++            assert im.readonly
++            im.save(tmp_path / "other.bmp")
++            assert im.readonly
++
++            with Image.open(tmp_path / "other.bmp") as reloaded:
++                assert reloaded.size == im.size
++
++    def test_frombuffer_save_keeps_buffer(self, tmp_path: Path) -> None:
++        data = bytearray(b"\xff")
++        im = Image.frombuffer("L", (1, 1), data, "raw", "L", 0, 1)
++        assert im.readonly
++
++        data[0] = 128
++        assert im.getdata()[0] == 128
++
++        im.save(tmp_path / "temp.bmp")
++        assert im.readonly
++
++        data[0] = 64
++        assert im.getdata()[0] == 64
+ 
+     def test_dump(self, tmp_path: Path) -> None:
+         im = Image.new("L", (10, 10))
+@@ -752,6 +793,139 @@ class TestImage:
+ 
+         assert not os.path.exists(temp_file)
+ 
++    @pytest.mark.parametrize("ext", (".png", ".bmp", ".tif", ".ppm"))
++    def test_save_mark_corners(self, tmp_path: Path, ext: str) -> None:
++        # Arrange
++        temp_file = tmp_path / ("temp" + ext)
++        im = Image.new("RGB", (10, 6), "white")
++
++        # Act
++        im.save(temp_file, mark_corners=True)
++
++        # Assert
++        with Image.open(temp_file) as reloaded:
++            assert reloaded.getpixel((0, 0)) == (255, 0, 0)
++            assert reloaded.getpixel((9, 5)) == (255, 0, 0)
++
++            # Nothing else changes
++            reloaded.putpixel((0, 0), (255, 255, 255))
++            reloaded.putpixel((9, 5), (255, 255, 255))
++            assert_image_equal(reloaded, Image.new("RGB", (10, 6), "white"))
++
++    def test_save_mark_corners_off_by_default(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++        im = Image.new("RGB", (10, 6), "white")
++
++        im.save(temp_file)
++        im.save(temp_file, mark_corners=False)
++
++        with Image.open(temp_file) as reloaded:
++            assert_image_equal(reloaded, Image.new("RGB", (10, 6), "white"))
++        assert im.getpixel((0, 0)) == (255, 255, 255)
++
++    def test_save_mark_corners_jpeg(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.jpg"
++        im = Image.new("RGB", (16, 16), "white")
++
++        im.save(temp_file, quality=100, subsampling=0, mark_corners=True)
++
++        with Image.open(temp_file) as reloaded:
++            for xy in ((0, 0), (15, 15)):
++                pixel = reloaded.getpixel(xy)
++                assert isinstance(pixel, tuple)
++                r, g, b = pixel
++                assert r > 200 and g < 80 and b < 80
++            assert_image_similar(
++                reloaded.crop((4, 4, 12, 12)), Image.new("RGB", (8, 8), "white"), 2
++            )
++
++    def test_save_mark_corners_file_object(self) -> None:
++        im = Image.new("RGB", (4, 4), "blue")
++
++        out = io.BytesIO()
++        im.save(out, "PNG", mark_corners=True)
++
++        out.seek(0)
++        with Image.open(out) as reloaded:
++            assert reloaded.getpixel((0, 0)) == (255, 0, 0)
++            assert reloaded.getpixel((3, 3)) == (255, 0, 0)
++            assert reloaded.getpixel((3, 0)) == (0, 0, 255)
++            assert reloaded.getpixel((0, 3)) == (0, 0, 255)
++
++    def test_save_mark_corners_from_encoderinfo(self) -> None:
++        im = Image.new("RGB", (4, 4), "blue")
++        im.encoderinfo = {"mark_corners": True}
++
++        im.save(io.BytesIO(), "PNG")
++
++        assert im.getpixel((0, 0)) == (255, 0, 0)
++        assert im.getpixel((3, 3)) == (255, 0, 0)
++
++    def test_save_mark_corners_one_pixel(self) -> None:
++        im = Image.new("RGB", (1, 1), "white")
++
++        im.save(io.BytesIO(), "PNG", mark_corners=True)
++
++        assert im.getpixel((0, 0)) == (255, 0, 0)
++
++    def test_save_mark_corners_empty(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.jpg"
++
++        # The usual error, and not one about a pixel that is not there
++        with pytest.raises(ValueError, match="cannot write empty image"):
++            Image.new("RGB", (0, 0)).save(temp_file, mark_corners=True)
++        assert not os.path.exists(temp_file)
++
++    @pytest.mark.parametrize(
++        "mode, red",
++        (
++            ("1", 0),
++            ("L", 76),
++            ("LA", (76, 255)),
++            ("RGB", (255, 0, 0)),
++            ("RGBA", (255, 0, 0, 255)),
++            ("CMYK", (0, 255, 255, 0)),
++            ("I", 76),
++            ("F", 76.24500274658203),
++        ),
++    )
++    def test_save_mark_corners_modes(
++        self, tmp_path: Path, mode: str, red: float | tuple[int, ...]
++    ) -> None:
++        temp_file = tmp_path / "temp.tif"
++        im = Image.new(mode, (5, 4), 255 if mode in ("1", "I", "F") else None)
++        other = im.getpixel((2, 2))
++
++        im.save(temp_file, mark_corners=True)
++
++        with Image.open(temp_file) as reloaded:
++            for image in (im, reloaded):
++                assert image.getpixel((0, 0)) == pytest.approx(red)
++                assert image.getpixel((4, 3)) == pytest.approx(red)
++                assert image.getpixel((2, 2)) == other
++
++    def test_save_mark_corners_ycbcr(self) -> None:
++        im = Image.new("YCbCr", (5, 4), (255, 128, 128))
++
++        im.save(io.BytesIO(), "JPEG", mark_corners=True)
++
++        assert im.getpixel((0, 0)) == (76, 84, 255)
++        assert im.getpixel((4, 3)) == (76, 84, 255)
++        assert im.getpixel((2, 2)) == (255, 128, 128)
++
++    def test_save_mark_corners_palette(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++        im = Image.new("RGB", (5, 4), "white").convert("P")
++
++        im.save(temp_file, mark_corners=True)
++
++        with Image.open(temp_file) as reloaded:
++            reloaded_rgb = reloaded.convert("RGB")
++        for image in (im.convert("RGB"), reloaded_rgb):
++            assert image.getpixel((0, 0)) == (255, 0, 0)
++            assert image.getpixel((4, 3)) == (255, 0, 0)
++            assert image.getpixel((2, 2)) == (255, 255, 255)
++
+     def test_load_on_nonexclusive_multiframe(self) -> None:
+         with open("Tests/images/frozenpond.mpo", "rb") as fp:
+ 
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..5f2339892 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -643,6 +643,19 @@ class Image:
+         else:
+             self.load()
+ 
++    def _opened_from(self, filename: str | bytes) -> bool:
++        # Only images read from a file have a filename. An image made by
++        # frombuffer() has none, so saving it must not detach it from its buffer.
++        opened = getattr(self, "filename", "")
++        if not opened or not filename:
++            return False
++        if opened == filename:
++            return True
++        try:
++            return os.path.samefile(opened, filename)
++        except OSError:
++            return False
++
+     def _dump(
+         self, file: str | None = None, format: str | None = None, **options: Any
+     ) -> str:
+@@ -2466,6 +2479,25 @@ class Image:
+             (w, h), Transform.AFFINE, matrix, resample, fillcolor=fillcolor
+         )
+ 
++    def _mark_corners(self) -> None:
++        """
++        Sets the top-left and bottom-right pixels to red, in place. Used by
++        :py:meth:`~PIL.Image.Image.save` for its ``mark_corners`` option.
++        """
++        width, height = self.size
++        if not width or not height:
++            return
++        red: float | tuple[int, ...] | None
++        if self.mode in ("P", "PA"):
++            # putpixel() finds this colour in the palette, or adds it
++            red = (255, 0, 0)
++        else:
++            # the nearest colour that this mode can hold
++            red = new("RGB", (1, 1), (255, 0, 0)).convert(self.mode).getpixel((0, 0))
++        assert red is not None
++        self.putpixel((0, 0), red)
++        self.putpixel((width - 1, height - 1), red)
++
+     def save(
+         self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
+     ) -> None:
+@@ -2485,6 +2517,15 @@ class Image:
+         implement the ``seek``, ``tell``, and ``write``
+         methods, and be opened in binary mode.
+ 
++        With ``mark_corners=True``, whatever the format, the top-left and
++        bottom-right pixels are set to red (or the nearest colour the image's
++        mode can hold) before the image is written, as a simple visual sign
++        that it has been processed. The pixels of this image change too::
++
++          from PIL import Image
++          with Image.open("photo.jpg") as im:
++              im.save("marked.jpg", mark_corners=True)
++
+         :param fp: A filename (string), os.PathLike object or file object.
+         :param format: Optional format override.  If omitted, the
+            format to use is determined from the filename extension.
+@@ -2541,7 +2582,13 @@ class Image:
+                 raise ValueError(msg) from e
+ 
+         # may mutate self!
+-        self._ensure_mutable()
++        # A memory-mapped image must be copied before the file it was opened from
++        # is overwritten. Any other readonly image, such as one made by
++        # frombuffer(), stays readonly, so it keeps reflecting its buffer.
++        if self._opened_from(filename):
++            self._ensure_mutable()
++        else:
++            self.load()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+@@ -2558,6 +2605,9 @@ class Image:
+         else:
+             save_handler = SAVE[format.upper()]
+ 
++        if self.encoderinfo.get("mark_corners"):
++            self._mark_corners()
++
+         created = False
+         if open_fp:
+             created = not os.path.exists(filename)

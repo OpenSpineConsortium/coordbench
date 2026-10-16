@@ -1,0 +1,160 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..24a847e 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -28,6 +28,9 @@ from ._compat import WIN
+ from .exceptions import ClickException
+ from .utils import echo
+ 
++if t.TYPE_CHECKING:
++    import subprocess
++
+ V = t.TypeVar("V")
+ 
+ if os.name == "nt":
+@@ -485,11 +488,22 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        timeout: int | None = None,
++        working_dir: str | os.PathLike[str] | None = None,
+     ) -> None:
++        # A bool is an int in Python, but ``timeout=True`` is a mistake
++        # and not a request for a one second limit.
++        if timeout is not None and (
++            not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0
++        ):
++            raise ValueError("timeout must be a positive integer or None.")
++
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.timeout = timeout
++        self.working_dir = working_dir
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -516,8 +530,25 @@ class Editor:
+             environ.update(self.env)
+ 
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
+-            exit_code = c.wait()
++            # A working directory that does not exist or cannot be
++            # entered makes Popen raise an OSError, reported below.
++            c = subprocess.Popen(
++                f'{editor} "{filename}"',
++                env=environ,
++                shell=True,
++                cwd=self.working_dir,
++            )
++
++            try:
++                exit_code = c.wait(timeout=self.timeout)
++            except subprocess.TimeoutExpired:
++                self._stop_process(c)
++                raise ClickException(
++                    _("{editor}: Editing timed out after {timeout} seconds").format(
++                        editor=editor, timeout=self.timeout
++                    )
++                ) from None
++
+             if exit_code != 0:
+                 raise ClickException(
+                     _("{editor}: Editing failed").format(editor=editor)
+@@ -527,6 +558,27 @@ class Editor:
+                 _("{editor}: Editing failed: {e}").format(editor=editor, e=e)
+             ) from e
+ 
++    @staticmethod
++    def _stop_process(process: subprocess.Popen[t.Any]) -> None:
++        """Stop an editor that ran out of time. Ask it to terminate
++        first so it can clean up, then kill it if it ignores that, and
++        never wait on it for long, so the caller always gets control
++        back.
++        """
++        import subprocess
++
++        process.terminate()
++
++        try:
++            process.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            process.kill()
++
++            try:
++                process.wait(timeout=5)
++            except subprocess.TimeoutExpired:
++                pass
++
+     def edit(self, text: t.AnyStr | None) -> t.AnyStr | None:
+         import tempfile
+ 
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..2557cf1 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -4,6 +4,7 @@ import collections.abc as cabc
+ import inspect
+ import io
+ import itertools
++import os
+ import sys
+ import typing as t
+ from contextlib import AbstractContextManager
+@@ -650,6 +651,8 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    timeout: int | None = None,
++    working_dir: str | os.PathLike[str] | None = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -659,7 +662,9 @@ def edit(
+     case a file is edited directly the return value is always `None` and
+     `require_save` and `extension` are ignored.
+ 
+-    If the editor cannot be opened a :exc:`UsageError` is raised.
++    If the editor cannot be opened a :exc:`UsageError` is raised. If
++    the editor does not exit within ``timeout`` seconds it is
++    terminated and a :exc:`ClickException` is raised.
+ 
+     Note for Windows: to simplify cross-platform usage, the newlines are
+     automatically converted from POSIX to Windows and vice versa.  As such,
+@@ -677,10 +682,33 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param timeout: the maximum number of seconds to wait for the editor
++                    to exit.  When it runs longer the editor process is
++                    terminated and a :exc:`ClickException` is raised.
++                    Must be a positive integer, otherwise a
++                    :exc:`ValueError` is raised.  Defaults to ``None``,
++                    which waits indefinitely.
++    :param working_dir: the directory to start the editor in, as its
++                        current working directory.  A relative
++                        ``filename`` is resolved against it by the
++                        editor.  Defaults to ``None``, which uses the
++                        current working directory of this process.  If
++                        the directory cannot be used a
++                        :exc:`ClickException` is raised.
++
++    .. versionchanged:: 8.2
++        Added the ``timeout`` and ``working_dir`` parameters.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        timeout=timeout,
++        working_dir=working_dir,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

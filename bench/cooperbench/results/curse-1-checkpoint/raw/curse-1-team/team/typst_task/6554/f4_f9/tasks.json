@@ -1,0 +1,29 @@
+[
+  {
+    "id": "444bdfa7d5",
+    "title": "Implement feature 9",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792151954.7418506,
+    "last_note": "patch at /workspace/shared/agent2.patch",
+    "metadata": {
+      "feature_id": 9,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "dff5a7c8cb",
+    "title": "Lead-only: integrate and submit feature 4",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792151954.7419107,
+    "last_note": "merged repeat (f4) + agent2's strip (f9) in first/last; full typst-tests suite 2363 pass; patch.txt written",
+    "metadata": {
+      "feature_id": 4,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

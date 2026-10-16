@@ -1,0 +1,144 @@
+diff --git a/dirty_equals/__init__.py b/dirty_equals/__init__.py
+index ba8214e..37817b4 100644
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@ -18,7 +18,7 @@ from ._numeric import (
+     IsPositiveFloat,
+     IsPositiveInt,
+ )
+-from ._other import FunctionCheck, IsJson, IsUUID
++from ._other import FunctionCheck, IsEmail, IsHash, IsJson, IsUUID
+ from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple
+ from ._strings import IsAnyStr, IsBytes, IsStr
+ 
+@@ -66,9 +66,11 @@ __all__ = (
+     'HasRepr',
+     'IsInstance',
+     # other
++    'IsHash',
+     'FunctionCheck',
+     'IsJson',
+     'IsUUID',
++    'IsEmail',
+     # strings
+     'IsStr',
+     'IsBytes',
+diff --git a/dirty_equals/_other.py b/dirty_equals/_other.py
+index b2b8379..03266d1 100644
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@ -1,5 +1,6 @@
+ import json
+-from typing import Any, Callable, TypeVar, overload
++import re
++from typing import Any, Callable, Optional, TypeVar, overload
+ from uuid import UUID
+ 
+ from ._base import DirtyEquals
+@@ -51,6 +52,57 @@ class IsUUID(DirtyEquals[UUID]):
+             return True
+ 
+ 
++class IsHash(DirtyEquals[str]):
++    """
++    A class that checks if a value is a hexadecimal string with the length of a given cryptographic hash algorithm.
++    """
++
++    _hash_lengths = {
++        'md5': 32,
++        'sha1': 40,
++        'sha224': 56,
++        'sha256': 64,
++        'sha384': 96,
++        'sha512': 128,
++    }
++
++    def __init__(self, algorithm: Literal['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']):
++        """
++        Args:
++            algorithm: The hash algorithm whose output format the value must have, one of `md5`, `sha1`, `sha224`,
++                `sha256`, `sha384` or `sha512`, in any case. Anything else raises a `ValueError`.
++
++        Only the format is checked, that is the length and the hexadecimal characters (of either case), not
++        that the value is the hash of anything in particular.
++
++        ```py title="IsHash"
++        from dirty_equals import IsHash
++
++        assert 'd41d8cd98f00b204e9800998ecf8427e' == IsHash('md5')
++        assert 'da39a3ee5e6b4b0d3255bfef95601890afd80709' == IsHash('sha1')
++        assert 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' == IsHash('sha256')
++        assert 'd41d8cd98f00b204e9800998ecf8427e' != IsHash('sha1')
++        assert 'g41d8cd98f00b204e9800998ecf8427e' != IsHash('md5')
++        assert 123 != IsHash('md5')
++        ```
++        """
++        try:
++            self.length = self._hash_lengths[algorithm.lower()]
++        except (KeyError, AttributeError):
++            supported = ', '.join(self._hash_lengths)
++            raise ValueError(f'Unsupported hash algorithm {algorithm!r}, expected one of: {supported}') from None
++        self.algorithm = algorithm
++        super().__init__(algorithm)
++
++    def equals(self, other: Any) -> bool:
++        # int(other, 16) is not used as it also accepts a sign, a 0x prefix, underscores and surrounding whitespace
++        return (
++            isinstance(other, str)
++            and len(other) == self.length
++            and all(c in '0123456789abcdefABCDEF' for c in other)
++        )
++
++
+ AnyJson = object
+ JsonType = TypeVar('JsonType', AnyJson, Any)
+ 
+@@ -145,3 +197,48 @@ class FunctionCheck(DirtyEquals[Any]):
+ 
+     def equals(self, other: Any) -> bool:
+         return self.func(other)
++
++
++_EMAIL_RE = re.compile(
++    r'[A-Za-z0-9._%+-]+'  # local part
++    r'@'
++    r'(?P<domain>(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,})'  # domain with a top level domain
++)
++
++
++class IsEmail(DirtyEquals[str]):
++    """
++    A class that checks if a value is a valid email address, optionally checking the domain of the address.
++    """
++
++    def __init__(self, domain: Optional[str] = None):
++        """
++        Args:
++            domain: The domain the email address must belong to, the comparison is case-sensitive,
++                if omitted, any domain is accepted.
++
++        ```py title="IsEmail"
++        from dirty_equals import IsEmail
++
++        assert 'user@example.com' == IsEmail
++        assert 'user@example.com' == IsEmail()
++        assert 'user@example.com' == IsEmail(domain='example.com')
++        assert 'user@example.org' != IsEmail(domain='example.com')
++        assert 'user@EXAMPLE.com' != IsEmail(domain='example.com')
++        assert 'not an email' != IsEmail
++        assert 'user@' != IsEmail
++        assert 123 != IsEmail
++        ```
++        """
++        self.domain = domain
++        super().__init__(plain_repr('*') if domain is None else domain)
++
++    def equals(self, other: Any) -> bool:
++        if not isinstance(other, str):
++            return False
++
++        match = _EMAIL_RE.fullmatch(other)
++        if match is None:
++            return False
++
++        return self.domain is None or match.group('domain') == self.domain

@@ -1,0 +1,39 @@
+commit 11d118ddf7f9adb6ec464a244e9110b9e423c4d6 (main)
+Merge: 1071010 aa93902
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:46:38 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit aa93902e187d5e0123d7f91de759626b2fd1f168 (claude/7)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:46:33 2026 +0000
+
+    feat(types): add credit_card regex type
+    
+    Matches 16 digits as four groups of four with no separator, spaces only
+    or hyphens only. Mixed separators are rejected, without a back-reference,
+    which the structured-generation regex engines do not support.
+
+ outlines/types/__init__.py | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+commit 107101033718546600f7541dd729f5878b3cc6fa
+Merge: 4dd7802 b9c9b24
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:46:33 2026 +0000
+
+    Merge claude/10: closes #10
+
+commit b9c9b247f6efcd00d34e54a8326b1dcf3c9562a4 (claude/10)
+Author: agent2 <agent2@coordbench.local>
+Date:   Fri Oct 16 13:46:28 2026 +0000
+
+    feat(types): add hash_sha256 type for SHA-256 hash string validation
+    
+    A Regex of exactly 64 hexadecimal characters in either case, so it
+    validates, generates a JSON Schema pattern and takes the DSL operations
+    like every other type in outlines.types.
+
+ outlines/types/__init__.py | 5 +++++
+ 1 file changed, 5 insertions(+)

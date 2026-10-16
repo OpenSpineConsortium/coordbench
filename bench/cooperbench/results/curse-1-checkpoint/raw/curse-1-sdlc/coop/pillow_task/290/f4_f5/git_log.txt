@@ -1,0 +1,61 @@
+commit 9a5acfc66ad082bbebd2fded163c2454e38812b6 (main)
+Merge: 3401a007 79792eb4
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 11:20:48 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit 79792eb4b6b89188bef60155e7a970ec9b0a93f4 (claude/5)
+Merge: 8ae0c276 3401a007
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:20:44 2026 +0000
+
+    Merge team/main into claude/5
+    
+    Both new quantize() parameters stay: error_threshold, then lightness_factor.
+    The brightness is applied to the palette after the error threshold has chosen
+    the number of colors, so the search measures plain quantization.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+commit 8ae0c276a2ebed423aab385820dd9d670cbc6e5a
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:19:50 2026 +0000
+
+    Add lightness_factor to quantize() to brighten or darken the palette
+    
+    The factor scales the red, green and blue values of the palette after
+    quantization, clamped to 0-255, and leaves the alpha of an RGBA palette and
+    the pixel data alone, so no color is added. It must be greater than 0.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ Tests/test_image_quantize.py | 116 +++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py             |  60 +++++++++++++++++++++-
+ 2 files changed, 175 insertions(+), 1 deletion(-)
+
+commit 3401a007cd56e4e87949dc90667ff455ac022144
+Merge: cc927343 27e4b0fc
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 11:18:19 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit 27e4b0fcb96627b75e447eb2f69ab3f137d6f7b5 (claude/4)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:18:07 2026 +0000
+
+    Add error_threshold to Image.quantize
+    
+    error_threshold is the largest mean square error between the image and its
+    quantized version that the caller accepts. quantize() then uses the fewest
+    colors, up to colors, that stay within it, found by bisection, and uses colors
+    colors when even those do not.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ Tests/test_image_quantize.py | 100 ++++++++++++++++++++++++++++++++++++++++++-
+ src/PIL/Image.py             |  76 +++++++++++++++++++++++++++++++-
+ 2 files changed, 173 insertions(+), 3 deletions(-)

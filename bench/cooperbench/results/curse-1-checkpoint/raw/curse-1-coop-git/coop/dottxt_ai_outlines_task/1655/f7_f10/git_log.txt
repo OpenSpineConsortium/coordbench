@@ -1,0 +1,24 @@
+commit 758dc1497fb888cbf4aa89397f1aaf33dea4bf05 (agent1)
+Merge: fb36d56 bc484aa
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 14:37:19 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit fb36d56c7a0d015d1820a6a75eaca63318216d32
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 14:37:18 2026 +0000
+
+    feat(types): add credit_card regex type
+
+ outlines/types/__init__.py | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+commit bc484aa9a306524c66572f3d564309f7c2cdb4a4 (agent2)
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 14:37:01 2026 +0000
+
+    feat(types): add hash_sha256 type
+
+ outlines/types/__init__.py | 5 +++++
+ 1 file changed, 5 insertions(+)

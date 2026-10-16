@@ -1,0 +1,100 @@
+diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
+index d21b83aa..c5a1bc34 100644
+--- a/src/jinja2/ext.py
++++ b/src/jinja2/ext.py
+@@ -1,6 +1,7 @@
+ """Extension API for adding custom tags and behavior."""
+ import pprint
+ import re
++import threading
+ import typing as t
+ 
+ from markupsafe import Markup
+@@ -264,7 +265,87 @@ class InternationalizationExtension(Extension):
+             uninstall_gettext_translations=self._uninstall,
+             extract_translations=self._extract,
+             newstyle_gettext=False,
++            i18n_cache_size=128,
+         )
++        self._init_cache()
++
++    def bind(self, environment: Environment) -> "InternationalizationExtension":
++        # The base class copies the instance dict, which would leave an
++        # overlay sharing its parent's cache. Each environment keeps its own.
++        rv = t.cast("InternationalizationExtension", super().bind(environment))
++        rv._init_cache()
++        return rv
++
++    def _init_cache(self) -> None:
++        """Set up an empty translation cache for this extension's
++        environment, sized by ``environment.i18n_cache_size``.
++
++        The cache only stores what callers put in it, under keys they
++        build; it never decides what a translation is. The most recently
++        used key is last in ``_cache_order``.
++        """
++        self._cache: t.Dict[str, str] = {}
++        self._cache_order: t.List[str] = []
++        self._cache_size = 128
++        self._cache_lock = threading.Lock()
++        self._update_cache_size()
++
++    def _update_cache_size(self) -> None:
++        """Read ``environment.i18n_cache_size`` and apply it, evicting the
++        least recently used entries if the cache is now over capacity. A
++        size of zero (or less) turns the cache off.
++        """
++        configured = getattr(self.environment, "i18n_cache_size", 128)
++
++        with self._cache_lock:
++            self._cache_size = max(0, int(configured))
++            self._configured_cache_size = configured
++            self._evict_over_capacity()
++
++    def _evict_over_capacity(self) -> None:
++        # The caller holds the lock.
++        while len(self._cache_order) > self._cache_size:
++            self._cache.pop(self._cache_order.pop(0), None)
++
++    def _get_from_cache(self, key: str) -> t.Optional[str]:
++        """Return the cached result for ``key`` and mark it as the most
++        recently used, or return ``None`` if it is not cached.
++        """
++        with self._cache_lock:
++            if key not in self._cache:
++                return None
++
++            self._cache_order.remove(key)
++            self._cache_order.append(key)
++            return self._cache[key]
++
++    def _put_in_cache(self, key: str, value: str) -> None:
++        """Store ``value`` under ``key`` as the most recently used entry,
++        evicting the least recently used entries beyond the capacity.
++        """
++        # Pick up a size changed on the environment since the last read,
++        # without undoing a capacity that was set on the extension itself.
++        configured = getattr(self.environment, "i18n_cache_size", 128)
++
++        if configured != getattr(self, "_configured_cache_size", configured):
++            self._update_cache_size()
++
++        with self._cache_lock:
++            if self._cache_size <= 0:
++                return
++
++            if key in self._cache:
++                self._cache_order.remove(key)
++
++            self._cache[key] = value
++            self._cache_order.append(key)
++            self._evict_over_capacity()
++
++    def clear_cache(self) -> None:
++        """Remove every entry from the translation cache."""
++        with self._cache_lock:
++            self._cache.clear()
++            self._cache_order.clear()
+ 
+     def _install(
+         self, translations: "_SupportedTranslations", newstyle: t.Optional[bool] = None

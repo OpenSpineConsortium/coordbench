@@ -1,0 +1,158 @@
+{
+  "repo": "samuelcolvin_dirty_equals_task",
+  "task_id": 43,
+  "features": [
+    3,
+    7
+  ],
+  "setting": "solo",
+  "run_id": "solo-43-f3_f7-ef8ab4",
+  "run_name": "curse-1-solo",
+  "agent_framework": "claude_code_subagent",
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-10-16T10:18:29.663354",
+  "ended_at": "2026-10-16T10:19:57.191413",
+  "duration_seconds": 87.528059,
+  "agent": {
+    "status": "Submitted",
+    "cost": null,
+    "steps": null,
+    "input_tokens": 18,
+    "output_tokens": null,
+    "cache_read_tokens": 700602,
+    "cache_write_tokens": 54006,
+    "patch_lines": 158,
+    "error": null,
+    "id": "agent1",
+    "features": [
+      3,
+      7
+    ],
+    "role": "solo",
+    "duration_ms": null,
+    "api_duration_ms": null,
+    "end_reason": null,
+    "model_requested": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5-5",
+    "model_differs": false,
+    "claude_code_version": "2.1.301",
+    "tools": null,
+    "mcp_servers": null,
+    "cost_source": null,
+    "output_tokens_lower_bound": 6013,
+    "cost_lower_bound": null
+  },
+  "total_cost": null,
+  "total_steps": null,
+  "log_dir": "/root/cooperbench/logs/curse-1-solo/solo/samuelcolvin_dirty_equals_task/43/f3_f7",
+  "error_kind": null,
+  "arm": "solo",
+  "driver": "session",
+  "agents_seconds": 76.348115,
+  "isolation": "advisory",
+  "options": {},
+  "agent_models": {},
+  "max_turns": null,
+  "timeout_s": 2700.0,
+  "disallowed_tools": [
+    "WebFetch",
+    "WebSearch"
+  ],
+  "provenance": {
+    "cooperbench": {
+      "dir": "/root/cooperbench",
+      "commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+      "modified": [
+        "src/cooperbench/agents/claude_code/setup.sh"
+      ],
+      "modified_count": 1
+    },
+    "dataset": {
+      "dir": "/root/cooperbench/dataset",
+      "git_tree": "9c9e5802e06d89c7f84a9ebb13c3a5998b007e36",
+      "last_commit": "55a63e9329e1ef4e9957113534d5cad57c0f1f88",
+      "modified": false,
+      "sha256": "b0d33805162fa8001deba5f891de65e7b54e96351c2f21d810a0f0ac142710f6",
+      "files": 774
+    },
+    "coordbench": {
+      "dir": "/home/user/coordbench/coordbench",
+      "commit": "219645dc9405bd8802b3cb1bcd27278b1e3294b9",
+      "modified": [
+        "bench/cooperbench/session/lane.js"
+      ],
+      "modified_count": 1
+    }
+  },
+  "image": {
+    "image": "akhatua/cooperbench-samuelcolvin-dirty-equals:task43",
+    "id": "sha256:27901f26d898358a7ef8e93ec549e00f90fffdc1e045e39edab239b462f5ade4",
+    "repo_digests": [
+      "akhatua/cooperbench-samuelcolvin-dirty-equals@sha256:27901f26d898358a7ef8e93ec549e00f90fffdc1e045e39edab239b462f5ade4"
+    ],
+    "overlay": "cloud-session"
+  },
+  "metrics": {
+    "events": {
+      "run_started": 1
+    },
+    "tool_surface": "mcp",
+    "messages_sent": 0,
+    "messages_by_agent": {},
+    "message_chars": 0,
+    "message_words": 0,
+    "tool_calls": {}
+  },
+  "timings": [
+    {
+      "phase": "hub",
+      "agent": null,
+      "started": "2026-10-16T10:18:29.343078",
+      "ended": "2026-10-16T10:18:29.495262",
+      "seconds": 0.152184
+    },
+    {
+      "phase": "run_create",
+      "agent": null,
+      "started": "2026-10-16T10:18:29.750528",
+      "ended": "2026-10-16T10:18:29.755490",
+      "seconds": 0.004962
+    },
+    {
+      "phase": "provision",
+      "agent": "agent1",
+      "started": "2026-10-16T10:18:29.755721",
+      "ended": "2026-10-16T10:18:30.731532",
+      "seconds": 0.975811
+    },
+    {
+      "phase": "agent",
+      "agent": "agent1",
+      "started": "2026-10-16T10:18:30.731570",
+      "ended": "2026-10-16T10:19:47.079685",
+      "seconds": 76.348115
+    },
+    {
+      "phase": "close",
+      "agent": null,
+      "started": "2026-10-16T10:19:57.191434",
+      "ended": "2026-10-16T10:19:57.198718",
+      "seconds": 0.007284
+    },
+    {
+      "phase": "teardown",
+      "agent": null,
+      "started": "2026-10-16T10:19:57.203740",
+      "ended": "2026-10-16T10:19:57.482088",
+      "seconds": 0.278348
+    },
+    {
+      "phase": "score",
+      "agent": null,
+      "started": "2026-10-16T10:19:57.482170",
+      "ended": "2026-10-16T10:20:13.302369",
+      "seconds": 15.820199
+    }
+  ],
+  "utc_offset_seconds": 0
+}

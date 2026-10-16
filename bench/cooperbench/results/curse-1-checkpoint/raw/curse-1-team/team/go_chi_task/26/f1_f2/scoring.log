@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/go_chi_task/26/f1_f2", "verdict": "pass"}
+coordbench run: team-26-f1_f2-b3b349: timings: hub 0.1 s, run_create 0.0 s, shared_volume 0.1 s, provision 2.1 s, agents 574 s (agent1 574 s, agent2 272 s), close 0.0 s, score 23 s, cascade 24 s, teardown 1.1 s
+coordbench run: summary: 23 completed, 0 skipped, 0 failed; evals: 23 evaluated, 17 passed, 6 failed, 0 errors (73.9%); cost: unknown

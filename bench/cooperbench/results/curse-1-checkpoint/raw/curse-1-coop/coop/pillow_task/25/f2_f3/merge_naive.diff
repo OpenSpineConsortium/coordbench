@@ -1,0 +1,92 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..c377a6b4c 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2467,7 +2467,11 @@ class Image:
+         )
+ 
+     def save(
+-        self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
++        self,
++        fp: StrOrBytesPath | IO[bytes],
++        format: str | None = None,
++        preserve_readonly: bool = False,
++        **params: Any,
+     ) -> None:
+         """
+         Saves this image under the given filename.  If no format is
+@@ -2490,6 +2494,12 @@ class Image:
+            format to use is determined from the filename extension.
+            If a file object was used instead of a filename, this
+            parameter should always be used.
++        :param preserve_readonly: If ``True``, the image is only loaded before
++           saving, so a readonly image keeps its ``readonly`` flag and stays
++           connected to the data it reflects, such as the buffer of an image
++           created by :py:func:`~PIL.Image.frombuffer`. If ``False``, the
++           default, a readonly image is first copied, which ends that
++           connection.
+         :param params: Extra parameters to the image writer. These can also be
+            set on the image itself through ``encoderinfo``. This is useful when
+            saving multiple images::
+@@ -2505,6 +2515,15 @@ class Image:
+              red = Image.new("RGB", (1, 1), "#f00")
+              red.encoderinfo = {"xmp": b"test"}
+              black.save("out.mpo", save_all=True, append_images=[red])
++
++           ``dry_run`` is one such option, handled here rather than by the
++           writers: when it is true, the image is processed for saving as usual,
++           including any conversion and compression, but into memory, so that
++           nothing is written to disk, no file is created, and a file object
++           passed as ``fp`` is left untouched. Errors the writer would raise,
++           such as an unsupported mode for the format, are still raised. Whether
++           the file could be opened for writing, for example whether its
++           directory exists, is not checked.
+         :returns: None
+         :exception ValueError: If the output format could not be determined
+            from the file name.  Use the format option to solve this.
+@@ -2512,6 +2531,9 @@ class Image:
+            may have been created, and may contain partial data.
+         """
+ 
++        # not a writer option, so it is kept out of encoderinfo
++        dry_run = params.pop("dry_run", False)
++
+         filename: str | bytes = ""
+         open_fp = False
+         if is_path(fp):
+@@ -2540,8 +2562,12 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
+-        # may mutate self!
+-        self._ensure_mutable()
++        if preserve_readonly:
++            # keep the readonly flag, and with it the link to the underlying data
++            self.load()
++        else:
++            # may mutate self!
++            self._ensure_mutable()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+@@ -2559,7 +2585,19 @@ class Image:
+             save_handler = SAVE[format.upper()]
+ 
+         created = False
+-        if open_fp:
++        if dry_run:
++            # The writer gets a buffer of its own, so that it runs in full
++            # while no file is opened or created and the caller's file object
++            # is not written to.
++            buffer = io.BytesIO()
++            if open_fp and params.get("append", False):
++                # An appending writer reads back what is already in the file.
++                with builtins.open(filename, "rb") as existing:
++                    buffer.write(existing.read())
++                buffer.seek(0)
++            fp = buffer
++            open_fp = True  # the buffer is ours, so it is closed below
++        elif open_fp:
+             created = not os.path.exists(filename)
+             if params.get("append", False):
+                 # Open also for reading ("+"), because TIFF save_all

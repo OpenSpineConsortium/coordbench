@@ -1,0 +1,113 @@
+diff --git a/Tests/test_image_quantize.py b/Tests/test_image_quantize.py
+index bd9db362c..772ac05d6 100644
+--- a/Tests/test_image_quantize.py
++++ b/Tests/test_image_quantize.py
+@@ -85,3 +85,59 @@ def test_transparent_colors_equal():
+     converted = im.quantize()
+     converted_px = converted.load()
+     assert converted_px[0, 0] == converted_px[0, 1]
++
++
++def test_max_colors_default_is_colors():
++    image = hopper()
++    expected = image.quantize(100)
++    converted = image.quantize(100, max_colors=None)
++    assert converted.tobytes() == expected.tobytes()
++    assert converted.getpalette() == expected.getpalette()
++
++
++def test_max_colors_limits_colors():
++    image = hopper()
++    converted = image.quantize(colors=100, max_colors=50)
++    assert_image(converted, "P", converted.size)
++    assert len(converted.getcolors()) <= 50
++
++    # The result is the same as asking for the lower number directly
++    expected = image.quantize(colors=50)
++    assert converted.tobytes() == expected.tobytes()
++
++
++def test_max_colors_above_colors():
++    # max_colors is a limit, not a target, so it cannot raise colors
++    image = hopper()
++    converted = image.quantize(colors=20, max_colors=200)
++    assert len(converted.getcolors()) <= 20
++    assert converted.tobytes() == image.quantize(colors=20).tobytes()
++
++
++def test_max_colors_methods():
++    image = hopper()
++    for method in (Image.MEDIANCUT, Image.MAXCOVERAGE, Image.FASTOCTREE):
++        converted = image.quantize(colors=64, method=method, max_colors=16)
++        assert_image(converted, "P", converted.size)
++        assert len(converted.getcolors()) <= 16
++
++
++def test_max_colors_rgba():
++    image = hopper("RGBA")
++    converted = image.quantize(colors=64, max_colors=8)
++    assert converted.convert("RGBA").mode == "RGBA"
++    assert len(converted.getcolors()) <= 8
++
++
++def test_max_colors_invalid():
++    image = hopper()
++    with pytest.raises(ValueError):
++        image.quantize(colors=16, max_colors=0)
++
++
++def test_max_colors_with_palette():
++    # An explicit palette takes precedence, as it does for colors
++    image = hopper()
++    converted = image.quantize(palette=hopper("P"), max_colors=2)
++    expected = image.quantize(palette=hopper("P"))
++    assert converted.tobytes() == expected.tobytes()
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..bf0e6c6ec 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -1048,7 +1048,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        max_colors=None,
++        sort_palette=None,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1067,6 +1076,13 @@ class Image:
+                        :data:`MAXCOVERAGE` do not support RGBA images, so
+                        :data:`FASTOCTREE` is used by default instead.
+         :param kmeans: Integer
++        :param max_colors: The maximum number of colors, an upper limit that the
++                           palette will not exceed. The palette has at most
++                           ``min(colors, max_colors)`` colors, and fewer if the
++                           quantization algorithm finds that the image needs
++                           fewer. If omitted, it defaults to ``colors``, which
++                           is the previous behaviour. Not used when ``palette``
++                           is given.
+         :param palette: Quantize to the palette of given
+                         :py:class:`PIL.Image.Image`.
+         :param dither: Dithering method, used when converting from
+@@ -1106,6 +1122,12 @@ class Image:
+             new_im.palette = palette.palette.copy()
+             return new_im
+ 
++        if max_colors is None:
++            max_colors = colors
++        # max_colors is an upper limit on the palette, so it can only lower
++        # the target, never raise it above colors
++        colors = min(colors, max_colors)
++
+         im = self._new(self.im.quantize(colors, method, kmeans))
+ 
+         from . import ImagePalette

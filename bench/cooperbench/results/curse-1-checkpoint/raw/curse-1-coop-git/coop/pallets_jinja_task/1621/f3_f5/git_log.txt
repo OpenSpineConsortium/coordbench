@@ -1,0 +1,24 @@
+commit 9b8d32eb8a381819e28d2cd13157489fe2a96694 (agent1)
+Merge: 607eb4a a029ee2
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:17:31 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit a029ee234fafd00f430cd55217a3e0599a84dd34 (agent2)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:17:26 2026 +0000
+
+    Cache resolved template paths in FileSystemLoader
+
+ src/jinja2/loaders.py | 51 +++++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 39 insertions(+), 12 deletions(-)
+
+commit 607eb4a9e4450dccd484d467a002534ebd17ec8f
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:17:21 2026 +0000
+
+    Add template path validation
+
+ src/jinja2/loaders.py | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)

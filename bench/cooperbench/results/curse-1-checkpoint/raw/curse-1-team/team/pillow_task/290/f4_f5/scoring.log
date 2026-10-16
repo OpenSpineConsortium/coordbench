@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pillow_task/290/f4_f5", "verdict": "fail"}
+coordbench run: team-290-f4_f5-25959e: timings: hub 0.1 s, run_create 0.0 s, shared_volume 0.1 s, provision 5.1 s, agents 366 s (agent1 366 s, agent2 311 s), close 0.0 s, score 65 s, cascade 116 s, teardown 1.2 s
+coordbench run: summary: 19 completed, 0 skipped, 0 failed; evals: 19 evaluated, 13 passed, 6 failed, 0 errors (68.4%); cost: unknown

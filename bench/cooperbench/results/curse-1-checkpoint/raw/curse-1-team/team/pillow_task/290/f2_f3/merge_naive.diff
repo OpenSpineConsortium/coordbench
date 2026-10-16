@@ -1,0 +1,19 @@
+diff --cc src/PIL/Image.py
+index 12b24f355,eb6561fd6..000000000
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@@ -1082,6 -1082,11 +1082,14 @@@ class Image
+             mode "RGB" to "P" or from "RGB" or "L" to "1".
+             Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+             Default: 1 (legacy setting)
+++<<<<<<< HEAD
+++=======
++         :param max_colors: The maximum number of colors in the output palette,
++            <= 256. The quantizer aims for ``colors`` colors but never uses more
++            than ``max_colors``, so a ``max_colors`` below ``colors`` lowers the
++            target. If omitted, it defaults to ``colors``, which keeps the
++            behaviour of earlier versions. Ignored when ``palette`` is given.
+++>>>>>>> agent1
+          :param sort_palette: How to order the palette colors after quantization.
+             Available methods are ``"brightness"`` (darkest color first, by
+             perceived brightness) and ``"rgb"`` (ascending by red, then green,

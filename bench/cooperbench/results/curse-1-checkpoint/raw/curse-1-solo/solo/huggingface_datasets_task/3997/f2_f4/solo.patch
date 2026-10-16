@@ -1,0 +1,165 @@
+diff --git a/src/datasets/features/features.py b/src/datasets/features/features.py
+index 6a0da6401..672d58543 100644
+--- a/src/datasets/features/features.py
++++ b/src/datasets/features/features.py
+@@ -1178,22 +1178,34 @@ def list_of_np_array_to_pyarrow_listarray(l_arr: List[np.ndarray], type: pa.Data
+         return pa.array([], type=type)
+ 
+ 
+-def require_decoding(feature: FeatureType, ignore_decode_attribute: bool = False) -> bool:
++def require_decoding(
++    feature: FeatureType, ignore_decode_attribute: bool = False, custom_criteria: Optional[callable] = None
++) -> bool:
+     """Check if a (possibly nested) feature requires decoding.
+ 
+     Args:
+         feature (FeatureType): the feature type to be checked
+         ignore_decode_attribute (:obj:`bool`, default ``False``): Whether to ignore the current value
+             of the `decode` attribute of the decodable feature types.
++        custom_criteria (:obj:`callable`, optional): A function taking a feature and returning whether it requires
++            decoding. It is asked first, for the feature and then for each nested feature the default rules reach.
++            A ``True`` or ``False`` answer is final for that feature, and ``None`` leaves the answer to the
++            default rules, so a criteria can look at only the features it cares about.
+     Returns:
+         :obj:`bool`
+     """
++    if custom_criteria is not None:
++        if not callable(custom_criteria):
++            raise TypeError(f"custom_criteria must be callable or None, got {type(custom_criteria).__name__}")
++        verdict = custom_criteria(feature)
++        if verdict is not None:
++            return bool(verdict)
+     if isinstance(feature, dict):
+-        return any(require_decoding(f) for f in feature.values())
++        return any(require_decoding(f, custom_criteria=custom_criteria) for f in feature.values())
+     elif isinstance(feature, (list, tuple)):
+-        return require_decoding(feature[0])
++        return require_decoding(feature[0], custom_criteria=custom_criteria)
+     elif isinstance(feature, Sequence):
+-        return require_decoding(feature.feature)
++        return require_decoding(feature.feature, custom_criteria=custom_criteria)
+     else:
+         return hasattr(feature, "decode_example") and (feature.decode if not ignore_decode_attribute else True)
+ 
+@@ -1233,30 +1245,111 @@ class Features(dict):
+ 
+     def __init__(self, *args, **kwargs):
+         super().__init__(*args, **kwargs)
++        self._custom_decoding_criteria: Optional[callable] = None
+         self._column_requires_decoding: Dict[str, bool] = {
+             col: require_decoding(feature) for col, feature in self.items()
+         }
+ 
+     def __setitem__(self, column_name: str, feature: FeatureType):
+         super().__setitem__(column_name, feature)
+-        self._column_requires_decoding[column_name] = require_decoding(feature)
++        self._column_requires_decoding[column_name] = require_decoding(
++            feature, custom_criteria=self._custom_decoding_criteria
++        )
+ 
+     def __delitem__(self, column_name: str):
+         super().__delitem__(column_name)
+         del self._column_requires_decoding[column_name]
+ 
+-    def update(self, iterable, **kwds):
++    def set_custom_decoding_criteria(self, custom_criteria: Optional[callable] = None):
++        """Set the function that decides which columns require decoding, in place of the default rules.
++
++        The function takes a feature and returns ``True`` if it requires decoding and ``False`` if it does not.
++        It can read any property of the feature, such as its type, its ``decode`` attribute or an attribute of
++        its own, and it is asked again for each nested feature of a column when it returns ``None``, which leaves
++        the answer to the default rules. Every column of the Features is checked again at once, and so is each
++        column set or updated afterwards.
++
++        Args:
++            custom_criteria (:obj:`callable`, optional): The function. ``None`` restores the default rules.
++
++        Example::
++
++            >>> from datasets import Features, Image, Value
++            >>> features = Features({"image": Image(), "text": Value("string")})
++            >>> features.set_custom_decoding_criteria(lambda feature: False if isinstance(feature, Image) else None)
++            >>> features._column_requires_decoding
++            {'image': False, 'text': False}
++            >>> features.set_custom_decoding_criteria(None)
++            >>> features._column_requires_decoding
++            {'image': True, 'text': False}
++        """
++        if custom_criteria is not None and not callable(custom_criteria):
++            raise TypeError(f"custom_criteria must be callable or None, got {type(custom_criteria).__name__}")
++        self._custom_decoding_criteria = custom_criteria
++        self._column_requires_decoding = {
++            col: require_decoding(feature, custom_criteria=custom_criteria) for col, feature in self.items()
++        }
++
++    def update(self, iterable=None, **kwds):
++        """Add or replace columns, from a mapping, a JSON string, pairs, or a batch of these.
++
++        ``iterable`` can be:
++            - a mapping of column names to features, as for :obj:`dict.update`
++            - a JSON string (or bytes) of an object mapping column names to serialized features, such as
++              ``'{"a": {"dtype": "int64", "id": null, "_type": "Value"}}'``, rebuilt as :meth:`Features.from_dict` does
++            - an iterable of ``(column name, feature)`` pairs, as for :obj:`dict.update`
++            - a batch: an iterable of mappings and JSON strings, applied in order, so a later one wins on a
++              column that two of them set
++
++        Keyword arguments are applied last. The whole input is read before any column is set, so an input that
++        cannot be read, such as a malformed JSON string, leaves the Features as they were.
++        """
++        updates: List[Tuple[str, Any]] = []
++        if iterable is not None:
++            updates.extend(self._read_updates(iterable))
++        updates.extend(kwds.items())
++        for key, value in updates:
++            self[key] = value
++
++    @staticmethod
++    def _read_updates(iterable) -> List[Tuple[str, Any]]:
++        """Read one `update` argument into the (column name, feature) pairs it sets."""
++        if isinstance(iterable, (str, bytes, bytearray)):
++            return Features._read_json_updates(iterable)
+         if hasattr(iterable, "keys"):
+-            for key in iterable.keys():
+-                self[key] = iterable[key]
+-        else:
+-            for key, value in iterable:
+-                self[key] = value
+-        for key in kwds:
+-            self[key] = kwds[key]
++            return [(key, iterable[key]) for key in iterable.keys()]
++        updates = []
++        for item in iterable:
++            if isinstance(item, (str, bytes, bytearray)) or hasattr(item, "keys"):
++                updates.extend(Features._read_updates(item))
++            else:
++                key, value = item
++                updates.append((key, value))
++        return updates
++
++    @staticmethod
++    def _read_json_updates(text) -> List[Tuple[str, Any]]:
++        """Read a JSON string of serialized features into (column name, feature) pairs."""
++        try:
++            columns = json.loads(text)
++        except ValueError as err:
++            raise ValueError(f"Features.update could not read the JSON string: {err}") from err
++        if not isinstance(columns, dict):
++            raise ValueError(
++                f"Features.update needs a JSON object of column names to features, got {type(columns).__name__}"
++            )
++        try:
++            return list(generate_from_dict(columns).items())
++        except (KeyError, TypeError, AttributeError) as err:
++            raise ValueError(f"Features.update could not rebuild the features of the JSON string: {err!r}") from err
+ 
+     def __reduce__(self):
+-        return Features, (dict(self),)
++        if self._custom_decoding_criteria is None:
++            return Features, (dict(self),)
++        return Features, (dict(self),), {"custom_decoding_criteria": self._custom_decoding_criteria}
++
++    def __setstate__(self, state):
++        self.set_custom_decoding_criteria(state["custom_decoding_criteria"])
+ 
+     @property
+     def type(self):

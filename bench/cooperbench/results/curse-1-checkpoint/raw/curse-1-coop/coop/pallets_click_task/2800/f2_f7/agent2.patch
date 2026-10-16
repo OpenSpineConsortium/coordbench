@@ -1,0 +1,100 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index 666ad68..06b54d8 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -224,6 +224,14 @@ class Context:
+                   codes are used in texts that Click prints which is by
+                   default not the case.  This for instance would affect
+                   help output.
++    :param on_exit: an optional callable that is invoked with this context
++                    as its only argument when the context is closed, after
++                    the callbacks registered with :meth:`call_on_close` have
++                    run.  It runs at most once per context and is not
++                    inherited by child contexts.  An exception raised by the
++                    callback is ignored so that it never interferes with the
++                    cleanup.  This is useful for logging or collecting
++                    metrics about a command invocation.
+     :param show_default: Show the default value for commands. If this
+         value is not set, it defaults to the value from the parent
+         context. ``Command.show_default`` overrides this default for the
+@@ -279,6 +287,7 @@ class Context:
+         help_option_names: list[str] | None = None,
+         token_normalize_func: t.Callable[[str], str] | None = None,
+         color: bool | None = None,
++        on_exit: t.Callable[[Context], t.Any] | None = None,
+         show_default: bool | None = None,
+     ) -> None:
+         #: the parent context or `None` if none exists.
+@@ -421,6 +430,11 @@ class Context:
+         #: Controls if styling output is wanted or not.
+         self.color: bool | None = color
+ 
++        #: Callback invoked with this context when it is closed, or
++        #: ``None``. See :meth:`close`.
++        self.on_exit: t.Callable[[Context], t.Any] | None = on_exit
++        self._on_exit_called = False
++
+         if show_default is None and parent is not None:
+             show_default = parent.show_default
+ 
+@@ -605,12 +619,29 @@ class Context:
+     def close(self) -> None:
+         """Invoke all close callbacks registered with
+         :meth:`call_on_close`, and exit all context managers entered
+-        with :meth:`with_resource`.
++        with :meth:`with_resource`. Then call the ``on_exit`` callback
++        given to the context, if any, with this context. The callback is
++        called once, and an exception it raises is ignored.
++
++        .. versionchanged:: 8.2
++            Call the ``on_exit`` callback.
+         """
+         self._exit_stack.close()
+         # In case the context is reused, create a new exit stack.
+         self._exit_stack = ExitStack()
+ 
++        # The exit hook has the last word, and runs once even when the
++        # context is closed twice, as by ``ctx.exit()`` inside a ``with``.
++        if self.on_exit is not None and not self._on_exit_called:
++            self._on_exit_called = True
++
++            try:
++                self.on_exit(self)
++            except Exception:
++                # A faulty hook must not break the cleanup or hide the
++                # error that is being handled.
++                pass
++
+     @property
+     def command_path(self) -> str:
+         """The computed command path.  This is used for the ``usage``
+@@ -1123,6 +1154,7 @@ class Command:
+         info_name: str | None,
+         args: list[str],
+         parent: Context | None = None,
++        on_exit: t.Callable[[Context], t.Any] | None = None,
+         **extra: t.Any,
+     ) -> Context:
+         """This function when given an info name and arguments will kick
+@@ -1139,12 +1171,21 @@ class Command:
+                           the name of the command.
+         :param args: the arguments to parse as list of strings.
+         :param parent: the parent context if available.
++        :param on_exit: an optional callable that is invoked with the
++                        context when it is closed, for logging, metrics or
++                        other cleanup. See :class:`Context`.
+         :param extra: extra keyword arguments forwarded to the context
+                       constructor.
+ 
++        .. versionchanged:: 8.2
++            Added the ``on_exit`` parameter.
++
+         .. versionchanged:: 8.0
+             Added the :attr:`context_class` attribute.
+         """
++        if on_exit is not None:
++            extra["on_exit"] = on_exit
++
+         for key, value in self.context_settings.items():
+             if key not in extra:
+                 extra[key] = value

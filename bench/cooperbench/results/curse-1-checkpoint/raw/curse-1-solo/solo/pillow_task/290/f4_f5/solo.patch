@@ -1,0 +1,160 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..a53c47c80 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -1048,7 +1048,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        error_threshold=None,
++        lightness_factor=1.0,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1073,10 +1082,31 @@ class Image:
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+            Default: 1 (legacy setting)
++        :param error_threshold: The largest acceptable mean square error, per
++           channel on a scale of 0 to 255, between this image and the quantized
++           image converted back to this image's mode. If given, the smallest
++           palette of at most ``colors`` colors that stays within the threshold
++           is used, so the result may have fewer colors than ``colors``. If no
++           palette of ``colors`` colors or fewer is accurate enough, ``colors``
++           colors are used. The error of a smaller palette is assumed not to be
++           lower than that of a larger one, so on unusual images the palette
++           found may not be the very smallest. Ignored when ``palette`` is
++           given, since that palette is fixed. By default, the number of colors
++           alone decides.
++        :param lightness_factor: A multiplier for the brightness of the
++           palette colors, applied after quantization to the palette alone, so
++           that no color is added to the image. Above 1.0 the image becomes
++           brighter, below 1.0 darker; each red, green and blue value is
++           multiplied, rounded down and limited to 0-255, and alpha is left as
++           it is. Must be greater than 0, with no upper limit.
++           Default: 1.0 (no change)
+         :returns: A new image
+ 
+         """
+ 
++        if not lightness_factor > 0:
++            raise ValueError("lightness_factor must be greater than 0")
++
+         self.load()
+ 
+         if method is None:
+@@ -1104,16 +1134,85 @@ class Image:
+             im = self.im.convert("P", dither, palette.im)
+             new_im = self._new(im)
+             new_im.palette = palette.palette.copy()
++            new_im._scale_palette_lightness(lightness_factor)
+             return new_im
+ 
++        if error_threshold is None:
++            im = self._quantize_colors(colors, method, kmeans)
++        else:
++            im = self._quantize_within_error(colors, method, kmeans, error_threshold)
++        im._scale_palette_lightness(lightness_factor)
++
++        return im
++
++    def _quantize_colors(self, colors, method, kmeans):
+         im = self._new(self.im.quantize(colors, method, kmeans))
++        im._read_palette_from_core()
++        return im
++
++    def _quantize_within_error(self, colors, method, kmeans, error_threshold):
++        # Quantize to the smallest palette whose mean square error is within
++        # error_threshold, found by bisection, since asking for more colors
++        # almost never makes the error larger. Every image tried is measured
++        # as it is returned, so the one returned is within the threshold
++        # unless even `colors` colors are not enough, when it is the one
++        # with `colors` colors.
++        reference = self
++        if self.mode not in ("L", "RGB", "RGBA"):
++            reference = self.convert("RGB")
++
++        def attempt(count):
++            im = self._quantize_colors(count, method, kmeans)
++            return im, _mean_square_error(reference, im.convert(reference.mode))
++
++        best, error = attempt(colors)
++        if error > error_threshold:
++            return best
++
++        fewest, most = 1, colors
++        while fewest < most:
++            middle = (fewest + most) // 2
++            im, error = attempt(middle)
++            if error <= error_threshold:
++                best, most = im, middle
++            else:
++                fewest = middle + 1
++        return best
+ 
++    def _read_palette_from_core(self):
+         from . import ImagePalette
+ 
+-        mode = im.im.getpalettemode()
+-        im.palette = ImagePalette.ImagePalette(mode, im.im.getpalette(mode, mode))
++        mode = self.im.getpalettemode()
++        self.palette = ImagePalette.ImagePalette(mode, self.im.getpalette(mode, mode))
+ 
+-        return im
++    def _scale_palette_lightness(self, factor):
++        if factor == 1.0:
++            return
++
++        # Index 0 stays 0 and a product of 255 or more stays 255; this also
++        # keeps an infinite factor, which int() would refuse, from failing.
++        table = bytes(
++            0 if value == 0 else 255 if value * factor >= 255 else int(value * factor)
++            for value in range(256)
++        )
++
++        mode = self.im.getpalettemode()
++        data = self.im.getpalette(mode, mode)
++        bands = len(mode)
++        colors = bytearray(data)
++        for band in range(min(bands, 3)):
++            colors[band::bands] = data[band::bands].translate(table)
++
++        if mode == "RGBA":
++            # The core takes the palette's colors as RGB and its alpha apart
++            rgb = bytearray(len(colors) // 4 * 3)
++            for band in range(3):
++                rgb[band::3] = colors[band::4]
++            self.im.putpalette("RGB", bytes(rgb))
++            self.im.putpalettealphas(bytes(colors[3::4]))
++        else:
++            self.im.putpalette(mode, bytes(colors))
++        self._read_palette_from_core()
+ 
+     def copy(self):
+         """
+@@ -2600,6 +2699,16 @@ class ImageTransformHandler:
+     pass
+ 
+ 
++def _mean_square_error(im1, im2):
++    """Mean of the squared differences of all channels of two images of one
++    size and mode, 0 for an image with no pixels."""
++    from . import ImageChops, ImageStat
++
++    stat = ImageStat.Stat(ImageChops.difference(im1, im2))
++    count = sum(stat.count)
++    return sum(stat.sum2) / count if count else 0
++
++
+ # --------------------------------------------------------------------
+ # Factories
+ 

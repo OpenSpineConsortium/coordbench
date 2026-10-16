@@ -1,0 +1,59 @@
+commit 449cfa425731ff5cef6f51aebc35f982a838d854 (main)
+Merge: feb679f7 f841f619
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:14:51 2026 +0000
+
+    Merge claude/8: closes #8
+
+commit f841f619cfc206e9843705ef8f90e2314aa6a5d8 (claude/8)
+Merge: 1b382980 feb679f7
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:14:45 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/8
+    
+    # Conflicts:
+    #       crates/typst/src/foundations/str.rs
+
+commit 1b382980c5d93d8c5b43c6ff826b4197af6d6875
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:12:51 2026 +0000
+
+    Keep apply_case away from string_is_empty to ease merging
+
+ crates/typst/src/foundations/str.rs | 24 ++++++++++++------------
+ 1 file changed, 12 insertions(+), 12 deletions(-)
+
+commit feb679f784da379c4d441bdd9d843b58ba4100b9
+Merge: b8034a34 0f6dc115
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:12:23 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit d728a5ee9e1a00603202c342137d7d61375f6e4d
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:12:21 2026 +0000
+
+    Add case parameter to str.first and str.last
+
+ crates/typst/src/foundations/str.rs | 64 ++++++++++++++++++++++++++++++-------
+ 1 file changed, 52 insertions(+), 12 deletions(-)
+
+commit 0f6dc11538168e8ed4f4f5a5f22595132ba5c7d1 (claude/7)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:12:12 2026 +0000
+
+    Add pattern matching to str.first and str.last
+    
+    An optional named pattern argument (alpha, numeric, alphanumeric,
+    uppercase, lowercase, whitespace) returns the first or last grapheme
+    cluster whose leading character is in the class. The empty-string check
+    comes before the pattern lookup; no match and unknown pattern names are
+    reported as errors.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ crates/typst/src/foundations/str.rs | 143 +++++++++++++++++++++++++++++++++---
+ 1 file changed, 131 insertions(+), 12 deletions(-)

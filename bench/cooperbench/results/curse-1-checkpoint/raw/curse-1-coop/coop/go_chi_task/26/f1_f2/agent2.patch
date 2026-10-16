@@ -1,0 +1,483 @@
+diff --git a/metrics.go b/metrics.go
+new file mode 100644
+index 0000000..f9a7d15
+--- /dev/null
++++ b/metrics.go
+@@ -0,0 +1,82 @@
++package chi
++
++import (
++	"context"
++	"net/http"
++	"time"
++)
++
++// MetricsCollector receives one RecordHit call for every request that the
++// router matched to a route, after the route's handler has returned.
++//
++// The router measures the duration itself, so a collector sees the full
++// route pattern (for example "/users/{id}") and the URL parameters that the
++// routing context holds at that point, which middleware placed before the
++// router cannot see. RecordHit is called on the goroutine that serves the
++// request, so an implementation must be safe for concurrent use and should
++// return quickly.
++type MetricsCollector interface {
++	RecordHit(ctx context.Context, r *http.Request, duration time.Duration)
++}
++
++// RouteMetric describes one request that was served by a route.
++type RouteMetric struct {
++	// Pattern is the matched route pattern, such as "/users/{id}".
++	Pattern string
++
++	// Method is the HTTP method of the request.
++	Method string
++
++	// Path is the URL path of the request.
++	Path string
++
++	// Duration is how long the route's handler took to serve the request.
++	Duration time.Duration
++
++	// Params holds the URL parameters of the matched route, keyed by name,
++	// such as {"id": "123"}. It is never nil.
++	Params map[string]string
++}
++
++// SimpleMetricsCollector is a MetricsCollector that turns every hit into a
++// RouteMetric and hands it to the OnHit callback. A SimpleMetricsCollector
++// with a nil OnHit ignores hits.
++type SimpleMetricsCollector struct {
++	// OnHit is called once per matched request. It may be called from many
++	// goroutines at the same time.
++	OnHit func(RouteMetric)
++}
++
++var _ MetricsCollector = SimpleMetricsCollector{}
++var _ MetricsCollector = (*SimpleMetricsCollector)(nil)
++
++// RecordHit builds the RouteMetric of the request and passes it to OnHit.
++// The pattern and the URL parameters come from the routing context in ctx,
++// and are empty when ctx carries none.
++func (c SimpleMetricsCollector) RecordHit(ctx context.Context, r *http.Request, duration time.Duration) {
++	if c.OnHit == nil {
++		return
++	}
++
++	metric := RouteMetric{
++		Method:   r.Method,
++		Duration: duration,
++		Params:   map[string]string{},
++	}
++	if r.URL != nil {
++		metric.Path = r.URL.Path
++	}
++
++	if rctx := RouteContext(ctx); rctx != nil {
++		metric.Pattern = rctx.RoutePattern()
++		// Later entries come from deeper sub-routers and win, as they do in
++		// Context.URLParam.
++		for i, key := range rctx.URLParams.Keys {
++			if i < len(rctx.URLParams.Values) {
++				metric.Params[key] = rctx.URLParams.Values[i]
++			}
++		}
++	}
++
++	c.OnHit(metric)
++}
+diff --git a/metrics_test.go b/metrics_test.go
+new file mode 100644
+index 0000000..92febbc
+--- /dev/null
++++ b/metrics_test.go
+@@ -0,0 +1,323 @@
++package chi
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"sync"
++	"testing"
++	"time"
++)
++
++// metricsRecorder collects the metrics a SimpleMetricsCollector reports.
++type metricsRecorder struct {
++	mu      sync.Mutex
++	metrics []RouteMetric
++}
++
++func (m *metricsRecorder) onHit(rm RouteMetric) {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	m.metrics = append(m.metrics, rm)
++}
++
++func (m *metricsRecorder) all() []RouteMetric {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	return append([]RouteMetric(nil), m.metrics...)
++}
++
++func serveMetricsRequest(h http.Handler, method, target string) *httptest.ResponseRecorder {
++	req := httptest.NewRequest(method, target, nil)
++	w := httptest.NewRecorder()
++	h.ServeHTTP(w, req)
++	return w
++}
++
++func TestMetricsRecordsRouteHit(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Get("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
++		time.Sleep(2 * time.Millisecond)
++		w.Write([]byte("ok"))
++	})
++
++	w := serveMetricsRequest(r, "GET", "/users/123")
++	if w.Code != 200 || w.Body.String() != "ok" {
++		t.Fatalf("unexpected response: %d %q", w.Code, w.Body.String())
++	}
++
++	got := rec.all()
++	if len(got) != 1 {
++		t.Fatalf("expected 1 metric, got %d", len(got))
++	}
++	m := got[0]
++	if m.Pattern != "/users/{id}" {
++		t.Errorf("Pattern = %q, want /users/{id}", m.Pattern)
++	}
++	if m.Method != "GET" {
++		t.Errorf("Method = %q, want GET", m.Method)
++	}
++	if m.Path != "/users/123" {
++		t.Errorf("Path = %q, want /users/123", m.Path)
++	}
++	if m.Params["id"] != "123" || len(m.Params) != 1 {
++		t.Errorf("Params = %v, want map[id:123]", m.Params)
++	}
++	if m.Duration < 2*time.Millisecond {
++		t.Errorf("Duration = %v, want at least the handler's 2ms", m.Duration)
++	}
++}
++
++func TestMetricsRecordsEveryHit(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.SetMetricsCollector(SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
++	r.Post("/b/{x}/{y}", func(w http.ResponseWriter, r *http.Request) {})
++
++	serveMetricsRequest(r, "GET", "/a")
++	serveMetricsRequest(r, "POST", "/b/1/2")
++	serveMetricsRequest(r, "GET", "/a")
++
++	got := rec.all()
++	if len(got) != 3 {
++		t.Fatalf("expected 3 metrics, got %d", len(got))
++	}
++	if got[0].Pattern != "/a" || got[1].Pattern != "/b/{x}/{y}" || got[2].Pattern != "/a" {
++		t.Errorf("unexpected patterns: %q %q %q", got[0].Pattern, got[1].Pattern, got[2].Pattern)
++	}
++	if got[1].Method != "POST" {
++		t.Errorf("Method = %q, want POST", got[1].Method)
++	}
++	if got[1].Params["x"] != "1" || got[1].Params["y"] != "2" {
++		t.Errorf("Params = %v, want x=1 y=2", got[1].Params)
++	}
++	if got[0].Params == nil || len(got[0].Params) != 0 {
++		t.Errorf("Params of a route with none = %v, want an empty map", got[0].Params)
++	}
++}
++
++func TestMetricsWithoutCollector(t *testing.T) {
++	r := NewRouter()
++	r.Get("/a", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("a")) })
++
++	if w := serveMetricsRequest(r, "GET", "/a"); w.Body.String() != "a" {
++		t.Fatalf("unexpected body %q", w.Body.String())
++	}
++}
++
++func TestMetricsNilOnHit(t *testing.T) {
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{})
++	r.Get("/a", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("a")) })
++
++	if w := serveMetricsRequest(r, "GET", "/a"); w.Body.String() != "a" {
++		t.Fatalf("unexpected body %q", w.Body.String())
++	}
++}
++
++func TestMetricsSetNilTurnsCollectionOff(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
++
++	serveMetricsRequest(r, "GET", "/a")
++	r.SetMetricsCollector(nil)
++	serveMetricsRequest(r, "GET", "/a")
++
++	if n := len(rec.all()); n != 1 {
++		t.Fatalf("expected 1 metric, got %d", n)
++	}
++}
++
++func TestMetricsIgnoresUnmatchedRequests(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Get("/a", func(w http.ResponseWriter, r *http.Request) {})
++
++	if w := serveMetricsRequest(r, "GET", "/missing"); w.Code != 404 {
++		t.Fatalf("expected 404, got %d", w.Code)
++	}
++	if w := serveMetricsRequest(r, "POST", "/a"); w.Code != 405 {
++		t.Fatalf("expected 405, got %d", w.Code)
++	}
++
++	if n := len(rec.all()); n != 0 {
++		t.Fatalf("expected no metrics for unmatched requests, got %d", n)
++	}
++}
++
++func TestMetricsWithMiddlewareAndGroup(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.Use(func(next http.Handler) http.Handler {
++		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++			next.ServeHTTP(w, r)
++		})
++	})
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Group(func(g Router) {
++		g.Get("/g/{name}", func(w http.ResponseWriter, r *http.Request) {})
++	})
++	r.With(func(next http.Handler) http.Handler { return next }).
++		Get("/w/{name}", func(w http.ResponseWriter, r *http.Request) {})
++
++	serveMetricsRequest(r, "GET", "/g/x")
++	serveMetricsRequest(r, "GET", "/w/y")
++
++	got := rec.all()
++	if len(got) != 2 {
++		t.Fatalf("expected 2 metrics, got %d", len(got))
++	}
++	if got[0].Pattern != "/g/{name}" || got[0].Params["name"] != "x" {
++		t.Errorf("group metric = %+v", got[0])
++	}
++	if got[1].Pattern != "/w/{name}" || got[1].Params["name"] != "y" {
++		t.Errorf("with metric = %+v", got[1])
++	}
++}
++
++func TestMetricsMountedSubrouter(t *testing.T) {
++	rec := &metricsRecorder{}
++	sub := NewRouter()
++	sub.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {})
++
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Mount("/users", sub)
++
++	serveMetricsRequest(r, "GET", "/users/42")
++
++	got := rec.all()
++	if len(got) != 1 {
++		t.Fatalf("expected 1 metric, got %d", len(got))
++	}
++	if got[0].Pattern != "/users/{id}" {
++		t.Errorf("Pattern = %q, want the full /users/{id}", got[0].Pattern)
++	}
++	if got[0].Path != "/users/42" {
++		t.Errorf("Path = %q, want /users/42", got[0].Path)
++	}
++	if got[0].Params["id"] != "42" {
++		t.Errorf("Params = %v, want id=42", got[0].Params)
++	}
++}
++
++func TestMetricsSubrouterWithOwnCollector(t *testing.T) {
++	parent, child := &metricsRecorder{}, &metricsRecorder{}
++	sub := NewRouter()
++	sub.SetMetricsCollector(&SimpleMetricsCollector{OnHit: child.onHit})
++	sub.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {})
++
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: parent.onHit})
++	r.Mount("/users", sub)
++
++	serveMetricsRequest(r, "GET", "/users/7")
++
++	if got := parent.all(); len(got) != 1 || got[0].Pattern != "/users/{id}" {
++		t.Errorf("parent metrics = %+v", got)
++	}
++	if got := child.all(); len(got) != 1 || got[0].Params["id"] != "7" {
++		t.Errorf("child metrics = %+v", got)
++	}
++}
++
++func TestMetricsWildcardParam(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Get("/files/*", func(w http.ResponseWriter, r *http.Request) {})
++
++	serveMetricsRequest(r, "GET", "/files/a/b.txt")
++
++	got := rec.all()
++	if len(got) != 1 {
++		t.Fatalf("expected 1 metric, got %d", len(got))
++	}
++	if got[0].Pattern != "/files/*" || got[0].Params["*"] != "a/b.txt" {
++		t.Errorf("metric = %+v", got[0])
++	}
++}
++
++// customCollector checks that any MetricsCollector can be set, and what the
++// router hands it.
++type customCollector struct {
++	hits     int
++	ctx      context.Context
++	method   string
++	duration time.Duration
++}
++
++func (c *customCollector) RecordHit(ctx context.Context, r *http.Request, d time.Duration) {
++	c.hits++
++	c.ctx = ctx
++	c.method = r.Method
++	c.duration = d
++}
++
++func TestMetricsCustomCollector(t *testing.T) {
++	c := &customCollector{}
++	r := NewRouter()
++	r.SetMetricsCollector(c)
++	r.Put("/things/{id}", func(w http.ResponseWriter, r *http.Request) {})
++
++	serveMetricsRequest(r, "PUT", "/things/9")
++
++	if c.hits != 1 || c.method != "PUT" {
++		t.Fatalf("hits = %d, method = %q", c.hits, c.method)
++	}
++	if c.duration < 0 {
++		t.Errorf("duration = %v, want not negative", c.duration)
++	}
++	if RouteContext(c.ctx) == nil {
++		t.Error("context passed to RecordHit carries no routing context")
++	}
++}
++
++func TestSimpleMetricsCollectorWithoutRouteContext(t *testing.T) {
++	var got RouteMetric
++	c := &SimpleMetricsCollector{OnHit: func(m RouteMetric) { got = m }}
++	req := httptest.NewRequest("DELETE", "/x/y", nil)
++
++	c.RecordHit(context.Background(), req, time.Second)
++
++	if got.Method != "DELETE" || got.Path != "/x/y" || got.Duration != time.Second {
++		t.Errorf("metric = %+v", got)
++	}
++	if got.Pattern != "" || got.Params == nil || len(got.Params) != 0 {
++		t.Errorf("metric without a routing context = %+v", got)
++	}
++}
++
++func TestMetricsConcurrentRequests(t *testing.T) {
++	rec := &metricsRecorder{}
++	r := NewRouter()
++	r.SetMetricsCollector(&SimpleMetricsCollector{OnHit: rec.onHit})
++	r.Get("/n/{n}", func(w http.ResponseWriter, r *http.Request) {})
++
++	const requests = 50
++	var wg sync.WaitGroup
++	for i := 0; i < requests; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			serveMetricsRequest(r, "GET", "/n/1")
++		}()
++	}
++	wg.Wait()
++
++	got := rec.all()
++	if len(got) != requests {
++		t.Fatalf("expected %d metrics, got %d", requests, len(got))
++	}
++	for _, m := range got {
++		if m.Pattern != "/n/{n}" || m.Params["n"] != "1" {
++			t.Fatalf("metric = %+v", m)
++		}
++	}
++}
+diff --git a/mux.go b/mux.go
+index 56fa4d2..df5f444 100644
+--- a/mux.go
++++ b/mux.go
+@@ -6,6 +6,7 @@ import (
+ 	"net/http"
+ 	"strings"
+ 	"sync"
++	"time"
+ )
+ 
+ var _ Router = &Mux{}
+@@ -45,6 +46,10 @@ type Mux struct {
+ 	// Controls the behaviour of middleware chain generation when a mux
+ 	// is registered as an inline group inside another mux.
+ 	inline bool
++
++	// Optional collector that is told about every request that this mux
++	// routes to a handler, with how long the handler took.
++	metricsCollector MetricsCollector
+ }
+ 
+ // NewMux returns a newly initialized Mux object that implements the Router
+@@ -104,6 +109,22 @@ func (mx *Mux) Use(middlewares ...func(http.Handler) http.Handler) {
+ 	mx.middlewares = append(mx.middlewares, middlewares...)
+ }
+ 
++// SetMetricsCollector sets the collector that is told, after each request this
++// Mux routes to a handler, which route pattern was hit and how long serving it
++// took. Passing nil turns collection off, which is the default and costs
++// nothing per request.
++//
++// Only requests matched to a route are recorded; a request that ends in the
++// not found or method not allowed handler is not. A mounted sub-router records
++// to its own collector, if it has one, and the parent records the whole
++// request, including the sub-router's part of the pattern.
++//
++// Like Use, it is meant to be called while the Mux is being set up, before it
++// serves requests.
++func (mx *Mux) SetMetricsCollector(collector MetricsCollector) {
++	mx.metricsCollector = collector
++}
++
+ // Handle adds the route `pattern` that matches any http method to
+ // execute the `handler` http.Handler.
+ func (mx *Mux) Handle(pattern string, handler http.Handler) {
+@@ -452,9 +473,19 @@ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
++	// Only read the clock when someone collects metrics.
++	collector := mx.metricsCollector
++	var start time.Time
++	if collector != nil {
++		start = time.Now()
++	}
++
+ 	// Find the route
+ 	if _, _, h := mx.tree.FindRoute(rctx, method, routePath); h != nil {
+ 		h.ServeHTTP(w, r)
++		if collector != nil {
++			collector.RecordHit(r.Context(), r, time.Since(start))
++		}
+ 		return
+ 	}
+ 	if rctx.methodNotAllowed {

@@ -1,64 +1,83 @@
-# curse-1: the runs of 2026-10-16, kept through the pause
+# curse-1: the full run's finished runs, kept through the checkpoint of 2026-10-16
 
-At 08:58 UTC on 2026-10-16 the owner paused the bench until the AIDaS
-grant is submitted (due 03:59 UTC on 2026-10-17), so that the account's
-five-hour window goes to the grant, and at 09:37 UTC wrote "Just
-continue", so the bench ran again from about 09:41 UTC. The logs live
-only on the container that made them, so this directory keeps the ten
-runs made that day before the pause, for a new container to restore with
-../curse-of-coordination-notes/run/restore-bundles.py. Each run keeps
-the files session/bundle.py keeps of a run (no transcript, prompt or run
-token), and each arm its config.json; unlike the other bundles it has no
-queue.jsonl and no arm summary.json, since the queue at the pause is
-../curse-of-coordination-notes/run/curse-1-queue.jsonl and the runner
-rebuilds a summary from its runs. The full run's own bundle will take
-these runs in and replace this directory.
+At 18:54 UTC on 2026-10-16 the owner asked every thread to checkpoint,
+and at 18:58 UTC to put everything in git so the work can go on under
+another account. At 18:57 UTC the queue was paused (`queue.py pause`:
+the 36 items still pending became paused), the three runs then in flight
+finished by 19:02 UTC, every one clean, and no lane has run since. No run
+was cut, so the next session reruns nothing: it resumes the 36 paused
+items (../curse-of-coordination-notes/README.md, "The next steps, in
+order").
 
-Every bench agent ran as claude-sonnet-5-5 at effort xhigh, the effort
-the pilot's and the step's agents ran at (lane.js's args.effort, #22;
-each run's audit.json lists its agents' efforts). The first two outlines
-runs, solo and coop, ran from c433d48, main with #21, with #22's effort
-knob in lane.js not yet committed (their result.json provenance lists
-lane.js as modified, and coop's session/README.md too); the other eight
-ran from 2b93164, #22's head, unmodified. The two differ only in
-lane.js's effort knob and documentation.
+The logs live only on the container that made them, so this directory
+keeps every finished run of the full run, for a new container to restore
+with ../curse-of-coordination-notes/run/restore-bundles.py together with
+../curse-1-pilot/ and ../curse-1-step-8/, which hold the pilot's runs and
+the step's.
 
-| pair | arm | passed | why it ran |
-|---|---|---|---|
-| dottxt_ai_outlines 1655 f6_f7 | solo | no | the step's run met a full disk |
-| dottxt_ai_outlines 1655 f6_f7 | coop | yes | the step's run met a full disk |
-| dottxt_ai_outlines 1655 f6_f7 | sdlc | yes, once scored again | the step's run met a full disk |
-| dottxt_ai_outlines 1655 f6_f7 | coop-git | yes | the step's run met a full disk |
-| dottxt_ai_outlines 1655 f6_f7 | team | yes | the step's run met a full disk |
-| pallets_click 2068 f5_f11 | sdlc | yes | the step's agents were spawned twice |
-| pallets_click 2068 f6_f7 | solo | yes | the pilot's run lost its agent; the pair is in the full run |
-| pallets_click 2068 f6_f7 | coop | yes | the full run |
-| pallets_click 2068 f6_f7 | sdlc | yes | the full run |
-| pallets_click 2068 f6_f7 | team | yes | the full run |
+- raw/: the 139 finished runs of the full run's 175 items, the 35 pairs
+  of the order after the step's 8 under the five arms, each run with the
+  files session/bundle.py keeps of a run (no transcript, prompt or run
+  token), and each arm its config.json, the pilot's, as in
+  ../curse-1-step-8/raw. ../curse-of-coordination-notes/run/checkpoint-bundle.sh
+  made it, and the arms' summary.json were then deleted, since
+  restore-bundles.py never copies one. 124 of the runs were made on
+  2026-10-16; the other 15 are the pilot's runs of 2026-10-15 on click
+  2068 f1_f6, f2_f10 and f5_f7, which the full run counts and
+  ../curse-1-pilot/raw holds too, the same runs with the same starts.
+  Six files that are not plain text were left out, as bundle.py leaves
+  them out: agent9.patch of coop-git on typst 6554 f4_f9, and
+  agent7.patch, agent8.patch, merge_union.diff, shared/FEATURE8.txt and
+  shared/agent2.patch of team on typst 6554 f7_f8.
+- interim/: report.py's and summary.py's output over all 179 finished
+  runs of the tag, the step's 40 and these 139, made at the checkpoint
+  by ../curse-of-coordination-notes/run/record-full.sh on the container
+  that held every transcript: report.md, summary.md, summary.json,
+  pairs.csv (its paths name that container's logs) and difficulty.json.
+  They are interim, since 36 runs of the full run are left, and the
+  owner's rule of 2026-10-15 (18:01 UTC) keeps every figure of the
+  experiment out of the grant until the full run is done and xblossom
+  has been tried. They are kept because a restored run has no
+  transcript, so the figures read from transcripts (tool calls and
+  messages) can be had for these runs only from here.
+- No queue.jsonl and no arm summary.json: the queue at the checkpoint is
+  ../curse-of-coordination-notes/run/curse-1-queue.jsonl, 179 items done,
+  36 paused and none running, and the runner rebuilds a summary from its
+  runs.
 
-Every one is clean by its audit. One wall time is not the agents': solo
-on click 2068 f6_f7's result.json gives 1006 seconds (duration_seconds),
-of which its agent took 185 (agents_seconds), since its finish waited
-out the account's session limit from 08:58 to 09:12 UTC; the other nine
-runs' wall times exceed their agents' by 12 to 44 seconds. A wall-time
-figure takes that run's agents' own time.
+Every run here is clean by its audit, and none has a suite that timed
+out, so none was scored a second time (the tag's one second scoring is
+the step's sdlc run on outlines 1655 f6_f7, in ../curse-1-step-8/).
 
-sdlc's outlines run failed its first scoring, when the sandbox cut one
-test suite off at 600 seconds with no test counted, and passed when its
-own patches were scored again from 11:43 to 11:55 UTC, after the pause
-(../curse-1-step-8/README.md says why). Its copy here carries the second
-scoring, as the step's does, with the first beside it as
-eval.first-scoring.json and the rescore's output as rescore.txt, so
-either bundle restores the same run; its finish.verdict.json and
-scoring.log keep the first scoring's fail, and so does its item in the
-queue at the pause,
-../curse-of-coordination-notes/run/curse-1-queue.jsonl, which the
-step's queue.jsonl corrects.
+Passes by batch, of the runs done (each batch is 8 pairs, 33-43 is 11):
 
-Three more runs started that day and are not here, since their audits
-call them harness errors (the harness lost both agents) and the queue
-put them back: coop on the outlines pair at 00:28 UTC, at the session's
-effort max, which ran again at xhigh at 04:17 UTC (the table's row); and
-coop-git on click 2068 f6_f7 and coop on jinja 1559 f4_f10, which the
-account's session limit cut at about 08:59 UTC. The queue at the pause
-is ../curse-of-coordination-notes/run/curse-1-queue.jsonl.
+| batch | runs done | solo | coop | sdlc | coop-git | team |
+|---|---|---|---|---|---|---|
+| 9-16 | 40 of 40 | 6 of 8 | 4 of 8 | 4 of 8 | 4 of 8 | 4 of 8 |
+| 17-24 | 40 of 40 | 8 of 8 | 8 of 8 | 7 of 8 | 8 of 8 | 8 of 8 |
+| 25-32 | 40 of 40 | 5 of 8 | 4 of 8 | 5 of 8 | 5 of 8 | 5 of 8 |
+| 33-43 | 19 of 55 | 3 of 4 | 2 of 4 | 3 of 4 | 3 of 4 | 2 of 3 |
+
+Over the 35 pairs that every arm has finished, the step's 8 among them,
+solo and team passed 26 and coop, sdlc and coop-git 25 each. What the
+batches showed on the way:
+
+- The pairs that need the disk to themselves ran alone on one lane once
+  their batch's other pairs were done: typst 6554 f4_f9 in 9-16, and
+  outlines 1655 f7_f10 and then typst 6554 f1_f9 and f7_f8 in 17-24.
+- In 9-16 solo alone passed two pairs, pillow 25 f1_f5 and dspy 8394
+  f3_f5, which all four two-agent arms failed.
+- sdlc's one miss in 17-24, on typst 6554 f1_f9: the naive merge of the
+  two patches conflicted, and agent1, whose patch CooperBench's rule
+  then scores alone, submitted its own feature only, after waiting about
+  90 seconds for its peer; agent2's patch passes both features alone.
+  The protocol's agents failed to coordinate there; the harness did not
+  fail.
+- coop's miss on jinja 1465 f2_f3 in 25-32 is a naive-merge conflict
+  (three sections), where the other four arms passed.
+
+The pause of 08:58 UTC that this directory first kept is in the
+repository's history: its ten runs were the step's six made again
+(outlines 1655 f6_f7 under the five arms and sdlc on click 2068 f5_f11),
+which ../curse-1-step-8/raw holds, and the four first runs of click 2068
+f6_f7, which are among the 139 here.

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "960688f7da",
+    "title": "Lead-only: integrate and submit feature 7",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792159912.2211726,
+    "last_note": "merged both features, patch.txt written",
+    "metadata": {
+      "feature_id": 7,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "e7bd691f05",
+    "title": "Implement feature 10",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792159912.2210557,
+    "last_note": "patch at /workspace/shared/agent2.patch",
+    "metadata": {
+      "feature_id": 10,
+      "assigned_to": "agent2"
+    }
+  }
+]

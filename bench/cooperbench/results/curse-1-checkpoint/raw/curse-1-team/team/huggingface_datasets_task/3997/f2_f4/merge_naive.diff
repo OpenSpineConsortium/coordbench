@@ -1,0 +1,38 @@
+diff --cc src/datasets/features/features.py
+index d26ae8251,8aa817629..000000000
+--- a/src/datasets/features/features.py
++++ b/src/datasets/features/features.py
+@@@ -1326,6 -1339,30 +1339,33 @@@ class Features(dict)
+          if isinstance(value, list):
+              return [cls._feature_from_json_value(item) for item in value]
+          return value
+++<<<<<<< HEAD
+++=======
++ 
++     def set_custom_decoding_criteria(self, custom_criteria: Optional[callable] = None):
++         """Set a custom criterion deciding which features require decoding.
++ 
++         The criterion is a function taking a feature and returning ``True`` if it requires decoding, ``False`` if it
++         does not, or ``None`` to let the default rules decide. It is called on each column's feature and on the
++         features nested in it, and it is applied to the columns already present as well as to those added later.
++         Passing ``None`` restores the default behaviour.
++ 
++         Args:
++             custom_criteria (:obj:`callable`, optional): the function deciding whether a feature requires decoding.
++ 
++         Example::
++             >>> features = Features({"image": Image(), "text": Value("string")})
++             >>> features.set_custom_decoding_criteria(lambda feature: False if isinstance(feature, Image) else None)
++             >>> features._column_requires_decoding["image"]
++             False
++         """
++         if custom_criteria is not None and not callable(custom_criteria):
++             raise TypeError(f"custom_criteria must be callable or None, got {type(custom_criteria).__name__}")
++         self._custom_decoding_criteria = custom_criteria
++         self._column_requires_decoding = {
++             col: require_decoding(feature, custom_criteria=custom_criteria) for col, feature in self.items()
++         }
+++>>>>>>> agent1
+  
+      def __reduce__(self):
+          return Features, (dict(self),)

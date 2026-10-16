@@ -1,0 +1,73 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..67aa3a3df 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -177,24 +177,60 @@ impl Str {
+     }
+ 
+     /// Extracts the first grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// If the string is empty, returns the default value, or fails with an
++    /// error if no default value was specified.
++    ///
++    /// If `strip` is given, all leading characters that occur in it are
++    /// skipped first. If nothing remains, the default value is used in the
++    /// same way.
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
++    pub fn first(
++        &self,
++        /// A string of characters to strip from the start of the string
++        /// before extracting the first grapheme cluster.
++        #[named]
++        strip: Option<Str>,
++        /// A default value to return if the string is empty.
++        #[named]
++        default: Option<Str>,
++    ) -> StrResult<Str> {
++        let mut s = self.as_str();
++        if let Some(strip) = &strip {
++            s = s.trim_start_matches(|c| strip.as_str().contains(c));
++        }
++        s.graphemes(true)
+             .next()
+             .map(Into::into)
++            .or(default)
+             .ok_or_else(string_is_empty)
+     }
+ 
+     /// Extracts the last grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// If the string is empty, returns the default value, or fails with an
++    /// error if no default value was specified.
++    ///
++    /// If `strip` is given, all trailing characters that occur in it are
++    /// skipped first. If nothing remains, the default value is used in the
++    /// same way.
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
++    pub fn last(
++        &self,
++        /// A string of characters to strip from the end of the string
++        /// before extracting the last grapheme cluster.
++        #[named]
++        strip: Option<Str>,
++        /// A default value to return if the string is empty.
++        #[named]
++        default: Option<Str>,
++    ) -> StrResult<Str> {
++        let mut s = self.as_str();
++        if let Some(strip) = &strip {
++            s = s.trim_end_matches(|c| strip.as_str().contains(c));
++        }
++        s.graphemes(true)
+             .next_back()
+             .map(Into::into)
++            .or(default)
+             .ok_or_else(string_is_empty)
+     }
+ 

@@ -1,0 +1,255 @@
+{
+  "repo": "pallets_click_task",
+  "task_id": 2956,
+  "features": [
+    1,
+    8
+  ],
+  "setting": "team",
+  "run_id": "team-2956-f1_f8-8a79d5",
+  "run_name": "curse-1-team",
+  "agent_framework": "claude_code_subagent",
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-10-16T13:13:21.018447",
+  "ended_at": "2026-10-16T13:18:24.499129",
+  "duration_seconds": 303.480682,
+  "lead_agent": "agent1",
+  "agents": {
+    "agent1": {
+      "feature_id": 1,
+      "team_role": "lead",
+      "status": "Submitted",
+      "cost": null,
+      "steps": null,
+      "input_tokens": 50,
+      "output_tokens": null,
+      "cache_read_tokens": 2446499,
+      "cache_write_tokens": 82950,
+      "patch_lines": 336,
+      "error": null,
+      "role": "lead",
+      "duration_ms": null,
+      "api_duration_ms": null,
+      "end_reason": null,
+      "model_requested": "claude-sonnet-5-5",
+      "model": "claude-sonnet-5-5",
+      "model_differs": false,
+      "claude_code_version": "2.1.301",
+      "tools": null,
+      "mcp_servers": null,
+      "cost_source": null,
+      "output_tokens_lower_bound": 11783,
+      "cost_lower_bound": null
+    },
+    "agent2": {
+      "feature_id": 8,
+      "team_role": "member",
+      "status": "Submitted",
+      "cost": null,
+      "steps": null,
+      "input_tokens": 38,
+      "output_tokens": null,
+      "cache_read_tokens": 1752602,
+      "cache_write_tokens": 75763,
+      "patch_lines": 148,
+      "error": null,
+      "role": "member",
+      "duration_ms": null,
+      "api_duration_ms": null,
+      "end_reason": null,
+      "model_requested": "claude-sonnet-5-5",
+      "model": "claude-sonnet-5-5",
+      "model_differs": false,
+      "claude_code_version": "2.1.301",
+      "tools": null,
+      "mcp_servers": null,
+      "cost_source": null,
+      "output_tokens_lower_bound": 11660,
+      "cost_lower_bound": null
+    }
+  },
+  "total_cost": null,
+  "total_steps": null,
+  "messages_sent": 4,
+  "team_features": {
+    "task_list": true,
+    "scratchpad": true,
+    "mcp": true,
+    "auto_refresh": true,
+    "protocol": true
+  },
+  "log_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_click_task/2956/f1_f8",
+  "error_kind": null,
+  "arm": "team",
+  "driver": "session",
+  "agents_seconds": 290.122913,
+  "isolation": "advisory",
+  "options": {},
+  "agent_models": {},
+  "max_turns": null,
+  "timeout_s": 2700.0,
+  "disallowed_tools": [
+    "WebFetch",
+    "WebSearch"
+  ],
+  "provenance": {
+    "cooperbench": {
+      "dir": "/root/cooperbench",
+      "commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+      "modified": [
+        "src/cooperbench/agents/claude_code/setup.sh"
+      ],
+      "modified_count": 1
+    },
+    "dataset": {
+      "dir": "/root/cooperbench/dataset",
+      "git_tree": "9c9e5802e06d89c7f84a9ebb13c3a5998b007e36",
+      "last_commit": "55a63e9329e1ef4e9957113534d5cad57c0f1f88",
+      "modified": false,
+      "sha256": "b0d33805162fa8001deba5f891de65e7b54e96351c2f21d810a0f0ac142710f6",
+      "files": 774
+    },
+    "coordbench": {
+      "dir": "/home/user/coordbench/coordbench",
+      "commit": "83933e828c0e8fd8fa6144f59d67e332bd6f840d",
+      "modified": [],
+      "modified_count": 0
+    }
+  },
+  "image": {
+    "image": "akhatua/cooperbench-pallets-click:task2956",
+    "id": "sha256:0a7824885dfad5406e4462e5250afb7b6715c118b2a782c3b4dd3ccd3f6705a9",
+    "repo_digests": [
+      "akhatua/cooperbench-pallets-click@sha256:0a7824885dfad5406e4462e5250afb7b6715c118b2a782c3b4dd3ccd3f6705a9"
+    ],
+    "overlay": "cloud-session"
+  },
+  "metrics": {
+    "events": {
+      "run_started": 1,
+      "task_create": 2,
+      "tool": 19,
+      "tool_done": 19,
+      "task_claim": 1,
+      "message": 4,
+      "task_update": 3,
+      "receive": 2
+    },
+    "tool_surface": "mcp",
+    "tasks_total": 2,
+    "tasks_done": 2,
+    "unowned_at_end": 0,
+    "time_to_first_claim_seconds": 31.601,
+    "claims_per_agent": {
+      "agent2": 1
+    },
+    "updates_per_agent": {
+      "agent1": 2,
+      "agent2": 1
+    },
+    "messages_sent": 4,
+    "messages_by_agent": {
+      "agent1": 3,
+      "agent2": 1
+    },
+    "message_chars": 2015,
+    "message_words": 280,
+    "tool_calls": {
+      "task_list": 4,
+      "peek_messages": 3,
+      "list_agents": 2,
+      "task_claim": 1,
+      "send_message": 4,
+      "task_update": 3,
+      "receive_messages": 2
+    },
+    "lead_agent": "agent1",
+    "team_features": {
+      "task_list": true,
+      "scratchpad": true,
+      "mcp": true,
+      "auto_refresh": true,
+      "protocol": true
+    }
+  },
+  "timings": [
+    {
+      "phase": "hub",
+      "agent": null,
+      "started": "2026-10-16T13:13:20.759398",
+      "ended": "2026-10-16T13:13:20.861390",
+      "seconds": 0.101992
+    },
+    {
+      "phase": "shared_volume",
+      "agent": null,
+      "started": "2026-10-16T13:13:21.109747",
+      "ended": "2026-10-16T13:13:21.153154",
+      "seconds": 0.043407
+    },
+    {
+      "phase": "run_create",
+      "agent": null,
+      "started": "2026-10-16T13:13:21.153206",
+      "ended": "2026-10-16T13:13:21.159241",
+      "seconds": 0.006035
+    },
+    {
+      "phase": "provision",
+      "agent": "agent1",
+      "started": "2026-10-16T13:13:21.159615",
+      "ended": "2026-10-16T13:13:22.092219",
+      "seconds": 0.932604
+    },
+    {
+      "phase": "provision",
+      "agent": "agent2",
+      "started": "2026-10-16T13:13:22.092258",
+      "ended": "2026-10-16T13:13:23.009362",
+      "seconds": 0.917104
+    },
+    {
+      "phase": "agent",
+      "agent": "agent1",
+      "started": "2026-10-16T13:13:23.009408",
+      "ended": "2026-10-16T13:18:13.132321",
+      "seconds": 290.122913
+    },
+    {
+      "phase": "agent",
+      "agent": "agent2",
+      "started": "2026-10-16T13:13:23.009999",
+      "ended": "2026-10-16T13:16:23.504315",
+      "seconds": 180.494316
+    },
+    {
+      "phase": "close",
+      "agent": null,
+      "started": "2026-10-16T13:18:24.499148",
+      "ended": "2026-10-16T13:18:24.505660",
+      "seconds": 0.006512
+    },
+    {
+      "phase": "teardown",
+      "agent": null,
+      "started": "2026-10-16T13:18:24.552963",
+      "ended": "2026-10-16T13:18:25.053725",
+      "seconds": 0.500762
+    },
+    {
+      "phase": "score",
+      "agent": null,
+      "started": "2026-10-16T13:18:25.053867",
+      "ended": "2026-10-16T13:18:39.883751",
+      "seconds": 14.829884
+    },
+    {
+      "phase": "cascade",
+      "agent": null,
+      "started": "2026-10-16T13:18:39.886215",
+      "ended": "2026-10-16T13:19:01.956691",
+      "seconds": 22.070476
+    }
+  ],
+  "utc_offset_seconds": 0
+}

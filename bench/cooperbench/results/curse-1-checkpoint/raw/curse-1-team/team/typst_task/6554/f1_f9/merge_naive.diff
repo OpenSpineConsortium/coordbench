@@ -1,0 +1,70 @@
+diff --cc crates/typst/src/foundations/str.rs
+index a0512a62a,67aa3a3df..000000000
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@@ -177,10 -177,12 +177,19 @@@ impl Str 
+      }
+  
+      /// Extracts the first grapheme cluster of the string.
+++<<<<<<< HEAD
+ +    /// Fails with an error if the string is empty.
+ +    ///
+ +    /// If `strip` is given, all leading characters that occur in it are
+ +    /// skipped first. Fails with an error if nothing remains.
+++=======
++     /// If the string is empty, returns the default value, or fails with an
++     /// error if no default value was specified.
++     ///
++     /// If `strip` is given, all leading characters that occur in it are
++     /// skipped first. If nothing remains, the default value is used in the
++     /// same way.
+++>>>>>>> agent1
+      #[func]
+      pub fn first(
+          &self,
+@@@ -188,6 -190,9 +197,12 @@@
+          /// before extracting the first grapheme cluster.
+          #[named]
+          strip: Option<Str>,
+++<<<<<<< HEAD
+++=======
++         /// A default value to return if the string is empty.
++         #[named]
++         default: Option<Str>,
+++>>>>>>> agent1
+      ) -> StrResult<Str> {
+          let mut s = self.as_str();
+          if let Some(strip) = &strip {
+@@@ -200,10 -206,12 +216,19 @@@
+      }
+  
+      /// Extracts the last grapheme cluster of the string.
+++<<<<<<< HEAD
+ +    /// Fails with an error if the string is empty.
+ +    ///
+ +    /// If `strip` is given, all trailing characters that occur in it are
+ +    /// skipped first. Fails with an error if nothing remains.
+++=======
++     /// If the string is empty, returns the default value, or fails with an
++     /// error if no default value was specified.
++     ///
++     /// If `strip` is given, all trailing characters that occur in it are
++     /// skipped first. If nothing remains, the default value is used in the
++     /// same way.
+++>>>>>>> agent1
+      #[func]
+      pub fn last(
+          &self,
+@@@ -211,6 -219,9 +236,12 @@@
+          /// before extracting the last grapheme cluster.
+          #[named]
+          strip: Option<Str>,
+++<<<<<<< HEAD
+++=======
++         /// A default value to return if the string is empty.
++         #[named]
++         default: Option<Str>,
+++>>>>>>> agent1
+      ) -> StrResult<Str> {
+          let mut s = self.as_str();
+          if let Some(strip) = &strip {

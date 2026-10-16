@@ -1,0 +1,17 @@
+diff --cc src/click/termui.py
+index 7ca5cd9,43add23..0000000
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@@ -694,8 -694,7 +694,12 @@@ def edit
+                          entered, a :exc:`ClickException` is raised.
+  
+      .. versionchanged:: 8.2
+++<<<<<<< HEAD
+ +        Added the ``escape_shell`` parameter.
+ +        Added the ``working_dir`` parameter.
+++=======
++         Added the ``escape_shell`` and ``working_dir`` parameters.
+++>>>>>>> agent1
+      """
+      from ._termui_impl import Editor
+  

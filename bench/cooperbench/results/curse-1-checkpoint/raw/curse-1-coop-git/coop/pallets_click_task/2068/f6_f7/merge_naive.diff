@@ -1,0 +1,38 @@
+diff --cc src/click/_termui_impl.py
+index 53421a5,fb74829..0000000
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@@ -600,7 -600,7 +600,11 @@@ class Editor
+          import subprocess
+  
+          editor = self.get_editor()
+++<<<<<<< HEAD
+ +        cmd = self._build_command(editor, filename)
+++=======
++         command = self._build_command(editor, filename)
+++>>>>>>> agent1
+          environ: dict[str, str] | None = None
+  
+          if self.env:
+@@@ -610,13 -610,13 +614,21 @@@
+          try:
+              try:
+                  c = subprocess.Popen(
+++<<<<<<< HEAD
+ +                    cmd, env=environ, shell=True, **self._priority_popen_kwargs()
+++=======
++                     command, env=environ, shell=True, **self._priority_popen_kwargs()
+++>>>>>>> agent1
+                  )
+              except (ValueError, RuntimeError, subprocess.SubprocessError):
+                  # The priority could not be applied, for example because
+                  # preexec_fn is not allowed here. No editor was started, so
+                  # start it again with the priority it inherits.
+++<<<<<<< HEAD
+ +                c = subprocess.Popen(cmd, env=environ, shell=True)
+++=======
++                 c = subprocess.Popen(command, env=environ, shell=True)
+++>>>>>>> agent1
+  
+              exit_code = c.wait()
+              if exit_code != 0:

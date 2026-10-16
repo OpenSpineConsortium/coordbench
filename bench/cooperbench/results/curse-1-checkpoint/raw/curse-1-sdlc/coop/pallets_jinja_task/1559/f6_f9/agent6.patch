@@ -1,0 +1,187 @@
+diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
+index d21b83aa..2032b8ee 100644
+--- a/src/jinja2/ext.py
++++ b/src/jinja2/ext.py
+@@ -1,6 +1,7 @@
+ """Extension API for adding custom tags and behavior."""
+ import pprint
+ import re
++import threading
+ import typing as t
+ 
+ from markupsafe import Markup
+@@ -264,7 +265,93 @@ class InternationalizationExtension(Extension):
+             uninstall_gettext_translations=self._uninstall,
+             extract_translations=self._extract,
+             newstyle_gettext=False,
++            i18n_cache_size=128,
+         )
++        self._init_cache()
++
++    def bind(self, environment: Environment) -> "Extension":
++        # The base class copies the instance dict, which would make an
++        # overlay share the cache of the environment it was made from.
++        # Every environment keeps its own cache, so start a new one.
++        rv = t.cast("InternationalizationExtension", super().bind(environment))
++        rv._init_cache()
++        return rv
++
++    def __getstate__(self) -> t.Dict[str, t.Any]:
++        # A lock cannot be copied, so leave it out and make a new one.
++        state = self.__dict__.copy()
++        state.pop("_cache_lock", None)
++        return state
++
++    def __setstate__(self, state: t.Dict[str, t.Any]) -> None:
++        self.__dict__.update(state)
++        self._cache_lock = threading.Lock()
++
++    def _init_cache(self) -> None:
++        """Set up an empty translation cache, sized by the environment's
++        ``i18n_cache_size``.
++        """
++        self._cache: t.Dict[str, str] = {}
++        self._cache_order: t.List[str] = []
++        self._cache_lock = threading.Lock()
++        self._cache_size = self._configured_cache_size()
++
++    def _configured_cache_size(self) -> int:
++        size = getattr(self.environment, "i18n_cache_size", 128)
++
++        try:
++            return max(int(size), 0)
++        except (TypeError, ValueError):
++            return 128
++
++    def _update_cache_size(self) -> None:
++        """Read ``environment.i18n_cache_size`` again and, if the cache
++        is now larger than allowed, drop the least recently used entries.
++        """
++        size = self._configured_cache_size()
++
++        with self._cache_lock:
++            self._cache_size = size
++            self._evict_over_size()
++
++    def _evict_over_size(self) -> None:
++        # The caller holds the lock. The oldest entry is first.
++        while len(self._cache_order) > self._cache_size:
++            self._cache.pop(self._cache_order.pop(0), None)
++
++    def _get_from_cache(self, key: str) -> t.Optional[str]:
++        """Return the cached translation for ``key`` and mark it as the
++        most recently used, or return ``None`` if it is not cached.
++        """
++        with self._cache_lock:
++            if key not in self._cache:
++                return None
++
++            self._cache_order.remove(key)
++            self._cache_order.append(key)
++            return self._cache[key]
++
++    def _put_in_cache(self, key: str, value: str) -> None:
++        """Store a translation as the most recently used entry, dropping
++        the least recently used ones to stay within the cache size. A
++        size of 0 turns the cache off.
++        """
++        with self._cache_lock:
++            if self._cache_size <= 0:
++                return
++
++            if key in self._cache:
++                self._cache_order.remove(key)
++
++            self._cache[key] = value
++            self._cache_order.append(key)
++            self._evict_over_size()
++
++    def clear_cache(self) -> None:
++        """Remove every entry from the translation cache."""
++        with self._cache_lock:
++            self._cache.clear()
++            self._cache_order.clear()
+ 
+     def _install(
+         self, translations: "_SupportedTranslations", newstyle: t.Optional[bool] = None
+@@ -636,6 +723,75 @@ class DebugExtension(Extension):
+         return pprint.pformat(result, depth=3, compact=True)
+ 
+ 
++class TranslationExtractorExtension(Extension):
++    """Adds an ``{% extract %}...{% endextract %}`` block that annotates
++    translatable content with metadata for translation tools.
++
++    .. code-block:: html+jinja
++
++        {% extract comment="Button label", context="checkout", priority="high" %}
++            {{ _("Buy now") }}
++        {% endextract %}
++
++    The attributes are optional and are collected when the template is
++    compiled. The block renders exactly as its body would without the
++    markers, so the output does not change. The collected markers are
++    available from :meth:`Environment.extraction_markers`, one entry per
++    block with the keys ``lineno``, ``markers`` and ``body``.
++
++    Attribute values that are constants are stored as they are, any other
++    expression is stored as the string representation of its node.
++    """
++
++    tags = {"extract"}
++
++    def __init__(self, environment: Environment) -> None:
++        super().__init__(environment)
++        environment.extend(extraction_markers=self._get_extraction_markers)
++
++        if not hasattr(environment, "_extraction_markers"):
++            setattr(environment, "_extraction_markers", [])
++
++    def parse(self, parser: "Parser") -> t.Union[nodes.Node, t.List[nodes.Node]]:
++        lineno = next(parser.stream).lineno
++        markers: t.Dict[str, nodes.Expr] = {}
++
++        while parser.stream.current.type != "block_end":
++            key = parser.stream.expect("name").value
++            parser.stream.expect("assign")
++            markers[key] = parser.parse_expression()
++
++            # Attributes are separated by commas, a trailing comma is
++            # allowed like in tuples. Anything else must end the tag.
++            if parser.stream.current.type != "block_end":
++                parser.stream.expect("comma")
++
++        body = parser.parse_statements(("name:endextract",), drop_needle=True)
++        return self._create_extraction_marker_node(markers, body, lineno)
++
++    def _create_extraction_marker_node(
++        self, markers: t.Dict[str, nodes.Expr], body: t.List[nodes.Node], lineno: int
++    ) -> nodes.Node:
++        marker_info: t.Dict[str, t.Any] = {}
++
++        for key, value_node in markers.items():
++            if isinstance(value_node, nodes.Const):
++                marker_info[key] = value_node.value
++            else:
++                marker_info[key] = str(value_node)
++
++        getattr(self.environment, "_extraction_markers").append(
++            {"lineno": lineno, "markers": marker_info, "body": body}
++        )
++
++        # A scope keeps the body working exactly as it would without the
++        # markers: the extract block is invisible when rendering.
++        return nodes.Scope(body, lineno=lineno)
++
++    def _get_extraction_markers(self) -> t.List[t.Dict[str, t.Any]]:
++        return getattr(self.environment, "_extraction_markers", [])
++
++
+ def extract_from_ast(
+     ast: nodes.Template,
+     gettext_functions: t.Sequence[str] = GETTEXT_FUNCTIONS,
+@@ -852,3 +1008,4 @@ i18n = InternationalizationExtension
+ do = ExprStmtExtension
+ loopcontrols = LoopControlExtension
+ debug = DebugExtension
++extractor = TranslationExtractorExtension

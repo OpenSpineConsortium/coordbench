@@ -1,0 +1,101 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..7895c82e8 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2505,6 +2505,12 @@ class Image:
+              red = Image.new("RGB", (1, 1), "#f00")
+              red.encoderinfo = {"xmp": b"test"}
+              black.save("out.mpo", save_all=True, append_images=[red])
++        :param mark_corners: If ``True``, the saved image has its top-left and
++           bottom-right pixels set to red, as a visual sign that it has been
++           processed. The image itself is left as it was. In a mode that has
++           no colour the nearest value is used, and in mode "1" it is white.
++           Only the image itself is marked, not the frames of a multi-frame
++           save that are read from a file as it is saved.
+         :returns: None
+         :exception ValueError: If the output format could not be determined
+            from the file name.  Use the format option to solve this.
+@@ -2540,9 +2546,17 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
+-        # may mutate self!
+-        self._ensure_mutable()
++        if getattr(self, "filename", None) == filename:
++            # Saving back to the file the image was opened from: the image may
++            # still read from that file, so take a copy first.
++            # may mutate self!
++            self._ensure_mutable()
++        else:
++            # Leave a readonly image (such as one from frombuffer()) connected
++            # to its buffer.
++            self.load()
+ 
++        mark_corners = params.pop("mark_corners", False)
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+         self.encoderconfig: tuple[Any, ...] = ()
+@@ -2570,7 +2584,10 @@ class Image:
+         else:
+             fp = cast(IO[bytes], fp)
+ 
++        unmark: Callable[[], None] | None = None
+         try:
++            if mark_corners:
++                unmark = self._mark_corners()
+             save_handler(self, fp, filename)
+         except Exception:
+             if open_fp:
+@@ -2582,6 +2599,8 @@ class Image:
+                     pass
+             raise
+         finally:
++            if unmark:
++                unmark()
+             try:
+                 del self.encoderinfo
+             except AttributeError:
+@@ -2589,6 +2608,43 @@ class Image:
+         if open_fp:
+             fp.close()
+ 
++    def _mark_corners(self) -> Callable[[], None]:
++        """
++        Sets the top-left and bottom-right pixels to red, for the
++        ``mark_corners`` option of :py:meth:`~PIL.Image.Image.save`.
++
++        :returns: A function that puts the two pixels back as they were, unless
++           the image has been reloaded in the meantime (as a seek does).
++        """
++        from . import ImageColor
++
++        width, height = self.size
++        if not width or not height:
++            return lambda: None
++
++        red: int | tuple[int, ...]
++        if self.mode == "CMYK":
++            red = (0, 255, 255, 0)
++        elif self.mode == "1":
++            # No colour fits in a bilevel image: white shows on the usual black
++            red = 255
++        else:
++            red = ImageColor.getcolor("red", self.mode)
++
++        corners = [(0, 0), (width - 1, height - 1)]
++        original = [self.getpixel(xy) for xy in corners]
++        for xy in corners:
++            # a readonly image is copied here, and it is the copy that is saved
++            self.putpixel(xy, red)
++        marked = self.im
++
++        def unmark() -> None:
++            if self.im is marked:
++                for xy, value in zip(corners, original):
++                    self.putpixel(xy, value)
++
++        return unmark
++
+     def seek(self, frame: int) -> None:
+         """
+         Seeks to the given frame in this sequence file. If you seek

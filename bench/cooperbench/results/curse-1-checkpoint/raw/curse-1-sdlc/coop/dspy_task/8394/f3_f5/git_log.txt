@@ -1,0 +1,52 @@
+commit 5e5f73902475754f5364b267047adb06948ef94a (main)
+Merge: 64e81ef2 c6fd310d
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:30:12 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit c6fd310d6ba34d55831bcdaea7b58a8a059f2880 (claude/5)
+Merge: c1c4a328 64e81ef2
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:30:11 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/5
+    
+    # Conflicts:
+    #       dspy/clients/__init__.py
+    #       dspy/clients/cache.py
+
+commit c1c4a328076db96fdd6a73c3452352c3f9d29ca1
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:29:10 2026 +0000
+
+    Add optional on-disk compression with magic-header format and eviction knobs
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ dspy/clients/__init__.py | 14 ++++++-
+ dspy/clients/cache.py    | 99 ++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 108 insertions(+), 5 deletions(-)
+
+commit 64e81ef215cd9c37fa2956b6733cf8ee6e6ccc2f
+Merge: 3ded7a62 a7fa59a9
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:27:04 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit a7fa59a91afe25f71584607c12c10ae3f3ceb689 (claude/3)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:26:54 2026 +0000
+
+    Add optional per-entry TTL to the DSPy cache layers
+    
+    ttl switches the memory layer to cachetools.TTLCache and is passed to
+    FanoutCache.set(expire=...) on disk; a miss purges expired disk entries.
+    configure_cache(ttl=...), Cache(..., ttl=...) and dspy.clients.set_ttl()
+    take it; ttl=None keeps entries forever as before.
+
+ dspy/clients/__init__.py | 17 +++++++++++++++++
+ dspy/clients/cache.py    | 48 +++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 60 insertions(+), 5 deletions(-)

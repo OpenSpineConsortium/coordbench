@@ -1,0 +1,52 @@
+commit 7a28fe7df4e18623d88d79964e33f5236e5a0f21 (main)
+Merge: 28a8108 d79da05
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:26:04 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit d79da05ce0c4e7007d2d7837cac70002dff20395 (claude/2)
+Merge: 72cac6b 28a8108
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Fri Oct 16 13:25:58 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/2
+    
+    # Conflicts:
+    #       mux.go
+
+commit 72cac6ba8ffd1a7b71d30dec3fdb6180bc99274c
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Fri Oct 16 13:25:06 2026 +0000
+
+    feat(mux): implement route hit monitoring and metrics
+    
+    Add MetricsCollector, RouteMetric and SimpleMetricsCollector in metrics.go,
+    a metricsCollector field and SetMetricsCollector on Mux, and time each
+    routed handler in routeHTTP so the collector is told of the hit with its
+    route pattern, URL parameters and duration.
+
+ metrics.go      |  87 +++++++++++++++++
+ metrics_test.go | 296 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ mux.go          |  24 +++++
+ 3 files changed, 407 insertions(+)
+
+commit 28a81084c3c32467ce9bc8e70a2eec6d198de7ac
+Merge: 9436cc8 6cbe63e
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:24:16 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 6cbe63ead0c4ba3627da83e452107c06712bc11a (claude/1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:24:12 2026 +0000
+
+    feat(mux): support http.Request.PathValue in Go 1.22
+    
+    Set the URL params as request path values before serving the matched handler, so r.PathValue acts as an alias for chi.URLParam. Older Go versions compile a no-op.
+
+ mux.go                 |  4 ++++
+ path_value.go          | 20 ++++++++++++++++++++
+ path_value_fallback.go | 18 ++++++++++++++++++
+ 3 files changed, 42 insertions(+)

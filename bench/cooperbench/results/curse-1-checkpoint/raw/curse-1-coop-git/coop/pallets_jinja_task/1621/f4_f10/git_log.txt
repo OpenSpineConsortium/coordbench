@@ -1,0 +1,24 @@
+commit 6805ad782a40c85eab80018a96fc8e3433687626 (agent2)
+Merge: 55dec86 0223504
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:54:36 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 55dec86b45c19c1e82c364f48d8afb865cc00c23
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:54:31 2026 +0000
+
+    Add template path aliasing to loaders
+
+ src/jinja2/loaders.py | 114 +++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 109 insertions(+), 5 deletions(-)
+
+commit 02235047702f989e1c2b9dacff8f04316f49e639 (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:52:07 2026 +0000
+
+    feat(FileSystemLoader): add search path priority configuration
+
+ src/jinja2/loaders.py | 51 ++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 48 insertions(+), 3 deletions(-)

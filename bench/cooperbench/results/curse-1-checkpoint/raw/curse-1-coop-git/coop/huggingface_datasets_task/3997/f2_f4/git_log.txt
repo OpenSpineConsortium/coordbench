@@ -1,0 +1,31 @@
+commit 325454b12adba6f2f0cc0238300540a4c8732c78 (agent2)
+Merge: 47e51f17 4fdf76f5
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:48:40 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 1e9b74ef93471e66af074ef89e93cf26e1e7e185 (agent1)
+Merge: 4fdf76f5 47e51f17
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:48:34 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 4fdf76f59878cb7af57972aface75e9289e231df
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:48:26 2026 +0000
+
+    Add Features.set_custom_decoding_criteria and custom_criteria in require_decoding
+
+ src/datasets/features/features.py | 62 +++++++++++++++++++++++++++++++++++----
+ 1 file changed, 56 insertions(+), 6 deletions(-)
+
+commit 47e51f173bbba5a14c6ac79f28ab7dc7cdf66e51
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:48:07 2026 +0000
+
+    Extend Features.update: JSON strings and batch updates
+
+ src/datasets/features/features.py | 97 +++++++++++++++++++++++++++++++++++----
+ 1 file changed, 88 insertions(+), 9 deletions(-)

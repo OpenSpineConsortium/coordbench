@@ -1,0 +1,113 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..ebd6753 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -485,11 +485,13 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        escape_shell: bool = False,
+     ) -> None:
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.escape_shell = escape_shell
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -516,7 +518,9 @@ class Editor:
+             environ.update(self.env)
+ 
+         try:
+-            c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
++            c = subprocess.Popen(
++                self._build_command(editor, filename), env=environ, shell=True
++            )
+             exit_code = c.wait()
+             if exit_code != 0:
+                 raise ClickException(
+@@ -574,6 +578,44 @@ class Editor:
+         finally:
+             os.unlink(name)
+ 
++    def _build_command(self, editor: str, filename: str) -> str:
++        """Build the command line that is handed to the shell.
++
++        Without ``escape_shell`` the filename is only wrapped in double
++        quotes, which still lets ``$``, backticks and a closing quote
++        reach the shell. With it, the filename and every word of the
++        editor command are quoted with :func:`shlex.quote`, so shell
++        metacharacters are passed on as literal text.
++        """
++        if not self.escape_shell:
++            return f'{editor} "{filename}"'
++
++        import shlex
++
++        return f"{self._quote_editor(editor)} {shlex.quote(filename)}"
++
++    @staticmethod
++    def _quote_editor(editor: str) -> str:
++        """Quote each word of an editor command, so ``code --wait`` keeps
++        its argument while ``vim; rm -rf /`` cannot start a second command.
++        An editor that is, as a whole, the path of an executable (it may
++        contain spaces) is quoted as a single word.
++        """
++        import shlex
++        import shutil
++
++        if shutil.which(editor) is not None:
++            return shlex.quote(editor)
++
++        try:
++            words = shlex.split(editor)
++        except ValueError:
++            # Unbalanced quotes: there is no command line to split, so
++            # treat the whole value as one word.
++            return shlex.quote(editor)
++
++        return " ".join(shlex.quote(word) for word in words) or shlex.quote(editor)
++
+ 
+ def open_url(url: str, wait: bool = False, locate: bool = False) -> int:
+     import subprocess
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..2cf7375 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,7 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    escape_shell: bool = False,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -677,10 +678,25 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param escape_shell: if this is true, the filename and the words of the
++                         editor command are quoted with :func:`shlex.quote`
++                         before they are passed to the shell, so characters
++                         such as ``;``, ``|`` or a backtick in a
++                         user-provided path cannot run other commands.
++                         Defaults to false, which keeps the old behavior.
++
++    .. versionchanged:: 8.2
++        Added the ``escape_shell`` parameter.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        escape_shell=escape_shell,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

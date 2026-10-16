@@ -1,0 +1,303 @@
+diff --git a/dspy/clients/__init__.py b/dspy/clients/__init__.py
+index 52be745ab..c048cc470 100644
+--- a/dspy/clients/__init__.py
++++ b/dspy/clients/__init__.py
+@@ -1,7 +1,7 @@
+ import logging
+ import os
+ from pathlib import Path
+-from typing import Optional
++from typing import Literal, Optional
+ 
+ import litellm
+ from litellm.caching.caching import Cache as LitellmCache
+@@ -32,7 +32,11 @@ def configure_cache(
+     disk_cache_dir: Optional[str] = DISK_CACHE_DIR,
+     disk_size_limit_bytes: Optional[int] = DISK_CACHE_LIMIT,
+     memory_max_entries: Optional[int] = 1000000,
++    compress: Optional[Literal["gzip", "zlib"]] = None,
++    cull_limit: Optional[int] = None,
++    eviction_policy: Optional[str] = None,
+     enable_litellm_cache: bool = False,
++    ttl: Optional[int] = None,
+ ):
+     """Configure the cache for DSPy.
+ 
+@@ -42,7 +46,16 @@ def configure_cache(
+         disk_cache_dir: The directory to store the on-disk cache.
+         disk_size_limit_bytes: The size limit of the on-disk cache.
+         memory_max_entries: The maximum number of entries in the in-memory cache.
++        compress: Codec used to compress values in the on-disk cache, "gzip", "zlib" or None (default, no
++            compression). Entries already on disk are read back whichever codec wrote them, including entries written
++            before compression existed. The in-memory cache is never compressed.
++        cull_limit: How many entries the on-disk cache removes at once when it is over its size limit. None (default)
++            keeps DiskCache's default.
++        eviction_policy: The on-disk cache's eviction policy, e.g. "least-recently-stored" or "least-recently-used".
++            None (default) keeps DiskCache's default.
+         enable_litellm_cache: Whether to enable LiteLLM cache.
++        ttl: Optional time-to-live (in seconds) of every entry in the in-memory and on-disk cache. `None` (the
++            default) keeps entries until they are evicted for space.
+     """
+     if enable_disk_cache and enable_litellm_cache:
+         raise ValueError(
+@@ -72,7 +85,13 @@ def configure_cache(
+         disk_cache_dir,
+         disk_size_limit_bytes,
+         memory_max_entries,
++        compress=compress,
++        cull_limit=cull_limit,
++        eviction_policy=eviction_policy,
+     )
++    if ttl is not None:
++        # Gives the new cache's in-memory layer a TTLCache and makes its on-disk writes expire.
++        dspy.cache.set_ttl(ttl)
+ 
+ 
+ litellm.telemetry = False
+@@ -84,8 +103,24 @@ DSPY_CACHE = Cache(
+     disk_cache_dir=DISK_CACHE_DIR,
+     disk_size_limit_bytes=DISK_CACHE_LIMIT,
+     memory_max_entries=1000000,
++    ttl=None,
+ )
+ 
++
++def set_ttl(seconds: Optional[int]) -> None:
++    """Set the time-to-live (in seconds) of the entries of the current DSPy cache (`dspy.cache`).
++
++    Entries written afterwards expire from both the in-memory and the on-disk cache after `seconds` seconds. Pass
++    `None` to make new entries live until they are evicted for space, which is the default behaviour.
++
++    Args:
++        seconds: The time-to-live in seconds, or `None` for no expiry.
++    """
++    import dspy
++
++    dspy.cache.set_ttl(seconds)
++
++
+ # Turn off by default to avoid LiteLLM logging during every LM call.
+ litellm.suppress_debug_info = True
+ 
+@@ -111,5 +146,6 @@ __all__ = [
+     "Embedder",
+     "enable_litellm_logging",
+     "disable_litellm_logging",
++    "set_ttl",
+     "configure_cache",
+ ]
+diff --git a/dspy/clients/cache.py b/dspy/clients/cache.py
+index bfa7dbde8..9f560e034 100644
+--- a/dspy/clients/cache.py
++++ b/dspy/clients/cache.py
+@@ -1,19 +1,29 @@
+ import copy
++import gzip
+ import inspect
+ import logging
++import pickle
+ import threading
++import zlib
+ from functools import wraps
+ from hashlib import sha256
+-from typing import Any, Dict, Optional
++from typing import Any, Dict, Literal, Optional
+ 
+ import cloudpickle
+ import pydantic
+ import ujson
+-from cachetools import LRUCache
++from cachetools import LRUCache, TTLCache
+ from diskcache import FanoutCache
+ 
+ logger = logging.getLogger(__name__)
+ 
++# On-disk layout of a compressed-cache value: a 4-byte magic string, a 1-byte codec selector, then the payload (a
++# pickle, compressed according to the selector). A value without the magic string is a legacy entry, written before
++# compression existed, and is loaded as it is.
++_DISK_MAGIC = b"DSPC"
++_DISK_CODEC_IDS = {None: 0, "gzip": 1, "zlib": 2}
++_DISK_CODEC_NAMES = {codec_id: name for name, codec_id in _DISK_CODEC_IDS.items()}
++
+ 
+ class Cache:
+     """DSPy Cache
+@@ -30,7 +40,11 @@ class Cache:
+         disk_cache_dir: str,
+         disk_size_limit_bytes: Optional[int] = 1024 * 1024 * 10,
+         memory_max_entries: Optional[int] = 1000000,
++        compress: Optional[Literal["gzip", "zlib"]] = None,
++        cull_limit: Optional[int] = None,
++        eviction_policy: Optional[str] = None,
+ 
++        ttl: Optional[int] = None,
+     ):
+         """
+         Args:
+@@ -38,13 +52,23 @@ class Cache:
+             enable_memory_cache: Whether to enable in-memory cache.
+             disk_cache_dir: The directory where the disk cache is stored.
+             disk_size_limit_bytes: The maximum size of the disk cache (in bytes).
++            ttl: Optional time-to-live (in seconds) of every cache entry, in both the in-memory and on-disk cache.
++                `None` (the default) means entries never expire.
+             memory_max_entries: The maximum size of the in-memory cache (in number of items).
++            compress: Codec used to compress values on disk, "gzip", "zlib" or None (default, no compression). Entries
++                are read back whichever codec wrote them, so the setting can change without emptying the cache. The
++                in-memory cache always holds the live Python objects.
++            cull_limit: How many entries DiskCache removes at once when the disk cache is over its size limit. None
++                keeps DiskCache's default.
++            eviction_policy: The DiskCache eviction policy, e.g. "least-recently-stored" or "least-recently-used".
++                None keeps DiskCache's default.
+         """
+ 
++        self.set_compression(compress)
+         self.enable_disk_cache = enable_disk_cache
+         self.enable_memory_cache = enable_memory_cache
+         if self.enable_memory_cache:
+-            self.memory_cache = LRUCache(maxsize=memory_max_entries)
++            self.memory_cache = self._new_memory_cache(memory_max_entries, ttl)
+         else:
+             self.memory_cache = {}
+         if self.enable_disk_cache:
+@@ -53,11 +77,78 @@ class Cache:
+                 timeout=10,
+                 directory=disk_cache_dir,
+                 size_limit=disk_size_limit_bytes,
++                **self._eviction_settings(cull_limit, eviction_policy),
+             )
+         else:
+             self.disk_cache = {}
+ 
+         self._lock = threading.RLock()
++        self.ttl = ttl
++
++    def set_compression(self, codec: Optional[Literal["gzip", "zlib"]]) -> None:
++        """Choose how values are compressed from now on in the on-disk cache.
++
++        Entries already on disk stay readable whichever codec wrote them; only later writes use `codec`.
++        """
++        if codec not in _DISK_CODEC_IDS:
++            raise ValueError(f"Unsupported cache compression {codec!r}, expected one of 'gzip', 'zlib' or None.")
++        self.compress = codec
++
++    @staticmethod
++    def _eviction_settings(cull_limit: Optional[int], eviction_policy: Optional[str]) -> Dict[str, Any]:
++        """The DiskCache settings for the eviction knobs the caller set, so that unset ones keep DiskCache's defaults."""
++        settings = {}
++        if cull_limit is not None:
++            settings["cull_limit"] = cull_limit
++        if eviction_policy is not None:
++            settings["eviction_policy"] = eviction_policy
++        return settings
++
++    def _encode_for_disk(self, value: Any) -> Any:
++        """Pickle `value`, compress it with the current codec and prepend the magic header.
++
++        The result is bytes, which DiskCache stores as they are. A value that cannot be pickled is returned unchanged
++        so that the disk layer fails on it and `put` logs the failure as before.
++        """
++        try:
++            payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
++        except Exception:
++            return value
++
++        if self.compress == "gzip":
++            payload = gzip.compress(payload, mtime=0)
++        elif self.compress == "zlib":
++            payload = zlib.compress(payload)
++        return _DISK_MAGIC + bytes([_DISK_CODEC_IDS[self.compress]]) + payload
++
++    def _decode_from_disk(self, stored: Any) -> Any:
++        """Undo `_encode_for_disk`, treating a value without the magic header as a legacy entry.
++
++        A legacy entry is either an object that DiskCache already unpickled or raw pickle bytes; both load as they are.
++        An entry with the header that cannot be decoded (a corrupt blob, a codec this version does not know) reads as
++        a cache miss, and the next `put` overwrites it.
++        """
++        if not isinstance(stored, (bytes, bytearray)):
++            return stored
++
++        blob = bytes(stored)
++        if not blob.startswith(_DISK_MAGIC):
++            try:
++                return pickle.loads(blob)
++            except Exception:
++                return stored
++
++        try:
++            codec = _DISK_CODEC_NAMES[blob[len(_DISK_MAGIC)]]
++            payload = blob[len(_DISK_MAGIC) + 1 :]
++            if codec == "gzip":
++                payload = gzip.decompress(payload)
++            elif codec == "zlib":
++                payload = zlib.decompress(payload)
++            return pickle.loads(payload)
++        except Exception as e:
++            logger.debug(f"Failed to decode a disk cache entry, treating it as a miss: {e}")
++            return None
+ 
+     def __contains__(self, key: str) -> bool:
+         """Check if a key is in the cache."""
+@@ -108,11 +199,17 @@ class Cache:
+                 response = self.memory_cache[key]
+         elif self.enable_disk_cache and key in self.disk_cache:
+             # Found on disk but not in memory cache, add to memory cache
+-            response = self.disk_cache[key]
++            response = self._decode_from_disk(self.disk_cache[key])
+             if self.enable_memory_cache:
+                 with self._lock:
+                     self.memory_cache[key] = response
+         else:
++            if self.enable_disk_cache and self.ttl is not None:
++                # Lazily purge expired entries from disk so the on-disk store stays trim.
++                try:
++                    self.disk_cache.expire()
++                except Exception as e:
++                    logger.debug(f"Failed to purge expired entries from disk cache: {e}")
+             return None
+ 
+         response = copy.deepcopy(response)
+@@ -139,8 +236,12 @@ class Cache:
+                 self.memory_cache[key] = value
+ 
+         if self.enable_disk_cache:
++            value = self._encode_for_disk(value)
+             try:
+-                self.disk_cache[key] = value
++                if self.ttl is not None:
++                    self.disk_cache.set(key, value, expire=self.ttl)
++                else:
++                    self.disk_cache[key] = value
+             except Exception as e:
+                 # Disk cache writing can fail for different reasons, e.g. disk full or the `value` is not picklable.
+                 logger.debug(f"Failed to put value in disk cache: {value}, {e}")
+@@ -168,6 +269,29 @@ class Cache:
+             with open(filepath, "rb") as f:
+                 self.memory_cache = cloudpickle.load(f)
+ 
++    @staticmethod
++    def _new_memory_cache(maxsize: Optional[int], ttl: Optional[int]):
++        """A TTLCache when a time-to-live is given, the plain LRUCache otherwise."""
++        if ttl is not None:
++            return TTLCache(maxsize=maxsize, ttl=ttl)
++        return LRUCache(maxsize=maxsize)
++
++    def set_ttl(self, ttl: Optional[int]) -> None:
++        """Change the time-to-live (in seconds) of this cache; `None` makes entries live forever again.
++
++        New writes use the new value on both layers. Entries already in memory are carried over into the
++        matching in-memory cache type and start a fresh time-to-live; entries already on disk keep the expiry
++        they were written with.
++        """
++        with self._lock:
++            self.ttl = ttl
++            if self.enable_memory_cache:
++                old_cache = self.memory_cache
++                new_cache = self._new_memory_cache(old_cache.maxsize, ttl)
++                for key, value in list(old_cache.items()):
++                    new_cache[key] = value
++                self.memory_cache = new_cache
++
+ 
+ def request_cache(
+     cache_arg_name: Optional[str] = None,

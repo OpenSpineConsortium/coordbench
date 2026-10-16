@@ -1,0 +1,24 @@
+commit 0ae72d6c29054304e6218b3d83487177cfea7b09 (agent2)
+Merge: 6be0d90 a89c6ca
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:34:26 2026 +0000
+
+    Merge team/agent1 into agent2
+
+commit 6be0d90024003970f2e2ee4e620209e3cab6c16d
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:34:04 2026 +0000
+
+    groupby: add separator parameter
+
+ src/jinja2/filters.py | 28 ++++++++++++++++++++--------
+ 1 file changed, 20 insertions(+), 8 deletions(-)
+
+commit a89c6ca74ac54a21f569cfe067ecb0e041678932 (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:33:47 2026 +0000
+
+    Add reverse parameter to groupby filter
+
+ src/jinja2/filters.py | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)

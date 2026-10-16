@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pillow_task/25/f1_f5", "verdict": "pass"}
+coordbench run: solo-25-f1_f5-507f6b: timings: hub 0.1 s, run_create 0.0 s, provision 3.6 s, agents 281 s, close 0.0 s, score 67 s, teardown 1.3 s
+coordbench run: summary: 17 completed, 0 skipped, 0 failed; evals: 17 evaluated, 12 passed, 5 failed, 0 errors (70.6%); cost: unknown

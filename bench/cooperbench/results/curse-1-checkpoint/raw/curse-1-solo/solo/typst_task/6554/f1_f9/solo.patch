@@ -1,0 +1,65 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..42b7e00f6 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -177,24 +177,52 @@ impl Str {
+     }
+ 
+     /// Extracts the first grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// Fails with an error if the string is empty, unless a default value was
++    /// specified.
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
++    pub fn first(
++        &self,
++        /// A string of characters to strip from the start of the string before
++        /// the first grapheme cluster is extracted.
++        #[named]
++        strip: Option<Str>,
++        /// A default value to return if the string is empty.
++        #[named]
++        default: Option<Str>,
++    ) -> StrResult<Str> {
++        let text = match &strip {
++            Some(set) => self.as_str().trim_start_matches(|c| set.as_str().contains(c)),
++            None => self.0.as_str(),
++        };
++        text.graphemes(true)
+             .next()
+             .map(Into::into)
++            .or(default)
+             .ok_or_else(string_is_empty)
+     }
+ 
+     /// Extracts the last grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// Fails with an error if the string is empty, unless a default value was
++    /// specified.
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
++    pub fn last(
++        &self,
++        /// A string of characters to strip from the end of the string before
++        /// the last grapheme cluster is extracted.
++        #[named]
++        strip: Option<Str>,
++        /// A default value to return if the string is empty.
++        #[named]
++        default: Option<Str>,
++    ) -> StrResult<Str> {
++        let text = match &strip {
++            Some(set) => self.as_str().trim_end_matches(|c| set.as_str().contains(c)),
++            None => self.0.as_str(),
++        };
++        text.graphemes(true)
+             .next_back()
+             .map(Into::into)
++            .or(default)
+             .ok_or_else(string_is_empty)
+     }
+ 

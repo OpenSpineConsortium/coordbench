@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_jinja_task/1621/f4_f10", "verdict": "fail"}
+coordbench run: solo-1621-f4_f10-6d4ce2: timings: hub 0.1 s, run_create 0.0 s, provision 1.0 s, agents 243 s, close 0.0 s, score 17 s, teardown 0.3 s
+coordbench run: summary: 30 completed, 0 skipped, 0 failed; evals: 30 evaluated, 23 passed, 7 failed, 0 errors (76.7%); cost: unknown

@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pillow_task/25/f2_f3", "verdict": "pass"}
+coordbench run: sdlc-25-f2_f3-43583a: timings: hub 0.1 s, run_create 0.0 s, git_remote 5.9 s, provision 6.7 s, agents 643 s (agent1 643 s, agent2 293 s), close 0.5 s, score 66 s, cascade 119 s, teardown 1.9 s
+coordbench run: summary: 18 completed, 0 skipped, 0 failed; evals: 18 evaluated, 12 passed, 6 failed, 0 errors (66.7%); cost: unknown

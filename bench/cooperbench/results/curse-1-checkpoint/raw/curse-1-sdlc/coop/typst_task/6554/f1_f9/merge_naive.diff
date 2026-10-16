@@ -1,0 +1,78 @@
+diff --cc crates/typst/src/foundations/str.rs
+index 1c858c80f,1fd6b6a29..000000000
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@@ -179,27 -179,15 +179,36 @@@ impl Str 
+      /// Extracts the first grapheme cluster of the string. Returns the default
+      /// value if the string is empty or fails with an error if no default value
+      /// was specified.
+++<<<<<<< HEAD
+ +    ///
+ +    /// ```example
+ +    /// #"--foo".first(strip: "- ")
+ +    /// ```
+++=======
+++>>>>>>> agent1
+      #[func]
+      pub fn first(
+          &self,
+          /// A default value to return if the string is empty.
+          #[named]
+          default: Option<Str>,
+++<<<<<<< HEAD
+ +        /// A string of characters to remove from the start of the string
+ +        /// before the first grapheme cluster is extracted. If this removes
+ +        /// the whole string, the string counts as empty.
+ +        #[named]
+ +        strip: Option<Str>,
+ +    ) -> StrResult<Str> {
+ +        let mut text = self.as_str();
+ +        if let Some(strip) = &strip {
+ +            text = text.trim_start_matches(|c| strip.as_str().contains(c));
+ +        }
+ +        text.graphemes(true)
+++=======
++     ) -> StrResult<Str> {
++         self.0
++             .graphemes(true)
+++>>>>>>> agent1
+              .next()
+              .map(Into::into)
+              .or(default)
+@@@ -209,27 -197,15 +218,36 @@@
+      /// Extracts the last grapheme cluster of the string. Returns the default
+      /// value if the string is empty or fails with an error if no default value
+      /// was specified.
+++<<<<<<< HEAD
+ +    ///
+ +    /// ```example
+ +    /// #"bar!!".last(strip: "!?")
+ +    /// ```
+++=======
+++>>>>>>> agent1
+      #[func]
+      pub fn last(
+          &self,
+          /// A default value to return if the string is empty.
+          #[named]
+          default: Option<Str>,
+++<<<<<<< HEAD
+ +        /// A string of characters to remove from the end of the string before
+ +        /// the last grapheme cluster is extracted. If this removes the whole
+ +        /// string, the string counts as empty.
+ +        #[named]
+ +        strip: Option<Str>,
+ +    ) -> StrResult<Str> {
+ +        let mut text = self.as_str();
+ +        if let Some(strip) = &strip {
+ +            text = text.trim_end_matches(|c| strip.as_str().contains(c));
+ +        }
+ +        text.graphemes(true)
+++=======
++     ) -> StrResult<Str> {
++         self.0
++             .graphemes(true)
+++>>>>>>> agent1
+              .next_back()
+              .map(Into::into)
+              .or(default)

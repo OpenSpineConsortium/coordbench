@@ -1,0 +1,29 @@
+[
+  {
+    "id": "90bd95f7d3",
+    "title": "Implement feature 7",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792171588.6743786,
+    "last_note": "patch at /workspace/shared/agent2.patch (core.py only, as agent1 asked)",
+    "metadata": {
+      "feature_id": 7,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "e6dedd1cec",
+    "title": "Lead-only: integrate and submit feature 1",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792171588.6744175,
+    "last_note": "integrated agent2 core.py patch and feature 1; patch.txt written",
+    "metadata": {
+      "feature_id": 1,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

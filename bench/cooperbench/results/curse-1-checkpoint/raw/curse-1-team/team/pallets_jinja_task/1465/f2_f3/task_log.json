@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "124f682a1f",
+    "by": "bench-runner",
+    "title": "Implement feature 3",
+    "ts": 1792172347.5917063
+  },
+  {
+    "kind": "create",
+    "task_id": "217d01c55f",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 2",
+    "ts": 1792172347.591756
+  },
+  {
+    "kind": "claim",
+    "task_id": "124f682a1f",
+    "by": "agent2",
+    "ts": 1792172387.8499236
+  },
+  {
+    "kind": "claim",
+    "task_id": "217d01c55f",
+    "by": "agent1",
+    "ts": 1792172403.6127536
+  },
+  {
+    "kind": "update",
+    "task_id": "217d01c55f",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing reverse param",
+    "ts": 1792172403.7260082
+  },
+  {
+    "kind": "update",
+    "task_id": "124f682a1f",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "implementing separator in filters.py",
+    "ts": 1792172430.430194
+  },
+  {
+    "kind": "update",
+    "task_id": "124f682a1f",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792172480.957713
+  },
+  {
+    "kind": "update",
+    "task_id": "217d01c55f",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch; patch.txt written with both features",
+    "ts": 1792172533.9594405
+  }
+]

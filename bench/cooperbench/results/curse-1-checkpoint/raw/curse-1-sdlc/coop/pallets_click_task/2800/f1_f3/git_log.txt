@@ -1,0 +1,48 @@
+commit 92b7ac1a4589bf197f13d01cc8695579ce684298 (main)
+Merge: 067ca92 e5de314
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:51:52 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit 067ca9290b5d984c436ef7670b5e2457b8038516
+Merge: d8763b9 59e6f13
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:51:46 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 59e6f13a107ba20c54361179a786b044dd2fc299 (claude/1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:51:39 2026 +0000
+
+    Close contexts created during shell completion
+    
+    _resolve_context made contexts with make_context but never exited them,
+    so click.File handles opened while parsing the complete args stayed open
+    until garbage collection and raised ResourceWarning. File closes through
+    the context's close callbacks, so enter each context with a with
+    statement, for the main context, for the sub-context of a non-chained
+    group and for the sub-contexts of a chained group.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ src/click/shell_completion.py | 69 ++++++++++++++++++++++++-------------------
+ 1 file changed, 38 insertions(+), 31 deletions(-)
+
+commit e5de314a073be91c5f805ba4bf506d798a32922a (claude/3)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:51:39 2026 +0000
+
+    Add max_resources to Context to bound registered resources
+    
+    with_resource() raises RuntimeError once the limit is reached. A child
+    context inherits the limit and shares its parent's count, so the limit
+    holds for the whole hierarchy; close() gives back the context's share.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ src/click/core.py | 60 +++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 58 insertions(+), 2 deletions(-)

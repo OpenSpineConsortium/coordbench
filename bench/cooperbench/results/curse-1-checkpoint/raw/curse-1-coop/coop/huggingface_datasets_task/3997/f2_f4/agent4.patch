@@ -1,0 +1,115 @@
+diff --git a/src/datasets/features/features.py b/src/datasets/features/features.py
+index 6a0da6401..68af31a27 100644
+--- a/src/datasets/features/features.py
++++ b/src/datasets/features/features.py
+@@ -1245,15 +1245,102 @@ class Features(dict):
+         super().__delitem__(column_name)
+         del self._column_requires_decoding[column_name]
+ 
+-    def update(self, iterable, **kwds):
+-        if hasattr(iterable, "keys"):
+-            for key in iterable.keys():
+-                self[key] = iterable[key]
++    @staticmethod
++    def _feature_from_json(value: Any) -> FeatureType:
++        """Turn one value read from a JSON document into a feature.
++
++        A string is a :class:`Value` dtype (``"int32"``), a dict with a ``_type`` key is a serialized feature, as
++        :meth:`Features.to_dict` writes it, any other dict is a nested field and a list is a list of such features.
++        """
++        if isinstance(value, str):
++            return Value(value)
++        if isinstance(value, list):
++            return [Features._feature_from_json(item) for item in value]
++        if not isinstance(value, dict):
++            raise ValueError(f"{value!r} read from JSON is not a feature")
++        if not isinstance(value.get("_type"), str):
++            return {key: Features._feature_from_json(item) for key, item in value.items()}
++        try:
++            return generate_from_dict(dict(value))
++        except (KeyError, TypeError) as err:
++            raise ValueError(f"{value!r} read from JSON is not a serialized feature") from err
++
++    @staticmethod
++    def _updates_from_json(document: Union[str, bytes, bytearray]):
++        """Yield the ``(column name, feature)`` pairs a JSON document holds.
++
++        The document is an object mapping column names to features, or a list of such objects (a batch) and of
++        ``[column name, feature]`` pairs.
++        """
++        try:
++            data = json.loads(document)
++        except ValueError as err:
++            raise ValueError(f"Features.update got a string that is not valid JSON: {err}") from err
++        for member in data if isinstance(data, list) else [data]:
++            if isinstance(member, dict):
++                for column_name, feature in member.items():
++                    yield column_name, Features._feature_from_json(feature)
++            elif isinstance(member, list) and len(member) == 2 and isinstance(member[0], str):
++                yield member[0], Features._feature_from_json(member[1])
++            else:
++                raise ValueError(
++                    "Features.update expects a JSON object, or a list of objects and [name, feature] pairs, "
++                    f"got {member!r}"
++                )
++
++    @staticmethod
++    def _updates_from(source: Any):
++        """Yield the ``(column name, feature)`` pairs one source of :meth:`Features.update` holds.
++
++        The source is a mapping, a JSON string, or an iterable whose items are ``(column name, feature)`` pairs,
++        mappings or JSON strings, the last two being the members of a batch.
++        """
++        if isinstance(source, (str, bytes, bytearray)):
++            yield from Features._updates_from_json(source)
++        elif hasattr(source, "keys"):
++            for column_name in source.keys():
++                yield column_name, source[column_name]
+         else:
+-            for key, value in iterable:
+-                self[key] = value
+-        for key in kwds:
+-            self[key] = kwds[key]
++            for position, item in enumerate(source):
++                if isinstance(item, (str, bytes, bytearray)) or hasattr(item, "keys"):
++                    yield from Features._updates_from(item)
++                    continue
++                try:
++                    column_name, feature = item
++                except (TypeError, ValueError):
++                    raise ValueError(
++                        f"Features.update sequence element #{position} is neither a (column name, feature) pair, "
++                        f"a mapping nor a JSON string: {item!r}"
++                    ) from None
++                yield column_name, feature
++
++    def update(self, iterable=(), **kwds):
++        """Update the features, keeping what tells which columns need decoding in step with them.
++
++        Unlike :meth:`dict.update`, it also takes JSON and batches. ``iterable`` can be:
++
++        - a mapping of column names to features, or an iterable of ``(column name, feature)`` pairs, as for a dict;
++        - a JSON string (or bytes) holding an object of column names and features, written as
++          :meth:`Features.to_dict` writes them (``{"_type": "Value", "dtype": "int32", "id": null}``) or, for a
++          :class:`Value`, as its dtype alone (``"int32"``);
++        - a batch: an iterable of mappings, JSON strings and pairs, or a JSON list of objects, applied in order, so
++          that a later member wins over an earlier one for the same column.
++
++        Keyword arguments are applied last. Everything is read before anything is changed, so a member that
++        is not valid leaves the features as they were.
++
++        Example::
++
++            >>> features = Features({"a": Value("int32")})
++            >>> features.update('{"b": "string"}')
++            >>> features.update([{"c": Value("bool")}, '{"d": "float32"}'], e=Value("int8"))
++            >>> list(features)
++            ['a', 'b', 'c', 'd', 'e']
++        """
++        updates = list(Features._updates_from(iterable))
++        updates.extend(kwds.items())
++        for column_name, feature in updates:
++            self[column_name] = feature
+ 
+     def __reduce__(self):
+         return Features, (dict(self),)

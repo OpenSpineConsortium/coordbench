@@ -1,0 +1,32 @@
+diff --cc src/click/core.py
+index 828c60f,4e5fb9b..0000000
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@@ -243,7 -243,8 +243,12 @@@ class Context
+          contexts.
+  
+      .. versionchanged:: 8.2
+++<<<<<<< HEAD
+ +        Added the ``validate_nesting`` and ``on_exit`` parameters.
+++=======
++         Added the ``validate_nesting`` and ``on_exit``
++         parameters.
+++>>>>>>> agent1
+  
+      .. versionchanged:: 8.2
+          The ``protected_args`` attribute is deprecated and will be removed in
+@@@ -648,9 -649,8 +653,14 @@@
+          entered again.
+  
+          If :attr:`validate_nesting` is enabled and a child context made
+++<<<<<<< HEAD
+ +        by :meth:`_make_sub_context` is still open, nothing is closed,
+ +        the ``on_exit`` callback is not invoked and :exc:`RuntimeError`
+ +        is raised.
+++=======
++         by :meth:`_make_sub_context` is still open, nothing is closed
++         and :exc:`RuntimeError` is raised.
+++>>>>>>> agent1
+          """
+          if self.validate_nesting and self._open_children:
+              raise RuntimeError(self._open_children_message())

@@ -1,0 +1,69 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..c9fb44dcf 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2467,7 +2467,13 @@ class Image:
+         )
+ 
+     def save(
+-        self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
++        self,
++        fp: StrOrBytesPath | IO[bytes],
++        format: str | None = None,
++        *,
++        preserve_readonly: bool = False,
++        dry_run: bool = False,
++        **params: Any,
+     ) -> None:
+         """
+         Saves this image under the given filename.  If no format is
+@@ -2490,6 +2496,17 @@ class Image:
+            format to use is determined from the filename extension.
+            If a file object was used instead of a filename, this
+            parameter should always be used.
++        :param preserve_readonly: If ``True``, the image is only loaded before
++           saving, so a readonly image, such as one made by
++           :py:func:`~PIL.Image.frombuffer`, stays readonly and keeps
++           reflecting changes in its source buffer. If ``False`` (the
++           default), a readonly image is first copied, which breaks that
++           connection.
++        :param dry_run: If ``True``, the image is processed for saving, so that
++           the writer raises the errors it would raise (an unsupported mode,
++           for example), but nothing is written to ``fp``: no file is created
++           or changed, and a file object is left untouched. Defaults to
++           ``False``.
+         :param params: Extra parameters to the image writer. These can also be
+            set on the image itself through ``encoderinfo``. This is useful when
+            saving multiple images::
+@@ -2540,8 +2557,12 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
+-        # may mutate self!
+-        self._ensure_mutable()
++        if preserve_readonly:
++            # keep the readonly flag, and with it the link to the source data
++            self.load()
++        else:
++            # may mutate self!
++            self._ensure_mutable()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+@@ -2559,7 +2580,15 @@ class Image:
+             save_handler = SAVE[format.upper()]
+ 
+         created = False
+-        if open_fp:
++        if dry_run:
++            # write to memory only. The writer may read back what it wrote, or,
++            # when appending, what was already in the file, so start from that.
++            existing = b""
++            if open_fp and params.get("append", False) and os.path.exists(filename):
++                with builtins.open(filename, "rb") as existing_fp:
++                    existing = existing_fp.read()
++            fp = io.BytesIO(existing)
++        elif open_fp:
+             created = not os.path.exists(filename)
+             if params.get("append", False):
+                 # Open also for reading ("+"), because TIFF save_all

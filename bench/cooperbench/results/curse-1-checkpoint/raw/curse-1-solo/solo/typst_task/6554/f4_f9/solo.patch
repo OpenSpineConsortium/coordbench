@@ -1,0 +1,123 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..d87529a9d 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -176,26 +176,76 @@ impl Str {
+         self.0.len()
+     }
+ 
+-    /// Extracts the first grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// Extracts the first grapheme cluster of the string, or with `repeat` the
++    /// first few of them. Fails with an error if the string is empty or has
++    /// fewer grapheme clusters than requested.
++    ///
++    /// ```example
++    /// #"hello".first() \
++    /// #"hello".first(repeat: 3) \
++    /// #"--foo".first(strip: "- ")
++    /// ```
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn first(
++        &self,
++        /// The number of grapheme clusters to extract from the start. Fails
++        /// if the string has fewer.
++        #[named]
++        #[default(1)]
++        repeat: i64,
++        /// Characters to remove from the start of the string before
++        /// extracting. Removing everything leaves an empty string.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        let repeat = check_repeat(repeat)?;
++        let mut text = self.0.as_str();
++        if let Some(strip) = &strip {
++            text = text.trim_start_matches(|c: char| strip.as_str().contains(c));
++        }
++        if text.is_empty() {
++            return Err(string_is_empty());
++        }
++        match text.grapheme_indices(true).nth(repeat) {
++            Some((end, _)) => Ok(text[..end].into()),
++            None => whole_unless_short(text, repeat),
++        }
+     }
+ 
+-    /// Extracts the last grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// Extracts the last grapheme cluster of the string, or with `repeat` the
++    /// last few of them. Fails with an error if the string is empty or has
++    /// fewer grapheme clusters than requested.
++    ///
++    /// ```example
++    /// #"hello".last() \
++    /// #"hello".last(repeat: 2) \
++    /// #"bar!!".last(strip: "!?")
++    /// ```
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next_back()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn last(
++        &self,
++        /// The number of grapheme clusters to extract from the end. Fails if
++        /// the string has fewer.
++        #[named]
++        #[default(1)]
++        repeat: i64,
++        /// Characters to remove from the end of the string before extracting.
++        /// Removing everything leaves an empty string.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        let repeat = check_repeat(repeat)?;
++        let mut text = self.0.as_str();
++        if let Some(strip) = &strip {
++            text = text.trim_end_matches(|c: char| strip.as_str().contains(c));
++        }
++        if text.is_empty() {
++            return Err(string_is_empty());
++        }
++        match text.grapheme_indices(true).rev().nth(repeat - 1) {
++            Some((start, _)) => Ok(text[start..].into()),
++            None => whole_unless_short(text, repeat),
++        }
+     }
+ 
+     /// Extracts the first grapheme cluster after the specified index. Returns
+@@ -835,6 +885,25 @@ fn string_is_empty() -> EcoString {
+     "string is empty".into()
+ }
+ 
++/// Checks that `repeat` asks for at least one grapheme cluster.
++fn check_repeat(repeat: i64) -> StrResult<usize> {
++    match usize::try_from(repeat) {
++        Ok(repeat) if repeat >= 1 => Ok(repeat),
++        _ => bail!("repeat must be at least 1"),
++    }
++}
++
++/// Returns all of `text` when it has exactly `repeat` grapheme clusters and
++/// fails when it has fewer. Called only once the iteration over the clusters
++/// ran out, so the count is paid for on that path alone.
++fn whole_unless_short(text: &str, repeat: usize) -> StrResult<Str> {
++    let len = text.graphemes(true).count();
++    if len < repeat {
++        bail!("not enough characters (requested {repeat}, but string only has {len})");
++    }
++    Ok(text.into())
++}
++
+ /// A regular expression.
+ ///
+ /// Can be used as a [show rule selector]($styling/#show-rules) and with

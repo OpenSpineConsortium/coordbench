@@ -1,0 +1,226 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..27a56697f 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -258,6 +258,43 @@ class TestImage:
+             assert im.readonly
+             im.save(temp_file)
+ 
++    @pytest.mark.parametrize("preserve_readonly", (False, True))
++    def test_readonly_save_preserve_readonly(
++        self, tmp_path: Path, preserve_readonly: bool
++    ) -> None:
++        temp_file = tmp_path / "temp.bmp"
++        data = bytearray(b"\xff")
++        im = Image.frombuffer("L", (1, 1), data)
++        assert im.readonly
++
++        im.save(temp_file, preserve_readonly=preserve_readonly)
++
++        # The saved file holds the pixel at the time of saving
++        with Image.open(temp_file) as reloaded:
++            assert reloaded.getpixel((0, 0)) == 255
++
++        # The image only still reflects the buffer if it stayed readonly
++        assert im.readonly == preserve_readonly
++        data[0] = 64
++        assert im.getpixel((0, 0)) == (64 if preserve_readonly else 255)
++
++        # and a later save writes the buffer's current state
++        if preserve_readonly:
++            im.save(temp_file, preserve_readonly=True)
++            with Image.open(temp_file) as reloaded:
++                assert reloaded.getpixel((0, 0)) == 64
++
++    def test_readonly_save_preserve_readonly_getdata(self, tmp_path: Path) -> None:
++        numpy = pytest.importorskip("numpy", reason="NumPy not installed")
++
++        im_data = numpy.array([[255]], dtype=numpy.uint8)
++        im = Image.frombuffer(mode="L", size=(1, 1), data=im_data)
++
++        im.save(tmp_path / "temp.bmp", preserve_readonly=True)
++
++        im_data[:, :] = numpy.array([[64]], dtype=numpy.uint8)
++        assert im.getdata()[0] == 64
++
+     def test_dump(self, tmp_path: Path) -> None:
+         im = Image.new("L", (10, 10))
+         im._dump(str(tmp_path / "temp_L.ppm"))
+@@ -752,6 +789,109 @@ class TestImage:
+ 
+         assert not os.path.exists(temp_file)
+ 
++    @pytest.mark.parametrize("ext", (".png", ".jpg", ".gif", ".bmp", ".tif", ".webp"))
++    def test_save_dry_run_writes_nothing(self, tmp_path: Path, ext: str) -> None:
++        if ext == ".webp" and not features.check("webp"):
++            pytest.skip("WebP support not available")
++        temp_file = tmp_path / f"temp{ext}"
++
++        hopper().save(temp_file, dry_run=True)
++
++        assert not temp_file.exists()
++        assert list(tmp_path.iterdir()) == []
++
++    def test_save_dry_run_keeps_existing_file(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++        temp_file.write_bytes(b"original")
++
++        hopper().save(temp_file, dry_run=True)
++        assert temp_file.read_bytes() == b"original"
++
++        # The file would have been appended to, but is left alone all the same
++        hopper().save(temp_file, format="TIFF", append=True, dry_run=True)
++        assert temp_file.read_bytes() == b"original"
++
++    def test_save_dry_run_file_object(self) -> None:
++        out = io.BytesIO()
++        hopper().save(out, format="PNG", dry_run=True)
++        assert out.getvalue() == b""
++
++        # The file object is still usable afterwards
++        hopper().save(out, format="PNG")
++        assert out.getvalue().startswith(b"\x89PNG")
++
++    def test_save_dry_run_false_writes(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++
++        hopper().save(temp_file, dry_run=False)
++
++        with Image.open(temp_file) as reloaded:
++            assert_image_equal(reloaded, hopper())
++
++    def test_save_dry_run_unknown_extension(self, tmp_path: Path) -> None:
++        with pytest.raises(ValueError, match="unknown file extension"):
++            hopper().save(tmp_path / "temp.unknown", dry_run=True)
++
++    def test_save_dry_run_unknown_format(self, tmp_path: Path) -> None:
++        with pytest.raises(KeyError):
++            hopper().save(tmp_path / "temp.png", format="NOTAFORMAT", dry_run=True)
++
++    def test_save_dry_run_unsupported_mode(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.jpg"
++        im = Image.new("RGBA", (10, 10))
++
++        # Saving fails for this mode, and a dry run fails in the same way
++        with pytest.raises(OSError, match="cannot write mode RGBA as JPEG"):
++            im.save(temp_file, dry_run=True)
++        assert not temp_file.exists()
++
++    def test_save_dry_run_empty_image(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.jpg"
++
++        with pytest.raises(ValueError):
++            Image.new("RGB", (0, 0)).save(temp_file, dry_run=True)
++        assert not temp_file.exists()
++
++    def test_save_dry_run_encodes_image(self) -> None:
++        # The encoder runs, so options it rejects are still reported
++        im = hopper()
++        with pytest.raises(ValueError, match="quality"):
++            im.save(io.BytesIO(), format="JPEG", quality="bad", dry_run=True)
++
++    def test_save_dry_run_save_all(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.gif"
++        frames = [Image.new("L", (10, 10), color) for color in (0, 128, 255)]
++
++        frames[0].save(temp_file, save_all=True, append_images=frames[1:], dry_run=True)
++
++        assert not temp_file.exists()
++
++    def test_save_dry_run_preserve_readonly(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.bmp"
++        data = bytearray(b"\xff")
++        im = Image.frombuffer("L", (1, 1), data)
++
++        im.save(temp_file, preserve_readonly=True, dry_run=True)
++
++        assert im.readonly
++        assert not temp_file.exists()
++
++    def test_save_dry_run_leaves_image_unchanged(self, tmp_path: Path) -> None:
++        im = hopper()
++        expected = im.copy()
++
++        im.save(tmp_path / "temp.png", dry_run=True)
++
++        assert_image_equal(im, expected)
++        assert not hasattr(im, "encoderinfo")
++
++    def test_save_dry_run_cleans_up_encoderinfo_on_error(self) -> None:
++        im = Image.new("RGBA", (10, 10))
++
++        with pytest.raises(OSError):
++            im.save(io.BytesIO(), format="JPEG", dry_run=True)
++        assert not hasattr(im, "encoderinfo")
++
+     def test_load_on_nonexclusive_multiframe(self) -> None:
+         with open("Tests/images/frozenpond.mpo", "rb") as fp:
+ 
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..3964220a9 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2467,7 +2467,13 @@ class Image:
+         )
+ 
+     def save(
+-        self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
++        self,
++        fp: StrOrBytesPath | IO[bytes],
++        format: str | None = None,
++        *,
++        preserve_readonly: bool = False,
++        dry_run: bool = False,
++        **params: Any,
+     ) -> None:
+         """
+         Saves this image under the given filename.  If no format is
+@@ -2490,6 +2496,18 @@ class Image:
+            format to use is determined from the filename extension.
+            If a file object was used instead of a filename, this
+            parameter should always be used.
++        :param preserve_readonly: If ``True``, the image keeps its ``readonly``
++           state when saved, so an image that reflects changes in an underlying
++           buffer, such as one created with :py:func:`~PIL.Image.frombuffer`,
++           stays connected to that buffer. By default, a readonly image is
++           copied before it is saved, which ends the connection.
++        :param dry_run: If ``True``, the image is fully processed for saving,
++           including any format conversion and compression, but nothing is
++           written to ``fp``: no file is created or modified, and a file
++           object is left untouched. Errors that saving would raise, such as
++           an unsupported mode for the format, are still raised. This is
++           useful for checking that an image can be saved in a given format,
++           or for timing the encoder without the cost of disk writes.
+         :param params: Extra parameters to the image writer. These can also be
+            set on the image itself through ``encoderinfo``. This is useful when
+            saving multiple images::
+@@ -2540,8 +2558,12 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
+-        # may mutate self!
+-        self._ensure_mutable()
++        if preserve_readonly:
++            # only load the image, so that the readonly flag stays as it is
++            self.load()
++        else:
++            # may mutate self!
++            self._ensure_mutable()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+@@ -2559,7 +2581,13 @@ class Image:
+             save_handler = SAVE[format.upper()]
+ 
+         created = False
+-        if open_fp:
++        if dry_run:
++            # Encode into memory, so that the handler runs exactly as it would
++            # for a real save (some need seek and tell) but nothing reaches disk
++            # or the caller's file object.
++            open_fp = False
++            fp = io.BytesIO()
++        elif open_fp:
+             created = not os.path.exists(filename)
+             if params.get("append", False):
+                 # Open also for reading ("+"), because TIFF save_all

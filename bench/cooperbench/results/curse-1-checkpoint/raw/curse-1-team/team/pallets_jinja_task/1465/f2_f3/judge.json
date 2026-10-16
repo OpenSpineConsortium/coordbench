@@ -1,0 +1,161 @@
+{
+  "format": "coordbench-judge/1",
+  "pair": {
+    "repo": "pallets_jinja_task",
+    "task_id": 1465,
+    "features": [
+      2,
+      3
+    ],
+    "arm": "team",
+    "setting": "team",
+    "model": "claude-sonnet-5-5",
+    "driver": "session",
+    "run_name": "curse-1-team",
+    "run_id": "team-1465-f2_f3-826ae5"
+  },
+  "calls": {},
+  "skipped": {},
+  "errors": {},
+  "heuristics": {
+    "unanswered_questions": [],
+    "ignored_questions": [],
+    "near_duplicates": [],
+    "speech_acts_keyword": {
+      "19": "Plan",
+      "33": "Plan",
+      "44": "Update",
+      "51": "Update"
+    },
+    "resource_division_candidates": [],
+    "negotiation_candidates": [],
+    "contradictions": [],
+    "overlapping_hunks": [
+      {
+        "file": "src/jinja2/filters.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            57,
+            69
+          ],
+          [
+            57,
+            69
+          ]
+        ],
+        "same_heading": "def make_attrgetter("
+      },
+      {
+        "file": "src/jinja2/filters.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            122,
+            134
+          ],
+          [
+            122,
+            134
+          ]
+        ],
+        "same_heading": "def make_multi_attrgetter("
+      },
+      {
+        "file": "src/jinja2/filters.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            1163,
+            1168
+          ],
+          [
+            1163,
+            1168
+          ]
+        ],
+        "same_heading": "def sync_do_groupby("
+      },
+      {
+        "file": "src/jinja2/filters.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            1203,
+            1218
+          ],
+          [
+            1203,
+            1215
+          ]
+        ],
+        "same_heading": "def sync_do_groupby("
+      },
+      {
+        "file": "src/jinja2/filters.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            1222,
+            1232
+          ],
+          [
+            1222,
+            1229
+          ]
+        ],
+        "same_heading": "async def do_groupby("
+      }
+    ],
+    "insertion_markers": [],
+    "missing_final_status": [
+      "agent1"
+    ]
+  },
+  "heuristics_meta": {
+    "computed_at": "2026-10-16T17:43:19+00:00",
+    "conversation_source": "events.jsonl",
+    "message_count": 4,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
+    "definitions": {
+      "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
+      "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
+      "near_duplicates": "C4a/C4b candidates: [id, id, difflib ratio >= 0.9, both status-like], same sender",
+      "speech_acts_keyword": "the keyword baseline of the speech acts, beside the judge's",
+      "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
+      "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
+      "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
+      "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
+      "insertion_markers": "App D: added comment lines marking where another agent inserts code",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it"
+    },
+    "final_status_times": {
+      "agent1": {
+        "last_edit_at": 1792172530.311,
+        "last_message_at": 1792172447.2158656
+      },
+      "agent2": {
+        "last_edit_at": 1792172472.115,
+        "last_message_at": 1792172481.068573
+      }
+    },
+    "git_blog_names": null
+  }
+}

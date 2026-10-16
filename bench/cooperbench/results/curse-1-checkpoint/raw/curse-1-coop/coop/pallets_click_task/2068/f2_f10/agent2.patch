@@ -1,0 +1,99 @@
+diff --git a/src/click/_termui_impl.py b/src/click/_termui_impl.py
+index 7b97bfb..3ffa4fb 100644
+--- a/src/click/_termui_impl.py
++++ b/src/click/_termui_impl.py
+@@ -485,11 +485,18 @@ class Editor:
+         env: cabc.Mapping[str, str] | None = None,
+         require_save: bool = True,
+         extension: str = ".txt",
++        timeout: int | None = None,
+     ) -> None:
++        if timeout is not None and (
++            not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0
++        ):
++            raise ValueError("timeout must be a positive integer or None")
++
+         self.editor = editor
+         self.env = env
+         self.require_save = require_save
+         self.extension = extension
++        self.timeout = timeout
+ 
+     def get_editor(self) -> str:
+         if self.editor is not None:
+@@ -517,7 +524,26 @@ class Editor:
+ 
+         try:
+             c = subprocess.Popen(f'{editor} "{filename}"', env=environ, shell=True)
+-            exit_code = c.wait()
++
++            try:
++                exit_code = c.wait(timeout=self.timeout)
++            except subprocess.TimeoutExpired:
++                # Stop the editor so it does not outlive the call, asking
++                # politely first and insisting if it ignores the request.
++                c.terminate()
++
++                try:
++                    c.wait(timeout=5)
++                except subprocess.TimeoutExpired:
++                    c.kill()
++                    c.wait()
++
++                raise ClickException(
++                    _("{editor}: Editing timed out after {timeout} seconds").format(
++                        editor=editor, timeout=self.timeout
++                    )
++                ) from None
++
+             if exit_code != 0:
+                 raise ClickException(
+                     _("{editor}: Editing failed").format(editor=editor)
+diff --git a/src/click/termui.py b/src/click/termui.py
+index e14e670..6bf1229 100644
+--- a/src/click/termui.py
++++ b/src/click/termui.py
+@@ -650,6 +650,7 @@ def edit(
+     require_save: bool = True,
+     extension: str = ".txt",
+     filename: str | None = None,
++    timeout: int | None = None,
+ ) -> t.AnyStr | None:
+     r"""Edits the given text in the defined editor.  If an editor is given
+     (should be the full path to the executable but the regular operating
+@@ -661,6 +662,9 @@ def edit(
+ 
+     If the editor cannot be opened a :exc:`UsageError` is raised.
+ 
++    If ``timeout`` is given and the editor is still running after that many
++    seconds, it is terminated and a :exc:`ClickException` is raised.
++
+     Note for Windows: to simplify cross-platform usage, the newlines are
+     automatically converted from POSIX to Windows and vice versa.  As such,
+     the message here will have ``\n`` as newline markers.
+@@ -677,10 +681,24 @@ def edit(
+     :param filename: if provided it will edit this file instead of the
+                      provided text contents.  It will not use a temporary
+                      file as an indirection in that case.
++    :param timeout: the maximum number of seconds to wait for the editor to
++                    exit.  If it is still running after that, it is
++                    terminated and a :exc:`ClickException` is raised.  Must
++                    be a positive integer, otherwise a :exc:`ValueError` is
++                    raised.  Defaults to ``None``, which waits indefinitely.
++
++    .. versionchanged:: 8.2
++        Added the ``timeout`` parameter.
+     """
+     from ._termui_impl import Editor
+ 
+-    ed = Editor(editor=editor, env=env, require_save=require_save, extension=extension)
++    ed = Editor(
++        editor=editor,
++        env=env,
++        require_save=require_save,
++        extension=extension,
++        timeout=timeout,
++    )
+ 
+     if filename is None:
+         return ed.edit(text)

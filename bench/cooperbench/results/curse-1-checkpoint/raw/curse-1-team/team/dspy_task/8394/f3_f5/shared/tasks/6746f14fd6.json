@@ -1,0 +1,1 @@
+{"id": "6746f14fd6", "title": "Implement feature 5", "owner": "agent2", "status": "done", "created_by": "bench-runner", "created_at": 1792146871.207991, "last_note": "patch at /workspace/shared/agent2.patch (cache.py + clients/__init__.py; roundtrip gzip/zlib/None, legacy load, set_compression, eviction knobs tested)", "metadata": {"feature_id": 5, "assigned_to": "agent2"}}

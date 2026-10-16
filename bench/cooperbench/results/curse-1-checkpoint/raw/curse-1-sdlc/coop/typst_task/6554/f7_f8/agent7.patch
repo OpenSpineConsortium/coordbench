@@ -1,0 +1,210 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..c11a96ac0 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -178,24 +178,90 @@ impl Str {
+ 
+     /// Extracts the first grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If a `pattern` is given, the first grapheme cluster whose first
++    /// character belongs to that class is returned instead. Fails with an
++    /// error if there is no such grapheme cluster.
++    ///
++    /// ```example
++    /// #"123abc".first(pattern: "alpha") \
++    /// #"hello".first(case: "upper")
++    /// ```
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn first(
++        &self,
++        /// The class of characters to look for: `{"alpha"}`, `{"numeric"}`,
++        /// `{"alphanumeric"}`, `{"uppercase"}`, `{"lowercase"}` or
++        /// `{"whitespace"}`. A grapheme cluster matches if its first
++        /// character is in the class. If omitted, the very first grapheme
++        /// cluster is returned.
++        #[named]
++        pattern: Option<Str>,
++        /// Converts the extracted grapheme cluster to the given case: `{"upper"}`,
++        /// `{"lower"}` or `{"title"}`. With `{"title"}`, the first codepoint of
++        /// the cluster is uppercased and the rest is lowercased. If omitted, the
++        /// cluster is returned unchanged.
++        #[named]
++        case: Option<Str>,
++    ) -> StrResult<Str> {
++        let mut graphemes = self.0.graphemes(true);
++        if self.0.is_empty() {
++            return Err(string_is_empty());
++        }
++        let grapheme = match pattern {
++            None => graphemes.next().ok_or_else(string_is_empty)?,
++            Some(name) => {
++                let class = PatternClass::parse(&name)?;
++                graphemes
++                    .find(|g| class.matches(g))
++                    .ok_or_else(|| no_match_for_pattern(class))?
++            }
++        };
++        apply_case(grapheme, case.as_deref())
+     }
+ 
+     /// Extracts the last grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If a `pattern` is given, the last grapheme cluster whose first
++    /// character belongs to that class is returned instead. Fails with an
++    /// error if there is no such grapheme cluster.
++    ///
++    /// ```example
++    /// #"hello123".last(pattern: "alpha") \
++    /// #"Title".last(case: "upper")
++    /// ```
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next_back()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn last(
++        &self,
++        /// The class of characters to look for: `{"alpha"}`, `{"numeric"}`,
++        /// `{"alphanumeric"}`, `{"uppercase"}`, `{"lowercase"}` or
++        /// `{"whitespace"}`. A grapheme cluster matches if its first
++        /// character is in the class. If omitted, the very last grapheme
++        /// cluster is returned.
++        #[named]
++        pattern: Option<Str>,
++        /// Converts the extracted grapheme cluster to the given case: `{"upper"}`,
++        /// `{"lower"}` or `{"title"}`. With `{"title"}`, the first codepoint of
++        /// the cluster is uppercased and the rest is lowercased. If omitted, the
++        /// cluster is returned unchanged.
++        #[named]
++        case: Option<Str>,
++    ) -> StrResult<Str> {
++        let mut graphemes = self.0.graphemes(true);
++        if self.0.is_empty() {
++            return Err(string_is_empty());
++        }
++        let grapheme = match pattern {
++            None => graphemes.next_back().ok_or_else(string_is_empty)?,
++            Some(name) => {
++                let class = PatternClass::parse(&name)?;
++                graphemes
++                    .rfind(|g| class.matches(g))
++                    .ok_or_else(|| no_match_for_pattern(class))?
++            }
++        };
++        apply_case(grapheme, case.as_deref())
+     }
+ 
+     /// Extracts the first grapheme cluster after the specified index. Returns
+@@ -823,6 +889,28 @@ fn no_default_and_out_of_bounds(index: i64, len: usize) -> EcoString {
+     eco_format!("no default value was specified and string index out of bounds (index: {}, len: {})", index, len)
+ }
+ 
++/// Converts a grapheme cluster to the case named by the `case` argument of
++/// `first` and `last`, or leaves it as is when no case was given.
++fn apply_case(grapheme: &str, case: Option<&str>) -> StrResult<Str> {
++    Ok(match case {
++        None => grapheme.into(),
++        Some("upper") => grapheme.to_uppercase().into(),
++        Some("lower") => grapheme.to_lowercase().into(),
++        Some("title") => {
++            // Uppercase the first codepoint and lowercase the rest, so that a
++            // cluster like a letter with combining marks stays in one piece.
++            let mut chars = grapheme.chars();
++            let mut out = EcoString::new();
++            if let Some(first) = chars.next() {
++                out.extend(first.to_uppercase());
++            }
++            out.push_str(&chars.as_str().to_lowercase());
++            out.into()
++        }
++        Some(other) => bail!("unknown case option \"{}\"", other),
++    })
++}
++
+ /// The char boundary access error message.
+ #[cold]
+ fn not_a_char_boundary(index: i64) -> EcoString {
+@@ -835,6 +923,73 @@ fn string_is_empty() -> EcoString {
+     "string is empty".into()
+ }
+ 
++/// A built-in class of characters that `str.first` and `str.last` can look
++/// for.
++#[derive(Debug, Copy, Clone, Eq, PartialEq)]
++enum PatternClass {
++    Alpha,
++    Numeric,
++    Alphanumeric,
++    Uppercase,
++    Lowercase,
++    Whitespace,
++}
++
++impl PatternClass {
++    /// The names of all classes, as accepted by [`PatternClass::parse`].
++    const NAMES: [&'static str; 6] =
++        ["alpha", "numeric", "alphanumeric", "uppercase", "lowercase", "whitespace"];
++
++    /// Finds the class with the given name.
++    fn parse(name: &str) -> StrResult<Self> {
++        Ok(match name {
++            "alpha" => Self::Alpha,
++            "numeric" => Self::Numeric,
++            "alphanumeric" => Self::Alphanumeric,
++            "uppercase" => Self::Uppercase,
++            "lowercase" => Self::Lowercase,
++            "whitespace" => Self::Whitespace,
++            _ => bail!(
++                "unknown pattern \"{}\" (expected one of: {})",
++                name,
++                Self::NAMES.map(|n| eco_format!("\"{n}\"")).join(", ")
++            ),
++        })
++    }
++
++    /// The name of the class, as written by the caller.
++    fn name(self) -> &'static str {
++        match self {
++            Self::Alpha => "alpha",
++            Self::Numeric => "numeric",
++            Self::Alphanumeric => "alphanumeric",
++            Self::Uppercase => "uppercase",
++            Self::Lowercase => "lowercase",
++            Self::Whitespace => "whitespace",
++        }
++    }
++
++    /// Whether a grapheme cluster belongs to the class, judged by its leading
++    /// character.
++    fn matches(self, grapheme: &str) -> bool {
++        let Some(c) = grapheme.chars().next() else { return false };
++        match self {
++            Self::Alpha => c.is_alphabetic(),
++            Self::Numeric => c.is_numeric(),
++            Self::Alphanumeric => c.is_alphanumeric(),
++            Self::Uppercase => c.is_uppercase(),
++            Self::Lowercase => c.is_lowercase(),
++            Self::Whitespace => c.is_whitespace(),
++        }
++    }
++}
++
++/// The error message when no grapheme cluster matches the requested pattern.
++#[cold]
++fn no_match_for_pattern(class: PatternClass) -> EcoString {
++    eco_format!("no character matches pattern \"{}\"", class.name())
++}
++
+ /// A regular expression.
+ ///
+ /// Can be used as a [show rule selector]($styling/#show-rules) and with

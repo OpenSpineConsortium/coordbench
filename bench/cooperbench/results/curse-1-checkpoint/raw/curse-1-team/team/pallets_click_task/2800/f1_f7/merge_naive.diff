@@ -1,0 +1,102 @@
+diff --cc src/click/shell_completion.py
+index 25bdcad,2c7722c..0000000
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@@ -545,31 -545,17 +545,44 @@@ def _resolve_context
+      """
+      ctx_args["resilient_parsing"] = True
+      ctx_args["validate_nesting"] = False
+++<<<<<<< HEAD
+ +    ctx = cli.make_context(prog_name, args.copy(), **ctx_args)
+ +    args = ctx._protected_args + ctx.args
+- 
+-     while args:
+-         command = ctx.command
+- 
+++=======
++     # Each context is entered so that it is closed, and the resources it
++     # manages (such as files opened by ``click.File``) are released, once
++     # it is no longer needed.
++     with cli.make_context(prog_name, args.copy(), **ctx_args) as ctx:
++         args = ctx._protected_args + ctx.args
+++>>>>>>> agent1
++ 
++         while args:
++             command = ctx.command
++ 
+++<<<<<<< HEAD
+ +        if isinstance(command, Group):
+ +            if not command.chain:
+ +                name, cmd, args = command.resolve_command(ctx, args)
+ +
+ +                if cmd is None:
+ +                    return ctx
+ +
+ +                ctx = cmd.make_context(
+ +                    name,
+ +                    args,
+ +                    parent=ctx,
+ +                    resilient_parsing=True,
+ +                    validate_nesting=False,
+ +                )
+ +                args = ctx._protected_args + ctx.args
+ +            else:
+ +                sub_ctx = ctx
+ +
+ +                while args:
+++=======
++             if isinstance(command, Group):
++                 if not command.chain:
+++>>>>>>> agent1
+                      name, cmd, args = command.resolve_command(ctx, args)
+  
+                      if cmd is None:
+@@@ -579,17 -565,36 +592,41 @@@
+                          name,
+                          args,
+                          parent=ctx,
+-                         allow_extra_args=True,
+-                         allow_interspersed_args=False,
+                          resilient_parsing=True,
+                          validate_nesting=False,
+++<<<<<<< HEAD
+ +                    )
+ +                    args = sub_ctx.args
+- 
+-                 ctx = sub_ctx
+-                 args = [*sub_ctx._protected_args, *sub_ctx.args]
+-         else:
+-             break
+++=======
++                     ) as sub_ctx:
++                         ctx = sub_ctx
++                         args = ctx._protected_args + ctx.args
++                 else:
++                     sub_ctx = ctx
+++>>>>>>> agent1
++ 
++                     while args:
++                         name, cmd, args = command.resolve_command(ctx, args)
++ 
++                         if cmd is None:
++                             return ctx
++ 
++                         with cmd.make_context(
++                             name,
++                             args,
++                             parent=ctx,
++                             allow_extra_args=True,
++                             allow_interspersed_args=False,
++                             resilient_parsing=True,
++                             validate_nesting=False,
++                         ) as sub_sub_ctx:
++                             sub_ctx = sub_sub_ctx
++                             args = sub_ctx.args
++ 
++                     ctx = sub_ctx
++                     args = [*sub_ctx._protected_args, *sub_ctx.args]
++             else:
++                 break
+  
+      return ctx
+  

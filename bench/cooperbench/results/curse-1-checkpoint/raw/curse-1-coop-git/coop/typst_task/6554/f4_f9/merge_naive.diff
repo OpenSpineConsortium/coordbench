@@ -1,0 +1,114 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..d9aad13b7 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -178,24 +178,69 @@ impl Str {
+ 
+     /// Extracts the first grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If `strip` is given, every leading character that appears in it is
++    /// ignored first. With `repeat`, extracts that many consecutive grapheme
++    /// clusters from the start of what is left instead. Fails with an error if
++    /// the string has fewer grapheme clusters than requested.
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn first(
++        &self,
++        /// Number of times to repeat this operation. Fails if exceeds string
++        /// length.
++        #[named]
++        #[default(1)]
++        repeat: usize,
++        /// A string of characters to ignore at the start of the string before
++        /// extracting the first grapheme cluster.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        check_repeat(repeat)?;
++        let mut text = self.as_str();
++        if let Some(set) = &strip {
++            text = text.trim_start_matches(|c: char| set.as_str().contains(c));
++        }
++        let mut graphemes = text.graphemes(true);
++        let mut result = EcoString::new();
++        for _ in 0..repeat {
++            match graphemes.next() {
++                Some(grapheme) => result.push_str(grapheme),
++                None => return Err(too_few_characters(text, repeat)),
++            }
++        }
++        Ok(result.into())
+     }
+ 
+     /// Extracts the last grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If `strip` is given, every trailing character that appears in it is
++    /// ignored first. With `repeat`, extracts that many consecutive grapheme
++    /// clusters from the end of what is left instead. Fails with an error if
++    /// the string has fewer grapheme clusters than requested.
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next_back()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn last(
++        &self,
++        /// Number of times to repeat this operation. Fails if exceeds string
++        /// length.
++        #[named]
++        #[default(1)]
++        repeat: usize,
++        /// A string of characters to ignore at the end of the string before
++        /// extracting the last grapheme cluster.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        check_repeat(repeat)?;
++        let mut text = self.as_str();
++        if let Some(set) = &strip {
++            text = text.trim_end_matches(|c: char| set.as_str().contains(c));
++        }
++        match text.grapheme_indices(true).rev().nth(repeat - 1) {
++            Some((start, _)) => Ok(text[start..].into()),
++            None => Err(too_few_characters(text, repeat)),
++        }
+     }
+ 
+     /// Extracts the first grapheme cluster after the specified index. Returns
+@@ -835,6 +880,27 @@ fn string_is_empty() -> EcoString {
+     "string is empty".into()
+ }
+ 
++/// Checks that the `repeat` argument of `first` and `last` is at least one.
++fn check_repeat(repeat: usize) -> StrResult<()> {
++    if repeat == 0 {
++        bail!("repeat must be at least 1");
++    }
++    Ok(())
++}
++
++/// The error when `first` or `last` is asked for more grapheme clusters than
++/// the string has. An empty string keeps the plain "string is empty" error.
++#[cold]
++fn too_few_characters(text: &str, requested: usize) -> EcoString {
++    let available = text.graphemes(true).count();
++    if available == 0 {
++        return string_is_empty();
++    }
++    eco_format!(
++        "not enough characters (requested {requested}, but string only has {available})"
++    )
++}
++
+ /// A regular expression.
+ ///
+ /// Can be used as a [show rule selector]($styling/#show-rules) and with

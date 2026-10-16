@@ -1,0 +1,76 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..6ffcb118 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -187,30 +187,59 @@ class FileSystemLoader(BaseLoader):
+         self.searchpath = [os.fspath(p) for p in searchpath]
+         self.encoding = encoding
+         self.followlinks = followlinks
++        # Maps a template name to the path it resolved to, or to None if
++        # it was searched for and not found, so that a repeated lookup
++        # skips walking the search path.
++        self._path_cache: t.Dict[str, t.Optional[str]] = {}
++
++    def _read_source(
++        self, f: t.IO, filename: str
++    ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        try:
++            contents = f.read().decode(self.encoding)
++        finally:
++            f.close()
++
++        mtime = os.path.getmtime(filename)
++
++        def uptodate() -> bool:
++            try:
++                return os.path.getmtime(filename) == mtime
++            except OSError:
++                return False
++
++        return contents, filename, uptodate
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        if template in self._path_cache:
++            cached = self._path_cache[template]
++
++            if cached is None:
++                raise TemplateNotFound(template)
++
++            f = open_if_exists(cached)
++
++            if f is not None:
++                return self._read_source(f, cached)
++
++            # The file is gone, forget it and resolve the name again.
++            self._path_cache.pop(template, None)
++
+         pieces = split_template_path(template)
++
+         for searchpath in self.searchpath:
+             filename = os.path.join(searchpath, *pieces)
+             f = open_if_exists(filename)
++
+             if f is None:
+                 continue
+-            try:
+-                contents = f.read().decode(self.encoding)
+-            finally:
+-                f.close()
+-
+-            mtime = os.path.getmtime(filename)
+ 
+-            def uptodate() -> bool:
+-                try:
+-                    return os.path.getmtime(filename) == mtime
+-                except OSError:
+-                    return False
++            self._path_cache[template] = filename
++            return self._read_source(f, filename)
+ 
+-            return contents, filename, uptodate
++        self._path_cache[template] = None
+         raise TemplateNotFound(template)
+ 
+     def list_templates(self) -> t.List[str]:

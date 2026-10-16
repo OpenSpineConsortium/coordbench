@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_jinja_task/1621/f4_f10", "verdict": "fail"}
+coordbench run: sdlc-1621-f4_f10-4dbe2e: timings: hub 0.1 s, run_create 0.0 s, git_remote 1.0 s, provision 2.6 s, agents 410 s (agent1 410 s, agent2 212 s), close 0.1 s, score 16 s, cascade 24 s, teardown 0.5 s
+coordbench run: summary: 30 completed, 0 skipped, 0 failed; evals: 30 evaluated, 22 passed, 8 failed, 0 errors (73.3%); cost: unknown
