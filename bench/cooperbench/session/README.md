@@ -114,7 +114,14 @@ much of the benchmark a run takes, and the readers of what came out.
   never spawned. `args.bench_model` is the model the bench agents run
   as (the workflow picks a subagent's model; the default, sonnet, is
   claude-sonnet-5-5) and must be the model the queue's items name,
-  since the driver records the queue's.
+  since the driver records the queue's. `args.effort` is the reasoning
+  effort the bench agents run at (low, medium, high, xhigh or max);
+  left out, they inherit the orchestrating session's, which audit.json
+  records per agent, so a run carried on from another session names
+  the earlier runs' effort here, or its agents think with a different
+  budget than theirs did (the pilot's, the step's and the screen's
+  agents all ran at xhigh); any other value stops the lane before it
+  takes an item.
 - summary.py: the cost side beside report.py's statistics: per arm the
   pass rate, the wall time, the agents' seconds, the tokens by kind and
   an estimated cost at list prices, and one CSV row per pair. From each

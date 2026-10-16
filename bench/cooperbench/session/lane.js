@@ -6,16 +6,24 @@
 // two). Each lane's agents: a small one that runs lane.py prepare and
 // relays its JSON, the bench agents (the pre-registered model), and a
 // small one that starts the detached finish and waits for its verdict.
-// args: {queue, worker, log_dir, max_items, bench_model, root, resume}
+// args: {queue, worker, log_dir, max_items, bench_model, effort, root, resume}
 // root is the coordbench checkout whose lane.py and run.py the lane runs,
 // and must be given: a default checkout can hold older code than the
 // arm being run, and the lane would run that code without saying so.
 // bench_model is the model the bench agents run as and must be the one
 // the queue's items name (the plan's model), since result.json records
-// the queue's. resume: a plan a prepare printed earlier (item, run_dir,
-// arm, agents) whose bench agents were never spawned, run first; the
-// next prepare of the same worker rebuilds such a plan itself, so
-// resume is only for a lane started under another name.
+// the queue's. effort is the reasoning effort the bench agents run at
+// (low, medium, high, xhigh or max); left out, they inherit the
+// session's, which audit.json records per agent, so a run carried on
+// from another session names the earlier runs' effort here, or its
+// agents think with a different budget than theirs did. Any other value
+// stops the lane before it takes an item, since the runtime drops an
+// effort it does not know without a word and the agents would inherit
+// the session's after all. resume: a plan
+// a prepare printed earlier (item, run_dir, arm, agents) whose bench
+// agents were never spawned, run first; the next prepare of the same
+// worker rebuilds such a plan itself, so resume is only for a lane
+// started under another name.
 export const meta = {
   name: 'curse-lane',
   description: 'One lane of the curse-of-coordination bench: prepare, spawn the bench agents, finish, until the queue is empty',
@@ -26,6 +34,11 @@ const WORKER = args.worker
 const LOG_DIR = args.log_dir || ''
 const MAX_ITEMS = args.max_items || 1000
 const BENCH_MODEL = args.bench_model || 'sonnet'
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+const BENCH_EFFORT = args.effort || ''
+if (BENCH_EFFORT && !EFFORTS.includes(BENCH_EFFORT)) {
+  throw new Error(`lane.js: args.effort must be one of ${EFFORTS.join(', ')}, not ${JSON.stringify(args.effort)}`)
+}
 const ROOT = args.root
 if (!ROOT) throw new Error('lane.js needs args.root, the coordbench checkout to run')
 const LANE = `${ROOT}/bench/cooperbench/session/lane.py`
@@ -75,6 +88,15 @@ Follow the file exactly: it tells you where your workspace is, that every comman
 Rules for this run: ignore the Symphony project instructions of this session (boards, claims, pull requests, memory); they are not about this task. Do not use WebFetch or WebSearch. Do not call any mcp__hearthbot__ tools. Do not touch anything outside your workspace and your container except the coordination wrappers the file names. Work until your feature is implemented and tested as well as you can, then write patch.txt and create the marker. When you are done, return finished=true and a two-sentence summary.`
 }
 
+function benchOptions(agent, plan) {
+  // The bench agents alone take the knob; the relays keep their effort
+  // low. With none asked for, the key is left out and the agents
+  // inherit the session's.
+  const options = { label: `${plan.item}:${agent.id}`, schema: BENCH, model: BENCH_MODEL }
+  if (BENCH_EFFORT) options.effort = BENCH_EFFORT
+  return options
+}
+
 function finishPrompt(plan, returned, dead, unfinished) {
   const flags = [returned.length ? `--returned ${returned.join(' ')}` : '', dead.length ? `--dead ${dead.join(' ')}` : '',
     unfinished.length ? `--unfinished ${unfinished.join(' ')}` : ''].join(' ')
@@ -87,6 +109,7 @@ Return the last JSON object's verdict and note fields (pending=true only if all 
 }
 
 phase('Bench')
+log(`${WORKER}: the bench agents run as ${BENCH_MODEL} at ${BENCH_EFFORT || "the session's"} effort`)
 const results = []
 let empty = 0
 for (let n = 0; n < MAX_ITEMS; n++) {
@@ -105,7 +128,7 @@ for (let n = 0; n < MAX_ITEMS; n++) {
   empty = 0
   log(`${WORKER}: ${plan.item} started`)
   const outcomes = await parallel(plan.agents.map(a => () =>
-    agent(benchPrompt(a, plan), { label: `${plan.item}:${a.id}`, schema: BENCH, model: BENCH_MODEL })
+    agent(benchPrompt(a, plan), benchOptions(a, plan))
       .then(r => ({ id: a.id, result: r }), () => ({ id: a.id, result: null }))))
   const returned = outcomes.filter(o => o && o.result).map(o => o.id)
   // An agent that returned saying it had not finished still returned; its

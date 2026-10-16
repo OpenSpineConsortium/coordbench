@@ -16,7 +16,7 @@ For each agent:
   its spawn prompt). calls times first_context is the part of the agent's
   input tokens the route fixed; what is left is what the work took, about.
 - efforts: the effort levels its calls ran at, which a subagent inherits
-  from the orchestrating session.
+  from the orchestrating session unless lane.js's args.effort names one.
 - refusals: tool calls the session refused, as against the command's own
   failure: a permission decision other than accept, or Claude Code's own
   guard ("Blocked: ..."), with up to three examples. A claude-cli agent
