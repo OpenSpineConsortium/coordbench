@@ -39,6 +39,11 @@ often as one agent does, and at what cost in time and tokens.
   batches"). By 10:05 UTC the five reruns left and coop-git on click
   2068 f6_f7 had run, every one clean by its audit, and batch-9-16
   had begun; their runs go into the full run's bundle.
+- The step's figures. ../curse-1-step-8/ is regenerated over its 40
+  clean runs, the 11 made again among them: solo passed 5 of 8, coop
+  7, sdlc 6, coop-git 6 and team 7, and no exact McNemar p is below
+  0.5. Its README says what changed and which figures cover only the
+  runs whose transcripts the container at hand holds.
 
 ## What is here
 
@@ -83,9 +88,11 @@ often as one agent does, and at what cost in time and tokens.
 ## Where things stand
 
 - The pilot (../curse-1-pilot/) and the step of 8 pairs
-  (../curse-1-step-8/, #19). The step ran 40 runs and reported:
+  (../curse-1-step-8/, #19). The step ran 40 runs and first reported
+  solo 5 of 8 and every two-agent arm 6 of 8, nothing significant.
+  Over its 40 clean runs (below) it reports:
   - solo passed 5 of 8;
-  - every two-agent arm passed 6 of 8;
+  - coop and team passed 7 of 8, sdlc and coop-git 6 of 8;
   - nothing was significant.
 - The audit that #21 adds found 11 of the step's 40 runs to be harness
   errors, not the arms' results:
@@ -95,15 +102,9 @@ often as one agent does, and at what cost in time and tokens.
     - coop and sdlc on jinja 1559 f4_f10;
     - solo on jinja 1621 f2_f9.
   - A respawned pair of agents: sdlc on click 2068 f5_f11.
-  - The step's figures count these 11 as results. They are to be
-    regenerated once the reruns are done.
-  - The clean runs alone give these counts, which are too uneven to
-    compare:
-    - solo 4 of 6;
-    - coop 5 of 6;
-    - sdlc 3 of 4;
-    - coop-git 5 of 6;
-    - team 6 of 7.
+  - The step's first figures counted these 11 as results. All 11 were
+    made again on 2026-10-16, each clean by its audit, and the step's
+    figures are regenerated over the 40 clean runs.
 - One run outside the step is also a harness error: solo on click 2068
   f6_f7, where the harness lost agent1.
 - The X-Blossom screen (../xblossom-screen/; the arm merged as #20) ran
@@ -165,8 +166,8 @@ On a new container:
 
 ## The next steps, in order
 
-At the pause of 2026-10-16, steps 1 to 3 and 5 are done and step 4 is
-part done; the section at the top lists what is left of it.
+By 10:45 UTC on 2026-10-16 steps 1 to 5 are done, step 6, the full
+run, is under way, and of step 7 the step of 8's figures are done.
 
 Q below is ~/cooperbench/logs/curse-1-queue.jsonl, and CHECKOUT is a
 coordbench checkout at main with #21 merged.
@@ -203,6 +204,7 @@ coordbench checkout at main with #21 merged.
    "How much to run":
    - subset.py, then report.py and summary.py on the sample;
    - bundle.py into results/;
-   - the step of 8's figures again, with the harness errors left out.
+   - the step of 8's figures again, with the harness errors left out
+     (done on 2026-10-16: ../curse-1-step-8/).
 8. After the full run, the user decides what comes next. The candidates
    are steps 4 and 5 of trial-order.md, which they have not chosen.

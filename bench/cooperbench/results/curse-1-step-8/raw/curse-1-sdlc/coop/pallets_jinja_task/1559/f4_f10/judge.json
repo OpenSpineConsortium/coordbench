@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-sdlc",
-    "run_id": "sdlc-1559-f4_f10-2102d9"
+    "run_id": "sdlc-1559-f4_f10-991324"
   },
   "calls": {},
   "skipped": {},
@@ -22,20 +22,13 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "15": "Plan",
-      "33": "Plan",
-      "46": null
+      "16": null,
+      "39": null,
+      "44": "Update"
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
-    "contradictions": [
-      {
-        "message_id": "33",
-        "agent": "agent1",
-        "name": "_make_node",
-        "kind": "identifier"
-      }
-    ],
+    "contradictions": [],
     "overlapping_hunks": [
       {
         "file": "src/jinja2/ext.py",
@@ -63,12 +56,12 @@
         ],
         "ranges": [
           [
-            257,
-            262
+            266,
+            271
           ],
           [
-            257,
-            262
+            266,
+            271
           ]
         ],
         "same_heading": "class InternationalizationExtension(Extension):"
@@ -81,45 +74,166 @@
         ],
         "ranges": [
           [
-            264,
-            271
+            340,
+            345
           ],
           [
-            264,
-            271
+            340,
+            345
+          ]
+        ],
+        "same_heading": "class InternationalizationExtension(Extension):"
+      },
+      {
+        "file": "src/jinja2/ext.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            362,
+            370
+          ],
+          [
+            362,
+            370
+          ]
+        ],
+        "same_heading": "class InternationalizationExtension(Extension):"
+      },
+      {
+        "file": "src/jinja2/ext.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            372,
+            384
+          ],
+          [
+            372,
+            384
+          ]
+        ],
+        "same_heading": "class InternationalizationExtension(Extension):"
+      },
+      {
+        "file": "src/jinja2/ext.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            459,
+            464
+          ],
+          [
+            459,
+            464
+          ]
+        ],
+        "same_heading": "class InternationalizationExtension(Extension):"
+      },
+      {
+        "file": "src/jinja2/ext.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            466,
+            471
+          ],
+          [
+            466,
+            471
+          ]
+        ],
+        "same_heading": "class InternationalizationExtension(Extension):"
+      },
+      {
+        "file": "src/jinja2/ext.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            514,
+            521
+          ],
+          [
+            514,
+            521
+          ]
+        ],
+        "same_heading": "class InternationalizationExtension(Extension):"
+      },
+      {
+        "file": "src/jinja2/ext.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            568,
+            574
+          ],
+          [
+            568,
+            574
           ]
         ],
         "same_heading": "class InternationalizationExtension(Extension):"
       }
     ],
     "insertion_markers": [],
-    "clean_merge_failed": false,
     "missing_final_status": [
-      "agent2"
+      "agent1"
     ],
     "git_disasters": [],
     "git_broken": [],
     "git_impatience": [
       {
-        "agent": "agent2",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-1559-f4_f10-2102d9-agent2 bash -lc 'git fetch team",
-        "at": 1792061177.252,
-        "partner_first_push_at": null
+        "agent": "agent1",
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-1559-f4_f10-991324-agent1 bash -lc 'git fetch team",
+        "at": 1792143687.148,
+        "partner_first_push_at": 1792143752.204
       },
       {
         "agent": "agent2",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-1559-f4_f10-2102d9-agent2 bash -lc 'git fetch team 2>&1",
-        "at": 1792061225.638,
-        "partner_first_push_at": null
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-1559-f4_f10-991324-agent2 bash -lc 'git fetch team 2>&1",
+        "at": 1792143696.002,
+        "partner_first_push_at": 1792143858.578
+      },
+      {
+        "agent": "agent2",
+        "command": "$B/coop-send agent1 \"agent2: #10 is merged into team/main as 56aba2f (ext.py only: import hashlib, _translation_versions + second extend() in InternationalizationExtension.__init__, three methods betw",
+        "at": 1792143779.298,
+        "partner_first_push_at": 1792143858.578
+      },
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-1559-f4_f10-991324-agent2 bash -lc 'git fetch team 2>&1",
+        "at": 1792143779.298,
+        "partner_first_push_at": 1792143858.578
       }
     ],
     "git_destructive": []
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T10:52:49+00:00",
+    "computed_at": "2026-10-16T09:45:58+00:00",
     "conversation_source": "events.jsonl",
     "message_count": 3,
-    "not_computed": {},
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
     "definitions": {
       "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
       "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
@@ -130,7 +244,6 @@
       "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
       "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
       "insertion_markers": "App D: added comment lines marking where another agent inserts code",
-      "clean_merge_failed": "Divergent architecture signal: a clean naive merge whose tests fail",
       "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it",
       "git_disasters": "coordbench's label for git-failures.json's git_disasters: force pushes and hard resets",
       "git_broken": "coordbench's label for broken: a push followed by a failing test run",
@@ -139,12 +252,12 @@
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": null,
-        "last_message_at": 1792061217.4144807
+        "last_edit_at": 1792143792.844,
+        "last_message_at": 1792143770.006352
       },
       "agent2": {
-        "last_edit_at": 1792061514.955,
-        "last_message_at": 1792061227.7726595
+        "last_edit_at": 1792143744.061,
+        "last_message_at": 1792143781.648256
       }
     },
     "git_blog_names": {

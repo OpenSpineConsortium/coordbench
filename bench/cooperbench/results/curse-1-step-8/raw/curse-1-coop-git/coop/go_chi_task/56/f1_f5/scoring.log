@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/go_chi_task/56/f1_f5", "verdict": "fail"}
+coordbench run: coop-git-56-f1_f5-2d1c0c: timings: hub 0.1 s, run_create 0.0 s, git_remote 0.9 s, provision 2.3 s, agents 508 s (agent1 508 s, agent2 451 s), close 0.0 s, score 23 s, cascade 23 s, teardown 1.1 s
+coordbench run: summary: 12 completed, 0 skipped, 0 failed; evals: 12 evaluated, 9 passed, 3 failed, 0 errors (75.0%); cost: unknown

@@ -1,61 +1,59 @@
-commit b83a91c2af47eb760dec0c3de4d33a9b65bf9d8d (main)
-Merge: 5926908 3e48f49
+commit a18f45f6a15eed3224083226f845bf9fc2144a7c (main)
+Merge: 392384d 4834ab9
 Author: coordbench merge gate <gate@coordbench.local>
-Date:   Thu Oct 15 12:40:47 2026 +0000
-
-    Merge claude/1: closes #1
-
-commit 3e48f49323d070406f207385480452d079a793c3 (claude/1)
-Merge: 9a4e228 5926908
-Author: agent1 <agent1@coordbench.local>
-Date:   Thu Oct 15 12:40:46 2026 +0000
-
-    Merge remote-tracking branch 'team/main' into claude/1
-    
-    # Conflicts:
-    #       tree.go
-
-commit 9a4e22892df94411a4f129a208ce53d04704f45f
-Author: agent1 <agent1@coordbench.local>
-Date:   Thu Oct 15 12:38:46 2026 +0000
-
-    Add Allow header on 405 responses (core + middleware)
-    
-    chi now collects the methods registered on the matched route when the path
-    matches but the request method does not, and the default 405 handler lists
-    them in Allow, in method order, as RFC 9110 asks. middleware.SetAllowHeader
-    adds the same header ahead of routing for apps that set their own 405 handler.
-    Only the 405 path does any extra work.
-
- context.go                    | 24 ++++++++++++
- middleware/allowed_methods.go | 86 +++++++++++++++++++++++++++++++++++++++++++
- mux.go                        | 51 +++++++++++++++++++++----
- tree.go                       | 36 ++++++++++++++++++
- 4 files changed, 189 insertions(+), 8 deletions(-)
-
-commit 59269088f30e4e97dd2bd8e151a7250ec41c6b93
-Merge: 7f28096 a8d0b77
-Author: coordbench merge gate <gate@coordbench.local>
-Date:   Thu Oct 15 12:37:40 2026 +0000
+Date:   Fri Oct 16 09:56:42 2026 +0000
 
     Merge claude/5: closes #5
 
-commit a8d0b7791d457f9c60e18bdd703c925481e1ba7e (claude/5)
+commit 4834ab9c1938034fdabc701e5cbefb0dc6fb6bf7 (claude/5)
 Author: agent2 <agent@cooperbench.local>
-Date:   Thu Oct 15 12:37:30 2026 +0000
+Date:   Fri Oct 16 09:56:37 2026 +0000
 
-    Add built-in CORS support
-    
-    CORSOptions and DefaultCORSOptions configure a CORS middleware that sets the
-    Access-Control-* headers and answers OPTIONS preflights with a 204. Mux gets
-    EnableCORS, EnableCORSWithOptions and WithCORS; they install a
-    method-not-allowed handler that answers preflights and lists the path's
-    methods in the Allow header of a 405. methodNames and GetMethodName map a
-    method type back to its name.
-    
-    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    CORS: use chi's Allow header for 405s and the reverse method map for names
 
- cors.go | 202 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- mux.go  |  37 ++++++++++++
- tree.go |  21 +++++++
- 3 files changed, 260 insertions(+)
+ cors.go | 20 +++++++++++---------
+ tree.go |  4 ++--
+ 2 files changed, 13 insertions(+), 11 deletions(-)
+
+commit 2132a749d9a0cea8eab5dc952993e8a428bc5178
+Merge: 23972cf 392384d
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 09:53:52 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/5
+
+commit 23972cf65bbb7304cd923d1df56d299642a80996
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 09:53:46 2026 +0000
+
+    Add built-in CORS support: CORS middleware, EnableCORS, WithCORS and GetMethodName
+
+ cors.go | 345 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tree.go |  26 +++++
+ 2 files changed, 371 insertions(+)
+
+commit 392384d667c71bde789e5a37922417f6b27a3bae
+Merge: 7f28096 cfcf23a
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 09:51:55 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit cfcf23af003cdf42a5b1b42daf8e687349cc1e2c (claude/1)
+Author: agent1 <agent1@coordbench.local>
+Date:   Fri Oct 16 09:51:50 2026 +0000
+
+    Add Allow header on 405 responses (core + middleware)
+    
+    Collect the methods registered for the matched route while routing ends in a
+    405, keep them in a stable order on the routing context, and have the default
+    405 handler set Allow from them. middleware.SetAllowHeader adds the same header
+    for routers with a custom MethodNotAllowed handler.
+    
+    Closes #1
+
+ context.go                    | 23 ++++++++++++
+ middleware/allowed_methods.go | 81 +++++++++++++++++++++++++++++++++++++++++++
+ mux.go                        | 27 ++++++++++-----
+ tree.go                       | 40 ++++++++++++++++++---
+ 4 files changed, 159 insertions(+), 12 deletions(-)

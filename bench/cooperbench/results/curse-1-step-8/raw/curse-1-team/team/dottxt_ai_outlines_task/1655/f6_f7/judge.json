@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-team",
-    "run_id": "team-1655-f6_f7-8dadc6"
+    "run_id": "team-1655-f6_f7-e37719"
   },
   "calls": {},
   "skipped": {},
@@ -22,10 +22,8 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "16": "Plan",
-      "25": "Plan",
-      "36": "Update",
-      "49": "Ack"
+      "18": "Update",
+      "21": "Plan"
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
@@ -51,14 +49,17 @@
       }
     ],
     "insertion_markers": [],
-    "clean_merge_failed": true,
-    "missing_final_status": []
+    "missing_final_status": [
+      "agent1"
+    ]
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T11:24:14+00:00",
+    "computed_at": "2026-10-16T05:21:50+00:00",
     "conversation_source": "events.jsonl",
-    "message_count": 4,
-    "not_computed": {},
+    "message_count": 2,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
     "definitions": {
       "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
       "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
@@ -69,17 +70,16 @@
       "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
       "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
       "insertion_markers": "App D: added comment lines marking where another agent inserts code",
-      "clean_merge_failed": "Divergent architecture signal: a clean naive merge whose tests fail",
       "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it"
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": 1792063137.895,
-        "last_message_at": 1792063216.3361838
+        "last_edit_at": 1792127443.225,
+        "last_message_at": 1792127353.9101682
       },
       "agent2": {
         "last_edit_at": null,
-        "last_message_at": 1792063020.277855
+        "last_message_at": 1792127344.650364
       }
     },
     "git_blog_names": null

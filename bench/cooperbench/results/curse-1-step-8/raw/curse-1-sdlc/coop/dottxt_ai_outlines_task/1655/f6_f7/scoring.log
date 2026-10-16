@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/dottxt_ai_outlines_task/1655/f6_f7", "verdict": "fail"}
+coordbench run: sdlc-1655-f6_f7-e92ce4: timings: hub 0.1 s, run_create 0.0 s, git_remote 4.7 s, provision 3.0 s, agents 240 s (agent1 232 s, agent2 240 s), close 0.1 s, score 817 s, cascade 179 s, teardown 1.1 s
+coordbench run: summary: 8 completed, 0 skipped, 0 failed; evals: 8 evaluated, 5 passed, 3 failed, 0 errors (62.5%); cost: unknown

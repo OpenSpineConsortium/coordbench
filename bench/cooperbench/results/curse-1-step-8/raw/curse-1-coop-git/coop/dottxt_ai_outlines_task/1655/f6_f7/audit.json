@@ -2,7 +2,7 @@
   "agents": {
     "agent1": {
       "calls": 15,
-      "first_context": 81689,
+      "first_context": 71444,
       "efforts": [
         "xhigh"
       ],
@@ -15,8 +15,8 @@
       "headless_transcripts": 0
     },
     "agent2": {
-      "calls": 13,
-      "first_context": 81689,
+      "calls": 15,
+      "first_context": 71444,
       "efforts": [
         "xhigh"
       ],
@@ -29,6 +29,6 @@
       "headless_transcripts": 0
     }
   },
-  "disk_full_log_lines": 8,
-  "harness_error": "the run met a full disk"
+  "disk_full_log_lines": 0,
+  "harness_error": null
 }

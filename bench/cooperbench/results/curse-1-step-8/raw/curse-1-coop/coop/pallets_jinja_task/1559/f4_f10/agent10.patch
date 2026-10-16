@@ -1,5 +1,5 @@
 diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
-index d21b83aa..3592ce85 100644
+index d21b83aa..f79c5da2 100644
 --- a/src/jinja2/ext.py
 +++ b/src/jinja2/ext.py
 @@ -1,4 +1,5 @@
@@ -8,17 +8,18 @@ index d21b83aa..3592ce85 100644
  import pprint
  import re
  import typing as t
-@@ -257,6 +258,9 @@ class InternationalizationExtension(Extension):
+@@ -257,6 +258,10 @@ class InternationalizationExtension(Extension):
      def __init__(self, environment: Environment) -> None:
          super().__init__(environment)
          environment.globals["_"] = _gettext_alias
-+        # Versions of translation strings, keyed by the MD5 hash of the
-+        # message so that long or odd strings cost the same to look up.
++        # Versions are keyed by the MD5 hash of the message, so that
++        # very long messages cost no more to store or look up than short
++        # ones. Identical hashes are treated as the same message.
 +        self._translation_versions: t.Dict[str, str] = {}
          environment.extend(
              install_gettext_translations=self._install,
              install_null_translations=self._install_null,
-@@ -264,8 +268,40 @@ class InternationalizationExtension(Extension):
+@@ -264,8 +269,38 @@ class InternationalizationExtension(Extension):
              uninstall_gettext_translations=self._uninstall,
              extract_translations=self._extract,
              newstyle_gettext=False,
@@ -30,10 +31,6 @@ index d21b83aa..3592ce85 100644
  
 +    @staticmethod
 +    def _version_key(message: str) -> str:
-+        """The storage key of a message: the MD5 hash of its UTF-8 text.
-+        Identical text always gives the same key, and two messages whose
-+        hashes collide are treated as the same message.
-+        """
 +        return hashlib.md5(message.encode("utf-8")).hexdigest()
 +
 +    def _set_translation_version(self, message: str, version: str) -> None:
@@ -41,19 +38,21 @@ index d21b83aa..3592ce85 100644
 +        self._translation_versions[self._version_key(message)] = version
 +
 +    def _get_translation_version(self, message: str) -> t.Optional[str]:
-+        """Return the version stored for ``message``, or ``None`` if the
-+        message has no version.
-+        """
++        """Return the version stored for ``message``, or ``None``."""
 +        return self._translation_versions.get(self._version_key(message))
 +
 +    def _compare_translation_versions(self, message1: str, message2: str) -> bool:
-+        """Return ``True`` if both messages have the same version. A message
-+        with no version never matches, not even another unversioned one.
++        """Return ``True`` if both messages have the same version set.
++
++        A message with no version never compares equal, not even to
++        another message with no version.
 +        """
 +        version1 = self._get_translation_version(message1)
 +        version2 = self._get_translation_version(message2)
++
 +        if version1 is None or version2 is None:
 +            return False
++
 +        return version1 == version2
 +
      def _install(

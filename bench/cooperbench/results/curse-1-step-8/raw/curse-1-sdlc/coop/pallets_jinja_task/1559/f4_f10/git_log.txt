@@ -1,41 +1,51 @@
-commit ad2abea74cc269db190db9a220fe4a34733d23d1 (main)
-Merge: c0a0736 8d177db
+commit 1a4294ef36f852a9cdefa2874a60b7c21f501903 (main)
+Merge: 56aba2f 2b22ed1
 Author: coordbench merge gate <gate@coordbench.local>
-Date:   Thu Oct 15 10:47:59 2026 +0000
+Date:   Fri Oct 16 09:44:38 2026 +0000
 
     Merge claude/4: closes #4
 
-commit 8d177db9c031292eddc78a9dd648567ef7461db4 (claude/4)
-Author: agent1 <agent@cooperbench.local>
-Date:   Thu Oct 15 10:47:54 2026 +0000
+commit 2b22ed1c7b190e3fd7438cfc66ac6db4f846e347 (claude/4)
+Merge: e939ee8 56aba2f
+Author: agent1 <agent1@coordbench.invalid>
+Date:   Fri Oct 16 09:44:31 2026 +0000
 
-    Add translation metadata (note, created, modified) to the trans tag
+    Merge remote-tracking branch 'team/main' into claude/4
+
+commit e939ee8fdd9dcf33c4585aeec69dfccfbf58b813
+Author: agent1 <agent1@coordbench.invalid>
+Date:   Fri Oct 16 09:44:21 2026 +0000
+
+    Add note, created and modified metadata to the trans tag
     
-    The three parameters take string literals only and are kept on the
-    Output node as trans_metadata, which a node without metadata does not
-    carry. They change nothing in the rendered output.
-    
-    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
-    Claude-Session: https://claude.ai/code/session_01GVAX6T56bQavX89vmsnCFg
+    The three string-literal parameters are collected apart from the
+    translatable variables and stored on the generated Output node as
+    trans_metadata. Nodes without metadata get no attribute, and rendering
+    and extraction are unchanged.
 
- src/jinja2/ext.py | 61 +++++++++++++++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 59 insertions(+), 2 deletions(-)
+ src/jinja2/ext.py | 55 +++++++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 51 insertions(+), 4 deletions(-)
 
-commit c0a0736af40fcb1929cecc86f6e7ba63c0913e70
-Merge: 896a621 75070f4
+commit 56aba2fd5587028fa23b888f797b29b273260cc2
+Merge: 896a621 c3e0441
 Author: coordbench merge gate <gate@coordbench.local>
-Date:   Thu Oct 15 10:46:59 2026 +0000
+Date:   Fri Oct 16 09:42:47 2026 +0000
 
     Merge claude/10: closes #10
 
-commit 75070f49f5e76094686541e644502c961051ba7f (claude/10)
-Author: agent2 <agent2@coordbench.invalid>
-Date:   Thu Oct 15 10:46:54 2026 +0000
+commit c3e04412072815175997d235c186cce9eda9ddf0 (claude/10)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 09:42:34 2026 +0000
 
-    feat(i18n): add translation version control to the i18n extension
+    Add translation version control to the i18n extension
     
-    Versions are kept per message under the MD5 of its UTF-8 text, and the three
-    methods are added to the environment when the extension is created.
+    set_translation_version, get_translation_version and
+    compare_translation_versions store a version per message under the MD5
+    digest of its UTF-8 text, so empty, Unicode and very long messages all
+    cost one fixed-size key. Two messages compare equal only when both have a
+    version and the versions match.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 
- src/jinja2/ext.py | 32 ++++++++++++++++++++++++++++++++
- 1 file changed, 32 insertions(+)
+ src/jinja2/ext.py | 36 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)

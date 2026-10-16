@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-sdlc",
-    "run_id": "sdlc-56-f1_f5-75ae65"
+    "run_id": "sdlc-56-f1_f5-250958"
   },
   "calls": {},
   "skipped": {},
@@ -22,10 +22,10 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "17": "Plan",
-      "20": "Plan",
-      "26": null,
-      "41": null
+      "19": "Plan",
+      "22": "Plan",
+      "28": "Ack",
+      "44": null
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
@@ -39,12 +39,12 @@
         ],
         "ranges": [
           [
-            74,
-            79
+            76,
+            81
           ],
           [
-            74,
-            79
+            76,
+            81
           ]
         ],
         "same_heading": "type Context struct {"
@@ -57,11 +57,11 @@
         ],
         "ranges": [
           [
-            90,
+            91,
             99
           ],
           [
-            90,
+            91,
             99
           ]
         ],
@@ -201,30 +201,12 @@
         ],
         "ranges": [
           [
-            122,
-            127
+            455,
+            462
           ],
           [
-            122,
-            127
-          ]
-        ],
-        "same_heading": "func (s endpoints) Value(method methodTyp) *endpoint {"
-      },
-      {
-        "file": "tree.go",
-        "agents": [
-          "agent1",
-          "agent2"
-        ],
-        "ranges": [
-          [
-            454,
-            459
-          ],
-          [
-            454,
-            459
+            455,
+            462
           ]
         ],
         "same_heading": "func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {"
@@ -237,47 +219,83 @@
         ],
         "ranges": [
           [
-            493,
-            498
+            494,
+            501
           ],
           [
-            493,
-            498
+            494,
+            501
           ]
         ],
         "same_heading": "func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            517,
+            522
+          ],
+          [
+            517,
+            522
+          ]
+        ],
+        "same_heading": "func (n *node) findRoute(rctx *Context, method methodTyp, path string) *node {"
+      },
+      {
+        "file": "tree.go",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            773,
+            778
+          ],
+          [
+            773,
+            778
+          ]
+        ],
+        "same_heading": "func methodTypString(method methodTyp) string {"
       }
     ],
     "insertion_markers": [],
     "missing_final_status": [
-      "agent1"
+      "agent2"
     ],
     "git_disasters": [],
     "git_broken": [],
     "git_impatience": [
       {
         "agent": "agent1",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-56-f1_f5-75ae65-agent1 bash -lc 'git fetch team",
-        "at": 1792067605.943,
-        "partner_first_push_at": 1792067848.385
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-56-f1_f5-250958-agent1 bash -lc 'git fetch team",
+        "at": 1792144147.185,
+        "partner_first_push_at": 1792144424.56
+      },
+      {
+        "agent": "agent1",
+        "command": "docker exec -w /workspace/repo coordbench-sdlc-56-f1_f5-250958-agent1 bash -lc 'git fetch team",
+        "at": 1792144328.289,
+        "partner_first_push_at": 1792144424.56
       },
       {
         "agent": "agent2",
-        "command": "git fetch team",
-        "at": 1792067516.446,
-        "partner_first_push_at": 1792067924.172
-      },
-      {
-        "agent": "agent2",
-        "command": "docker exec -w /workspace/repo coordbench-sdlc-56-f1_f5-75ae65-agent2 bash -lc 'git fetch team 2>&1",
-        "at": 1792067867.71,
-        "partner_first_push_at": 1792067924.172
+        "command": "git fetch team 2>&1",
+        "at": 1792144210.863,
+        "partner_first_push_at": 1792144307.851
       }
     ],
     "git_destructive": []
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T12:45:13+00:00",
+    "computed_at": "2026-10-16T10:04:11+00:00",
     "conversation_source": "events.jsonl",
     "message_count": 4,
     "not_computed": {
@@ -301,12 +319,12 @@
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": 1792068051.795,
-        "last_message_at": 1792067608.2707994
+        "last_edit_at": null,
+        "last_message_at": 1792144331.7748735
       },
       "agent2": {
-        "last_edit_at": null,
-        "last_message_at": 1792067870.0747337
+        "last_edit_at": 1792144607.375,
+        "last_message_at": 1792144250.0393374
       }
     },
     "git_blog_names": {

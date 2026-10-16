@@ -12,32 +12,35 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-coop",
-    "run_id": "coop-1559-f4_f10-eca285"
+    "run_id": "coop-1559-f4_f10-9ec776"
   },
   "calls": {},
   "skipped": {},
   "errors": {},
   "heuristics": {
-    "unanswered_questions": [
-      "24"
-    ],
+    "unanswered_questions": [],
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
-      "10": "Plan",
-      "18": "Update",
-      "24": "Question",
-      "30": null,
-      "39": "Update"
+      "9": "Plan",
+      "17": "Plan",
+      "23": "Update",
+      "31": "Update"
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
     "contradictions": [
       {
-        "message_id": "24",
+        "message_id": "31",
         "agent": "agent1",
         "name": "_make_node",
         "kind": "identifier"
+      },
+      {
+        "message_id": "31",
+        "agent": "agent1",
+        "name": "patch.txt",
+        "kind": "path"
       }
     ],
     "overlapping_hunks": [],
@@ -46,9 +49,9 @@
     "missing_final_status": []
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T10:53:09+00:00",
+    "computed_at": "2026-10-16T09:45:10+00:00",
     "conversation_source": "events.jsonl",
-    "message_count": 5,
+    "message_count": 4,
     "not_computed": {},
     "definitions": {
       "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
@@ -65,12 +68,12 @@
     },
     "final_status_times": {
       "agent1": {
-        "last_edit_at": null,
-        "last_message_at": 1792061533.10145
+        "last_edit_at": 1792143781.652,
+        "last_message_at": 1792143857.7175229
       },
       "agent2": {
-        "last_edit_at": 1792061203.499,
-        "last_message_at": 1792061205.5829432
+        "last_edit_at": null,
+        "last_message_at": 1792143733.4810247
       }
     },
     "git_blog_names": null

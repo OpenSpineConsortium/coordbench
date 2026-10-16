@@ -12,7 +12,7 @@
     "model": "claude-sonnet-5-5",
     "driver": "session",
     "run_name": "curse-1-coop-git",
-    "run_id": "coop-git-1655-f6_f7-4fe79f"
+    "run_id": "coop-git-1655-f6_f7-98eeda"
   },
   "calls": {},
   "skipped": {},
@@ -22,11 +22,13 @@
     "ignored_questions": [],
     "near_duplicates": [],
     "speech_acts_keyword": {
+      "2": null,
       "5": "Plan",
-      "13": "Plan",
-      "21": null,
-      "42": "Update",
-      "48": "Update"
+      "14": null,
+      "17": null,
+      "26": "Update",
+      "35": null,
+      "38": "Update"
     },
     "resource_division_candidates": [],
     "negotiation_candidates": [],
@@ -72,6 +74,21 @@
     "insertion_markers": [],
     "git_disasters": [
       {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
         "agent": "agent2",
         "kind": "force push",
         "command": "git push team agent2 --force 2>&1"
@@ -79,30 +96,41 @@
       {
         "agent": "agent2",
         "kind": "force push",
-        "command": "git push team agent2 --force 2>&1"
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-1655-f6_f7-98eeda-agent2 bash -lc 'git push team agent2 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-1655-f6_f7-98eeda-agent2 bash -lc 'git push team agent2 --force 2>&1"
       }
     ],
     "git_broken": [],
     "git_impatience": [
       {
         "agent": "agent2",
-        "command": "git fetch team 2>&1",
-        "at": 1792062693.925,
-        "partner_first_push_at": null
+        "command": "git fetch team",
+        "at": 1792126617.445,
+        "partner_first_push_at": 1792126684.363
       },
       {
         "agent": "agent2",
-        "command": "docker exec -w /workspace/repo coordbench-coop-git-1655-f6_f7-4fe79f-agent2 bash -lc 'git fetch -q team",
-        "at": 1792062707.405,
-        "partner_first_push_at": null
+        "command": "do docker exec -w /workspace/repo coordbench-coop-git-1655-f6_f7-98eeda-agent2 bash -lc 'git fetch team -q",
+        "at": 1792126646.934,
+        "partner_first_push_at": 1792126684.363
+      },
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-1655-f6_f7-98eeda-agent2 bash -lc 'git fetch team -q",
+        "at": 1792126646.934,
+        "partner_first_push_at": 1792126684.363
       }
     ],
     "git_destructive": []
   },
   "heuristics_meta": {
-    "computed_at": "2026-10-15T11:19:01+00:00",
+    "computed_at": "2026-10-16T05:07:12+00:00",
     "conversation_source": "events.jsonl",
-    "message_count": 5,
+    "message_count": 7,
     "not_computed": {
       "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)",
       "missing_final_status": "no transcript with timed edits, or no message text"
@@ -125,11 +153,11 @@
     "final_status_times": {
       "agent1": {
         "last_edit_at": null,
-        "last_message_at": 1792062803.8270903
+        "last_message_at": 1792126706.2833903
       },
       "agent2": {
         "last_edit_at": null,
-        "last_message_at": 1792062817.23638
+        "last_message_at": 1792126733.386225
       }
     },
     "git_blog_names": {
