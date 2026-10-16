@@ -1597,13 +1597,18 @@ Status: not measured.
   _evaluate_single, 320-322) and counts it as an evaluation error
   (runner/core.py _process_eval_result, 333-334), and `cooperbench eval`
   skips it as already evaluated (eval/evaluate.py 57-60), so a sandbox
-  that failed once does not cost the pair its sample; the scoring again
-  by hand, in the curse-1 experiment, of a pair one of whose suites
-  test_merged's sandbox cut off at its 600 seconds with no test counted,
-  which CooperBench counts as that suite failed: the same patches are
-  scored again with `run.py rescore --force` and the second scoring
-  counts, a second timeout keeping the fail, for the same reason
-  (bench/cooperbench/results/curse-1-step-8/README.md); and the packing,
+  that failed once does not cost the pair its sample; for the same
+  reason, a second scoring by hand, in the curse-1 experiment, of a pair
+  one of whose suites the evaluation sandbox (test_merged's or
+  test_solo's) cut off at its 600 seconds (eval/backends/docker.py
+  50-55) with no test counted, which CooperBench counts as that suite
+  failed, where the time plainly went outside the tests, because the
+  task's runner limits its own tests below 600 seconds or because the
+  merge cascade's fresh run of the same patch finished that suite:
+  `run.py rescore --force` scores the same patches again and the second
+  scoring counts (a second timeout, or a timeout where the tests may
+  have taken the time, keeps CooperBench's fail;
+  bench/cooperbench/results/curse-1-step-8/README.md); and the packing,
   since CooperBench's runner reuses the
   directory with mkdir(exist_ok=True) and leaves what the new attempt
   does not rewrite, which for coordbench (a judge.json, an agent's

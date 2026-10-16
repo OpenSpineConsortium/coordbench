@@ -108,7 +108,8 @@ aside and run again, five spoiled by the host and one by the session;
 two runs were finished or judged again by hand; and six agents' token
 counts were filled in after the run. The audit then found 11 of the runs
 that day kept to be harness errors too, and they were made again on
-2026-10-16 (the last item below).
+2026-10-16 (the second-to-last item below), one of them scored a second
+time (the last).
 
 - At 10:48 UTC the disk filled while the datasets 6252 image (13.3 GB)
   was built beside the others. coop-git jinja 1559's agents stopped on
@@ -170,7 +171,7 @@ that day kept to be harness errors too, and they were made again on
   since it had filled the disk under all five; coop and sdlc on jinja
   1559 f4_f10, solo on jinja 1621 f2_f9, and sdlc and coop-git on go_chi
   56 f1_f5, all five cut by a full disk; and sdlc on click 2068 f5_f11,
-  whose agents were spawned twice. Three attempts were set aside on the
+  whose agents were spawned twice. Four attempts were set aside on the
   way. Two were on the outlines pair at effort max, the orchestrating
   session's, before lane.js could name the bench agents' effort (#22):
   solo's, begun at 23:55 UTC on 2026-10-15, which passed, and coop's,
@@ -178,28 +179,49 @@ that day kept to be harness errors too, and they were made again on
   effort of every other run, and solo's run at xhigh failed, so solo's
   figures below count that pair as a fail. The third, coop's on jinja
   1559 f4_f10 at 08:57 UTC, at xhigh, lost both agents when the
-  account's session limit cut it, and was made again from 09:40.
-  ../curse-1-checkpoint/README.md lists that day's runs up to the
-  08:58 UTC pause.
+  account's session limit cut it, and was made again from 09:40. The
+  fourth, coop's on the outlines pair again, was prepared at 00:35 UTC
+  and set aside at 04:17 without starting an agent, when that pair's
+  coop run was made again at xhigh. ../curse-1-checkpoint/README.md
+  lists that day's runs up to the 08:58 UTC pause.
 - sdlc's run on the outlines pair, one of the 11, was scored a second
-  time. Its first scoring, at 04:52 UTC, failed it without a test
-  result: test_merged's run of feature 1's suite hit the sandbox's
+  time. Its first scoring, from 04:39 to 04:55 UTC, failed it without a
+  test result: test_merged's run of feature 1's suite hit the sandbox's
   600-second limit and counted no test (exit code -1, 0 passed, 0
-  failed), while feature 2's 84 tests passed. The merge cascade's
-  fresh runs of each agent's patch alone passed both suites, 100 and 84
-  tests, and the two agents had submitted identical patches, so the
-  patch the verdict is read from had passed in a fresh sandbox twice;
-  the other four arms' runs of the same suite took 4 to 7 seconds by
-  pytest's count. A suite cut off by the clock measured the sandbox, not
-  the patch, as a scoring on a full disk does, so at 11:43 UTC the run
-  was scored again from its own patches with `run.py rescore --force`,
-  which starts no agent: both suites passed, feature 1's 100 tests in
-  5.7 seconds, and the run counts as a pass. A second
-  timeout would have kept the fail. CooperBench counts a timed-out suite
-  as failed; PARITY.md (row 23) states the difference. The first
-  scoring is kept beside the run as eval.first-scoring.json, the
-  rescore's output as rescore.txt, and the queue's item records it. No
-  other suite has timed out in any curse-1 run made so far.
+  failed), while feature 2's 84 tests passed. The time went to the
+  runner's setup, not to the tests. The outlines runner (runner.sh)
+  first downloads 42 packages into the fresh sandbox with `uv sync`,
+  which took 1.6 to 8.3 minutes in the pair's other scorings, and then
+  limits the tests themselves to 300 seconds (`timeout 300`); feature
+  2's run, in the same sandbox just after, found every package already
+  downloaded. CooperBench's sandbox reports the timeout at 600 seconds
+  but waits for the command to end (eval/backends/docker.py, 50-55), and
+  the scoring took 817 seconds, so the suite most likely finished and
+  its result was thrown away. The merge cascade's fresh runs of each
+  agent's patch alone passed both suites, 100 and 84 tests, and the two
+  agents had submitted identical patches, so the patch the verdict is
+  read from had passed in a fresh sandbox twice. From 11:43 to 11:55 UTC
+  the run was scored again from its own patches with `run.py rescore
+  --force`, which starts no agent: both suites passed, feature 1's 100
+  tests in 5.7 seconds after a download of 6 minutes 46 seconds, and the
+  run counts as a pass. A second timeout would have kept the fail.
+  The rule is narrow: a suite cut off with no test counted is scored
+  again, once, only where the time plainly went outside the tests,
+  because the task's runner limits its own tests below the sandbox's
+  600 seconds, as the runners of outlines 1655, dspy 8394, go_chi 26
+  and 56 and datasets 6252 do, or because the merge cascade's fresh run
+  of the same patch finished that suite. Elsewhere, as under the
+  runners of typst, pillow, click and jinja, which limit nothing, a
+  patch that hangs a test is cut off the same way, and CooperBench's
+  fail stands. The rule was set after this run's first scoring, the one
+  result it has changed, and it can only turn a fail into a pass.
+  CooperBench counts every timed-out suite as failed, the
+  rule the published runs compared below were scored under; PARITY.md
+  (row 23) states the difference. The first scoring is kept beside the
+  run as eval.first-scoring.json, the rescore's output as rescore.txt,
+  and the queue's item records it; the run's finish.verdict.json and
+  scoring.log, written by its first finish, still say fail. No other
+  suite has timed out in any curse-1 run made so far.
 
 ## The result
 
@@ -240,7 +262,8 @@ two arms apart at this size (no exact McNemar p on passes is below
 0.5). On the seven of these pairs the paper's published Claude coop
 runs cover, they passed 2 (datasets 6252 and jinja 1559); ours passed 6
 under coop and 6 under sdlc, p = 0.125 each (report.md, Against
-CooperBench's published runs).
+CooperBench's published runs), sdlc's 6 counting the outlines run's
+second scoring, which CooperBench's rule would not have given it.
 
 ### What the protocol did
 
@@ -360,8 +383,9 @@ take the fixed prompt out.
   merges never conflicted on these pairs, and sdlc's agents submitted
   the integrated main. A larger sample may hold pairs where coop
   conflicts.
-- Two agents cost 1.7 to 2.7 times one agent's tokens under every
-  coordination setting, because each agent re-reads its whole context
+- Two agents cost 1.7 to 2.6 times one agent's tokens by the medians,
+  2.0 to 2.7 by the means, under every coordination setting, because
+  each agent re-reads its whole context
   on every turn: 95 to 96 percent of every arm's input is a prompt-cache
   read. In this route that context opens with the orchestrating
   session's own instructions (the pilot's README), so a pair's tokens
@@ -407,7 +431,8 @@ take the fixed prompt out.
 - raw/: for each counted run, result.json, eval.json, metrics.json,
   judge.json, harness.json, events.jsonl, audit.json, the agents'
   messages and patches, for the runs made again scoring.log, and for
-  sdlc's outlines run eval.first-scoring.json and rescore.txt, as
+  sdlc's outlines run eval.first-scoring.json and rescore.txt (its
+  finish.verdict.json and scoring.log keep the first scoring's fail), as
   bundle.py copies them, held to the repository's plain-text rule (two
   patches of sdlc's typst run, agent5.patch and agent9.patch, are not
   plain text and were left out); raw/*/config.json are the run

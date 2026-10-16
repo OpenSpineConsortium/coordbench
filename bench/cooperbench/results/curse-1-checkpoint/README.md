@@ -27,7 +27,7 @@ lane.js's effort knob and documentation.
 |---|---|---|---|
 | dottxt_ai_outlines 1655 f6_f7 | solo | no | the step's run met a full disk |
 | dottxt_ai_outlines 1655 f6_f7 | coop | yes | the step's run met a full disk |
-| dottxt_ai_outlines 1655 f6_f7 | sdlc | no | the step's run met a full disk |
+| dottxt_ai_outlines 1655 f6_f7 | sdlc | yes, once scored again | the step's run met a full disk |
 | dottxt_ai_outlines 1655 f6_f7 | coop-git | yes | the step's run met a full disk |
 | dottxt_ai_outlines 1655 f6_f7 | team | yes | the step's run met a full disk |
 | pallets_click 2068 f5_f11 | sdlc | yes | the step's agents were spawned twice |
@@ -42,6 +42,18 @@ of which its agent took 185 (agents_seconds), since its finish waited
 out the account's session limit from 08:58 to 09:12 UTC; the other nine
 runs' wall times exceed their agents' by 12 to 44 seconds. A wall-time
 figure takes that run's agents' own time.
+
+sdlc's outlines run failed its first scoring, when the sandbox cut one
+test suite off at 600 seconds with no test counted, and passed when its
+own patches were scored again from 11:43 to 11:55 UTC, after the pause
+(../curse-1-step-8/README.md says why). Its copy here carries the second
+scoring, as the step's does, with the first beside it as
+eval.first-scoring.json and the rescore's output as rescore.txt, so
+either bundle restores the same run; its finish.verdict.json and
+scoring.log keep the first scoring's fail, and so does its item in the
+queue at the pause,
+../curse-of-coordination-notes/run/curse-1-queue.jsonl, which the
+step's queue.jsonl corrects.
 
 Three more runs started that day and are not here, since their audits
 call them harness errors (the harness lost both agents) and the queue
