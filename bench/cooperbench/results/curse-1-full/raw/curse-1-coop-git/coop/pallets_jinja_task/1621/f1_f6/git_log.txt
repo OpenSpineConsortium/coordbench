@@ -1,0 +1,34 @@
+commit 3892c2afb6525cbdc90ccdb27b12c5d9df2f7111 (agent1)
+Merge: e35fa89 5384c30
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:25:18 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+    
+    # Conflicts:
+    #       src/jinja2/loaders.py
+
+commit 2333d1a609cf734fc08e22e87c485fb2ac680760 (agent2)
+Merge: 5384c30 e35fa89
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:24:49 2026 +0000
+
+    Merge team/agent1: combine fallback_searchpath with path_transform
+
+commit 5384c3096a3bd4494ed220bd371125e83257e81d
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:24:22 2026 +0000
+
+    Add path_transform to template loaders
+
+ src/jinja2/loaders.py | 145 +++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 132 insertions(+), 13 deletions(-)
+
+commit e35fa891abad357afdcfe2b2124059b1e43463a5
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:21:43 2026 +0000
+
+    Add fallback_searchpath to FileSystemLoader
+
+ src/jinja2/loaders.py | 34 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)

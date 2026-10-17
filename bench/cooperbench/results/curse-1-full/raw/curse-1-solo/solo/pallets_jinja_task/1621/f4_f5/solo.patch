@@ -1,0 +1,151 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..2a95ef44 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -165,52 +165,131 @@ class FileSystemLoader(BaseLoader):
+ 
+         loader = FileSystemLoader(["/override/templates", "/default/templates"])
+ 
++    An item of the list can also be a ``(path, priority)`` tuple to
++    control the search order independently of the order the paths are
++    given in. Paths with a higher priority are searched first. Paths
++    with the same priority are searched in the order they were given,
++    and a path without an explicit priority has priority ``0``. Regular
++    paths and tuples can be mixed, and priorities may be negative.
++
++    .. code-block:: python
++
++        loader = FileSystemLoader([
++            ("/high/priority/themes", 100),  # searched first
++            ("/medium/priority/plugins", 50),  # searched second
++            "/default/templates",  # priority 0, searched third
++            ("/low/priority/fallback", -10),  # searched last
++        ])
++
++    The paths that were resolved to a template are remembered, so
++    loading the same template name again does not search every
++    directory again. A remembered file that has since been deleted is
++    forgotten and the directories are searched again.
++
+     :param searchpath: A path, or list of paths, to the directory that
+-        contains the templates.
++        contains the templates. Each item of a list can be a path or a
++        ``(path, priority)`` tuple.
+     :param encoding: Use this encoding to read the text from template
+         files.
+     :param followlinks: Follow symbolic links in the path.
+ 
++    .. versionchanged:: 3.1
++        Paths can be given as ``(path, priority)`` tuples, and are
++        searched from the highest priority to the lowest.
++
++    .. versionchanged:: 3.1
++        Resolved template paths are cached for each loader.
++
+     .. versionchanged:: 2.8
+         Added the ``followlinks`` parameter.
+     """
+ 
+     def __init__(
+         self,
+-        searchpath: t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]],
++        searchpath: t.Union[
++            str,
++            os.PathLike,
++            t.Sequence[
++                t.Union[str, os.PathLike, t.Tuple[t.Union[str, os.PathLike], int]]
++            ],
++        ],
+         encoding: str = "utf-8",
+         followlinks: bool = False,
+     ) -> None:
+         if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+             searchpath = [searchpath]
+ 
+-        self.searchpath = [os.fspath(p) for p in searchpath]
++        # Pair every path with its priority. An item that is not a
++        # two-element tuple is a plain path with the default priority.
++        path_priority_pairs = []
++
++        for item in searchpath:
++            if isinstance(item, tuple) and len(item) == 2:
++                path, priority = item
++            else:
++                path, priority = item, 0
++
++            path_priority_pairs.append((os.fspath(path), priority))
++
++        # The sort is stable, and reverse=True keeps equal elements in
++        # their original order, so equal priorities keep the order given.
++        path_priority_pairs.sort(key=lambda pair: pair[1], reverse=True)
++
++        self.searchpath = [path for path, _ in path_priority_pairs]
+         self.encoding = encoding
+         self.followlinks = followlinks
++        # Maps a template name to the file it was found at, or to None
++        # if it was searched for and not found.
++        self._path_cache: t.Dict[str, t.Optional[str]] = {}
++
++    def _read_source(
++        self, filename: str, f: t.BinaryIO
++    ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        try:
++            contents = f.read().decode(self.encoding)
++        finally:
++            f.close()
++
++        mtime = os.path.getmtime(filename)
++
++        def uptodate() -> bool:
++            try:
++                return os.path.getmtime(filename) == mtime
++            except OSError:
++                return False
++
++        return contents, filename, uptodate
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        if template in self._path_cache:
++            cached = self._path_cache[template]
++
++            if cached is None:
++                raise TemplateNotFound(template)
++
++            f = open_if_exists(cached)
++
++            if f is not None:
++                return self._read_source(cached, f)
++
++            # The file is gone, forget it and search the paths again.
++            del self._path_cache[template]
++
+         pieces = split_template_path(template)
++
+         for searchpath in self.searchpath:
+             filename = os.path.join(searchpath, *pieces)
+             f = open_if_exists(filename)
++
+             if f is None:
+                 continue
+-            try:
+-                contents = f.read().decode(self.encoding)
+-            finally:
+-                f.close()
+-
+-            mtime = os.path.getmtime(filename)
+ 
+-            def uptodate() -> bool:
+-                try:
+-                    return os.path.getmtime(filename) == mtime
+-                except OSError:
+-                    return False
++            self._path_cache[template] = filename
++            return self._read_source(filename, f)
+ 
+-            return contents, filename, uptodate
++        self._path_cache[template] = None
+         raise TemplateNotFound(template)
+ 
+     def list_templates(self) -> t.List[str]:

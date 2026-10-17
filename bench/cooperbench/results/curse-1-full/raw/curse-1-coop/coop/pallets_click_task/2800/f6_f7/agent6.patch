@@ -1,0 +1,250 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index 666ad68..b027e67 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -112,6 +112,25 @@ def augment_usage_errors(
+         raise
+ 
+ 
++def _refill(current: t.Any, saved: t.Any) -> bool:
++    """Make a dictionary, list or set hold what ``saved`` holds, keeping
++    its identity. Return ``False`` and change nothing when the two are not
++    the same plain container type, so that the caller replaces it.
++    """
++    if type(current) is not type(saved):
++        return False
++
++    if isinstance(current, (dict, set)):
++        current.clear()
++        current.update(saved)
++    elif isinstance(current, list):
++        current[:] = saved
++    else:
++        return False
++
++    return True
++
++
+ def iter_params_for_processing(
+     invocation_order: cabc.Sequence[Parameter],
+     declaration_order: cabc.Sequence[Parameter],
+@@ -832,6 +851,156 @@ class Context:
+         """
+         return self._parameter_source.get(name)
+ 
++    # The attributes save_state captures, by how each one is copied. A
++    # list of names, rather than everything in ``vars(self)``, keeps live
++    # bookkeeping (such as the contexts nested below this one) out of a
++    # snapshot, since copying that would copy the whole context tree.
++
++    #: Copied with :func:`copy.deepcopy`, so a change to something nested
++    #: in them, made before or after the snapshot, never reaches the other.
++    _state_deep_copied = (
++        "params",
++        "obj",
++        "_meta",
++        "default_map",
++        "_parameter_source",
++    )
++    #: Containers of plain values, copied one level deep.
++    _state_shallow_copied = (
++        "args",
++        "_protected_args",
++        "_opt_prefixes",
++        "_close_callbacks",
++        "help_option_names",
++    )
++    #: Values and objects that are shared on purpose: the parent and the
++    #: command are the context's place in the tree, the rest are settings.
++    _state_shared = (
++        "parent",
++        "command",
++        "info_name",
++        "invoked_subcommand",
++        "terminal_width",
++        "max_content_width",
++        "allow_extra_args",
++        "allow_interspersed_args",
++        "ignore_unknown_options",
++        "token_normalize_func",
++        "resilient_parsing",
++        "auto_envvar_prefix",
++        "color",
++        "show_default",
++    )
++    #: Captured too, but never written back: how deeply the context is
++    #: entered and the stack that closes the resources it holds. Rewinding
++    #: them would skip or repeat a cleanup, and a stack that
++    #: :meth:`close` has replaced is not the live one any more.
++    _state_bookkeeping = ("_depth", "_exit_stack")
++
++    #: Names a snapshot may use in place of the attribute's own name.
++    _state_aliases = {
++        "protected_args": "_protected_args",
++        "opt_prefixes": "_opt_prefixes",
++        "meta": "_meta",
++        "parameter_source": "_parameter_source",
++    }
++
++    def save_state(self) -> dict[str, t.Any]:
++        """Take a snapshot of the context's state that
++        :meth:`restore_state` can put back later, to try something on
++        the context and roll it back, for example around a nested
++        invocation, an error that is recovered from, or a test.
++
++        The snapshot is a dictionary keyed by attribute name: the
++        parameter values, the remaining arguments, the protected
++        arguments, the option prefixes, :attr:`obj`, the shared
++        :attr:`meta`, the default map and the parameter sources, with
++        the context's settings beside them. The parameters, the object,
++        the meta, the default map and the parameter sources are deep
++        copies, so changing something nested inside them later leaves the
++        snapshot as it was.
++
++        Everything such a value holds must be copyable by
++        :func:`copy.deepcopy`; an open file, for one, is not, and raises
++        the :exc:`TypeError` that ``deepcopy`` raises.
++
++        .. versionadded:: 8.2
++        """
++        # Imported here, as ``protected_args`` does with ``warnings``,
++        # because ``import click`` is held to a short list of modules.
++        import copy
++
++        memo: dict[int, t.Any] = {}
++        state: dict[str, t.Any] = {}
++        attributes = vars(self)
++
++        for name in self._state_deep_copied:
++            if name in attributes:
++                # One memo for all of them keeps an object that is
++                # reachable from two places a single object in the copy.
++                state[name] = copy.deepcopy(attributes[name], memo)
++
++        for name in self._state_shallow_copied:
++            if name in attributes:
++                state[name] = copy.copy(attributes[name])
++
++        for name in (*self._state_shared, *self._state_bookkeeping):
++            if name in attributes:
++                state[name] = attributes[name]
++
++        return state
++
++    def restore_state(self, snapshot: dict[str, t.Any]) -> None:
++        """Put the context back into the state that :meth:`save_state`
++        captured.
++
++        What the snapshot holds is copied again on the way back, so the
++        snapshot stays as it was taken and can be restored more than
++        once, and changes made to the context afterwards do not reach it.
++        A dictionary, list or set that the context already holds is
++        refilled in place rather than replaced, so :attr:`params`, and
++        :attr:`meta`, which the contexts of a command tree share, keep
++        being the same objects the rest of the program refers to.
++
++        The depth the context is entered to and its stack of resources
++        are not restored, and a resource opened or a function registered
++        with :meth:`call_on_close` since the snapshot is still closed
++        when the context is.
++
++        :param snapshot: A dictionary returned by :meth:`save_state`.
++
++        .. versionadded:: 8.2
++        """
++        import copy
++
++        memo: dict[int, t.Any] = {}
++        restored: dict[str, t.Any] = {}
++
++        # Copy everything before changing anything, so a value that
++        # cannot be copied leaves the context as it was.
++        for key, value in snapshot.items():
++            name = self._state_aliases.get(key, key)
++
++            if name in self._state_bookkeeping:
++                continue
++
++            if name in self._state_deep_copied:
++                value = copy.deepcopy(value, memo)
++            elif name in self._state_shallow_copied:
++                value = copy.copy(value)
++            elif name not in self._state_shared:
++                continue
++
++            restored[name] = value
++
++        attributes = vars(self)
++
++        for name, value in restored.items():
++            current = attributes.get(name)
++
++            if name in self._state_shared or not _refill(current, value):
++                setattr(self, name, value)
++
+ 
+ class Command:
+     """Commands are the basic building block of command line interfaces in
+diff --git a/src/click/shell_completion.py b/src/click/shell_completion.py
+index 6fd9e54..5a0b3ba 100644
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@ -271,8 +271,17 @@ class ShellComplete:
+         :param incomplete: Value being completed. May be empty.
+         """
+         ctx = _resolve_context(self.cli, self.ctx_args, self.prog_name, args)
+-        obj, incomplete = _resolve_incomplete(ctx, args, incomplete)
+-        return obj.shell_complete(ctx, incomplete)
++        state = _save_state(ctx)
++
++        try:
++            obj, incomplete = _resolve_incomplete(ctx, args, incomplete)
++            return obj.shell_complete(ctx, incomplete)
++        finally:
++            # A completion function may change the context it is given,
++            # its parameters or its object. Put them back so that nothing
++            # it does outlasts the completion.
++            if state is not None:
++                ctx.restore_state(state)
+ 
+     def format_completion(self, item: CompletionItem) -> str:
+         """Format a completion item into the form recognized by the
+@@ -471,6 +480,20 @@ def split_arg_string(string: str) -> list[str]:
+     return out
+ 
+ 
++def _save_state(ctx: Context) -> dict[str, t.Any] | None:
++    """Snapshot ``ctx``, or return ``None`` when it cannot be copied.
++
++    Completion has to work for every command, and a parameter value such
++    as an open file, or an object the user keeps on the context, may not
++    be copyable. Completing without the safety net is better than not
++    completing at all.
++    """
++    try:
++        return ctx.save_state()
++    except Exception:
++        return None
++
++
+ def _is_incomplete_argument(ctx: Context, param: Parameter) -> bool:
+     """Determine if the given parameter is an argument that can still
+     accept values.
+diff --git a/src/click/utils.py b/src/click/utils.py
+index 7ef90dd..e6332b3 100644
+--- a/src/click/utils.py
++++ b/src/click/utils.py
+@@ -148,6 +148,13 @@ class LazyFile:
+             return repr(self._f)
+         return f"<unopened file '{format_filename(self.name)}' {self.mode}>"
+ 
++    def __deepcopy__(self, memo: dict[int, t.Any]) -> LazyFile:
++        # A lazy file stands for a file that may not be open yet, and
++        # copying it would open the file, creating or truncating one
++        # opened for writing, only to fail on the stream. The copy is the
++        # file itself.
++        return self
++
+     def open(self) -> t.IO[t.Any]:
+         """Opens the file if it's not yet open.  This call might fail with
+         a :exc:`FileError`.  Not handling this error will produce an error

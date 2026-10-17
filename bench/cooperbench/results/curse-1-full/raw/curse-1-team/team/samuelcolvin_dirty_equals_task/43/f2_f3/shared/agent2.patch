@@ -1,0 +1,75 @@
+diff --git a/dirty_equals/__init__.py b/dirty_equals/__init__.py
+index ba8214e..dda2718 100644
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@ -21,6 +21,7 @@ from ._numeric import (
+ from ._other import FunctionCheck, IsJson, IsUUID
+ from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple
+ from ._strings import IsAnyStr, IsBytes, IsStr
++from ._other import IsEmail
+ 
+ __all__ = (
+     # base
+@@ -68,6 +69,7 @@ __all__ = (
+     # other
+     'FunctionCheck',
+     'IsJson',
++    'IsEmail',
+     'IsUUID',
+     # strings
+     'IsStr',
+diff --git a/dirty_equals/_other.py b/dirty_equals/_other.py
+index b2b8379..07081f1 100644
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@ -1,4 +1,5 @@
+ import json
++import re
+ from typing import Any, Callable, TypeVar, overload
+ from uuid import UUID
+ 
+@@ -120,6 +121,44 @@ class IsJson(DirtyEquals[JsonType]):
+             return False
+ 
+ 
++class IsEmail(DirtyEquals[str]):
++    """
++    A class that checks if a value is a valid email address, optionally checking the email's domain.
++    """
++
++    _email_regex = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}')
++
++    def __init__(self, domain: 'str | None' = None):
++        """
++        Args:
++            domain: The domain the email address must belong to, compared case-sensitively,
++                if omitted, any domain is accepted.
++
++        ```py title="IsEmail"
++        from dirty_equals import IsEmail
++
++        assert 'user@example.com' == IsEmail
++        assert 'user@example.com' == IsEmail()
++        assert 'user@example.com' == IsEmail(domain='example.com')
++        assert 'user@other.com' != IsEmail(domain='example.com')
++        assert 'user@Example.com' != IsEmail(domain='example.com')
++        assert 'not an email' != IsEmail
++        assert 123 != IsEmail
++        ```
++        """
++        self.domain = domain
++        super().__init__(domain if domain is not None else plain_repr('*'))
++
++    def equals(self, other: Any) -> bool:
++        if not isinstance(other, str) or not self._email_regex.fullmatch(other):
++            return False
++
++        if self.domain is None:
++            return True
++        else:
++            return other.rpartition('@')[2] == self.domain
++
++
+ class FunctionCheck(DirtyEquals[Any]):
+     """
+     Use a function to check if a value "equals" whatever you want to check

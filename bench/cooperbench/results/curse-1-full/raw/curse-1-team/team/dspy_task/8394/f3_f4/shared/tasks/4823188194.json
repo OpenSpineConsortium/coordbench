@@ -1,0 +1,1 @@
+{"id": "4823188194", "title": "Lead-only: integrate and submit feature 3", "owner": "agent1", "status": "done", "created_by": "bench-runner", "created_at": 1792248838.606335, "last_note": "integrated feature 3 (TTL) + agent2 feature 4 (cache stats); merged tree imports and tests pass; patch.txt written", "metadata": {"feature_id": 3, "assigned_to": "agent1", "lead_task": true}}

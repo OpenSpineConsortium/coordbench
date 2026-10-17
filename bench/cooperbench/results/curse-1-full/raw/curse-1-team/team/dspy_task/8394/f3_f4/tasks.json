@@ -1,0 +1,29 @@
+[
+  {
+    "id": "2e72c1ec89",
+    "title": "Implement feature 4",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792248838.6062882,
+    "last_note": "patch at /workspace/shared/agent2.patch (4 source files, no tests). get() semantics: hit = key found in memory or disk layer (membership test, not value truthiness, so a falsy cached value still counts as a hit); mem hit bumps hits+mem_hits, disk hit bumps hits+disk_hits (then promoted to memory), a lookup that finds nothing bumps misses; a cache_key failure returns None early and counts nothing. Counters are updated by Cache._record_cache_event under self._lock, which also feeds the per-call tracker found via settings.get('cache_usage_tracker'). stats() always returns all 4 keys as a plain dict copy.",
+    "metadata": {
+      "feature_id": 4,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "4823188194",
+    "title": "Lead-only: integrate and submit feature 3",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792248838.606335,
+    "last_note": "integrated feature 3 (TTL) + agent2 feature 4 (cache stats); merged tree imports and tests pass; patch.txt written",
+    "metadata": {
+      "feature_id": 3,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

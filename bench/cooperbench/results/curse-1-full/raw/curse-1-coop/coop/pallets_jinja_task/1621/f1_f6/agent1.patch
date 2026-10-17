@@ -1,0 +1,90 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..6c34b905 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -165,11 +165,31 @@ class FileSystemLoader(BaseLoader):
+ 
+         loader = FileSystemLoader(["/override/templates", "/default/templates"])
+ 
++    Fallback directories can be given with ``fallback_searchpath``. They
++    are only searched when the template is not found in any of the
++    primary ``searchpath`` directories, so a template in a primary
++    directory always wins over one with the same name in a fallback
++    directory.
++
++    .. code-block:: python
++
++        loader = FileSystemLoader("/theme", fallback_searchpath="/defaults")
++
+     :param searchpath: A path, or list of paths, to the directory that
+         contains the templates.
+     :param encoding: Use this encoding to read the text from template
+         files.
+     :param followlinks: Follow symbolic links in the path.
++    :param fallback_searchpath: A path, or list of paths, to directories
++        that are searched, in order, after all of ``searchpath`` when a
++        template is not found there.
++    :param path_transform: Optional callable taking a template name and
++        returning the name to actually look up; applied before the
++        search path lookup.
++
++    .. versionchanged:: 3.1
++        Added the ``fallback_searchpath`` and ``path_transform``
++        parameters.
+ 
+     .. versionchanged:: 2.8
+         Added the ``followlinks`` parameter.
+@@ -180,19 +200,42 @@ class FileSystemLoader(BaseLoader):
+         searchpath: t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]],
+         encoding: str = "utf-8",
+         followlinks: bool = False,
++        fallback_searchpath: t.Optional[
++            t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]]
++        ] = None,
++        path_transform: t.Optional[t.Callable[[str], str]] = None,
+     ) -> None:
+         if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+             searchpath = [searchpath]
+ 
+         self.searchpath = [os.fspath(p) for p in searchpath]
++
++        if fallback_searchpath is None:
++            fallback_searchpath = []
++        elif not isinstance(fallback_searchpath, abc.Iterable) or isinstance(
++            fallback_searchpath, str
++        ):
++            fallback_searchpath = [fallback_searchpath]
++
++        self.fallback_searchpath = [os.fspath(p) for p in fallback_searchpath]
+         self.encoding = encoding
+         self.followlinks = followlinks
++        self.path_transform = path_transform
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
+-        pieces = split_template_path(template)
+-        for searchpath in self.searchpath:
++        name = template
++        if self.path_transform is not None:
++            name = self.path_transform(template)
++
++        try:
++            pieces = split_template_path(name)
++        except TemplateNotFound:
++            # Report the name the caller asked for, not the transformed one.
++            raise TemplateNotFound(template) from None
++
++        for searchpath in self.searchpath + self.fallback_searchpath:
+             filename = os.path.join(searchpath, *pieces)
+             f = open_if_exists(filename)
+             if f is None:
+@@ -215,7 +258,7 @@ class FileSystemLoader(BaseLoader):
+ 
+     def list_templates(self) -> t.List[str]:
+         found = set()
+-        for searchpath in self.searchpath:
++        for searchpath in self.searchpath + self.fallback_searchpath:
+             walk_dir = os.walk(searchpath, followlinks=self.followlinks)
+             for dirpath, _, filenames in walk_dir:
+                 for filename in filenames:

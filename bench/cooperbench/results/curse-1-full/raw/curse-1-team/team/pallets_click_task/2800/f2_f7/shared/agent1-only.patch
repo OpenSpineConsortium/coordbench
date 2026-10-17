@@ -1,0 +1,129 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index 666ad68..6255048 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -228,8 +228,16 @@ class Context:
+         value is not set, it defaults to the value from the parent
+         context. ``Command.show_default`` overrides this default for the
+         specific command.
++    :param on_exit: an optional callable that is invoked with this context
++        when the context is closed, before the callbacks registered with
++        :meth:`call_on_close` run and the resources entered with
++        :meth:`with_resource` are released. It is useful for logging,
++        collecting metrics or custom cleanup. An exception raised by the
++        callable is ignored so that it never prevents the rest of the
++        cleanup.
+ 
+     .. versionchanged:: 8.2
++        Added the ``on_exit`` parameter.
+         The ``protected_args`` attribute is deprecated and will be removed in
+         Click 9.0. ``args`` will contain remaining unparsed tokens.
+ 
+@@ -280,6 +288,7 @@ class Context:
+         token_normalize_func: t.Callable[[str], str] | None = None,
+         color: bool | None = None,
+         show_default: bool | None = None,
++        on_exit: t.Callable[[Context], t.Any] | None = None,
+     ) -> None:
+         #: the parent context or `None` if none exists.
+         self.parent = parent
+@@ -427,6 +436,13 @@ class Context:
+         #: Show option default values when formatting help text.
+         self.show_default: bool | None = show_default
+ 
++        #: Callable invoked with this context when it is closed, or
++        #: ``None``. See :meth:`close`.
++        self.on_exit: t.Callable[[Context], t.Any] | None = on_exit
++        # :meth:`exit` closes the context and the ``with`` block that
++        # leaves it closes it again, so the callback runs once per use.
++        self._on_exit_pending = True
++
+         self._close_callbacks: list[t.Callable[[], t.Any]] = []
+         self._depth = 0
+         self._parameter_source: dict[str, ParameterSource] = {}
+@@ -467,6 +483,7 @@ class Context:
+ 
+     def __enter__(self) -> Context:
+         self._depth += 1
++        self._on_exit_pending = True
+         push_context(self)
+         return self
+ 
+@@ -603,10 +620,27 @@ class Context:
+         return self._exit_stack.callback(f)
+ 
+     def close(self) -> None:
+-        """Invoke all close callbacks registered with
+-        :meth:`call_on_close`, and exit all context managers entered
+-        with :meth:`with_resource`.
++        """Invoke the ``on_exit`` callback if one was given, then all close
++        callbacks registered with :meth:`call_on_close`, and exit all
++        context managers entered with :meth:`with_resource`.
++
++        The ``on_exit`` callback receives this context. An exception it
++        raises is ignored, so that it can not stop the other callbacks
++        and resources from being cleaned up. It runs once each time the
++        context is used, even though :meth:`exit` and the end of a
++        ``with`` block both close it.
++
++        .. versionchanged:: 8.2
++            Invoke the ``on_exit`` callback.
+         """
++        if self.on_exit is not None and self._on_exit_pending:
++            self._on_exit_pending = False
++
++            try:
++                self.on_exit(self)
++            except Exception:
++                pass
++
+         self._exit_stack.close()
+         # In case the context is reused, create a new exit stack.
+         self._exit_stack = ExitStack()
+@@ -1123,6 +1157,7 @@ class Command:
+         info_name: str | None,
+         args: list[str],
+         parent: Context | None = None,
++        on_exit: t.Callable[[Context], t.Any] | None = None,
+         **extra: t.Any,
+     ) -> Context:
+         """This function when given an info name and arguments will kick
+@@ -1139,12 +1174,20 @@ class Command:
+                           the name of the command.
+         :param args: the arguments to parse as list of strings.
+         :param parent: the parent context if available.
++        :param on_exit: an optional callable that is invoked with the new
++                        context when it is closed. See :class:`Context`.
+         :param extra: extra keyword arguments forwarded to the context
+                       constructor.
+ 
++        .. versionchanged:: 8.2
++            Added the ``on_exit`` parameter.
++
+         .. versionchanged:: 8.0
+             Added the :attr:`context_class` attribute.
+         """
++        if on_exit is not None:
++            extra["on_exit"] = on_exit
++
+         for key, value in self.context_settings.items():
+             if key not in extra:
+                 extra[key] = value
+diff --git a/src/click/shell_completion.py b/src/click/shell_completion.py
+index 6fd9e54..8c28ffe 100644
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@ -542,8 +542,13 @@ def _resolve_context(
+     :param cli: Command being called.
+     :param prog_name: Name of the executable in the shell.
+     :param args: List of complete args before the incomplete value.
++
++    .. versionchanged:: 8.2
++        An ``on_exit`` callback in ``ctx_args`` is not given to the
++        contexts, since completion runs no command and closes none of them.
+     """
+     ctx_args["resilient_parsing"] = True
++    ctx_args.pop("on_exit", None)
+     ctx = cli.make_context(prog_name, args.copy(), **ctx_args)
+     args = ctx._protected_args + ctx.args
+ 

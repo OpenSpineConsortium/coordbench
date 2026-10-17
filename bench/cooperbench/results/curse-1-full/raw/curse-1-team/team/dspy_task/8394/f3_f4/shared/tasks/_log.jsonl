@@ -1,0 +1,8 @@
+{"kind": "create", "task_id": "2e72c1ec89", "by": "bench-runner", "title": "Implement feature 4", "ts": 1792248838.606291}
+{"kind": "create", "task_id": "4823188194", "by": "bench-runner", "title": "Lead-only: integrate and submit feature 3", "ts": 1792248838.6063375}
+{"kind": "claim", "task_id": "2e72c1ec89", "by": "agent2", "ts": 1792248866.4186356}
+{"kind": "claim", "task_id": "4823188194", "by": "agent1", "ts": 1792248876.492938}
+{"kind": "update", "task_id": "4823188194", "by": "agent1", "status": "in_progress", "note": "implementing TTL (feature 3) in cache.py and clients/__init__.py", "ts": 1792248876.637769}
+{"kind": "update", "task_id": "4823188194", "by": "agent1", "status": "in_progress", "note": "feature 3 implemented and tested; waiting for agent2.patch to integrate", "ts": 1792249128.4910643}
+{"kind": "update", "task_id": "2e72c1ec89", "by": "agent2", "status": "done", "note": "patch at /workspace/shared/agent2.patch (4 source files, no tests). get() semantics: hit = key found in memory or disk layer (membership test, not value truthiness, so a falsy cached value still counts as a hit); mem hit bumps hits+mem_hits, disk hit bumps hits+disk_hits (then promoted to memory), a lookup that finds nothing bumps misses; a cache_key failure returns None early and counts nothing. Counters are updated by Cache._record_cache_event under self._lock, which also feeds the per-call tracker found via settings.get('cache_usage_tracker'). stats() always returns all 4 keys as a plain dict copy.", "ts": 1792249315.557747}
+{"kind": "update", "task_id": "4823188194", "by": "agent1", "status": "done", "note": "integrated feature 3 (TTL) + agent2 feature 4 (cache stats); merged tree imports and tests pass; patch.txt written", "ts": 1792249400.3038065}

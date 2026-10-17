@@ -1,0 +1,15 @@
+diff --cc dirty_equals/_other.py
+index 13d1f8d,0f40f97..0000000
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@@ -1,6 -1,6 +1,10 @@@
+  import json
+  import re
+++<<<<<<< HEAD
+ +from typing import Any, Callable, Optional, TypeVar, overload
+++=======
++ from typing import Any, Callable, TypeVar, overload
+++>>>>>>> agent1
+  from uuid import UUID
+  
+  from ._base import DirtyEquals

@@ -1,0 +1,382 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index 666ad68..1f18741 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -132,6 +132,13 @@ def iter_params_for_processing(
+     return sorted(declaration_order, key=sort_key)
+ 
+ 
++def _context_name(ctx: Context) -> str:
++    """A readable name for a context in an error message: its command
++    path, else its command's name, else the command's class.
++    """
++    return ctx.command_path or ctx.command.name or type(ctx.command).__name__
++
++
+ class ParameterSource(enum.Enum):
+     """This is an :class:`~enum.Enum` that indicates the source of a
+     parameter's value.
+@@ -228,6 +235,16 @@ class Context:
+         value is not set, it defaults to the value from the parent
+         context. ``Command.show_default`` overrides this default for the
+         specific command.
++    :param validate_nesting: if this flag is enabled the context keeps
++        track of the child contexts made with :meth:`_make_sub_context`,
++        which inherit the flag, and :meth:`close` raises a
++        :exc:`RuntimeError` naming the children that are still open
++        instead of closing a parent before its children. This catches
++        child contexts that are leaked past their parent's cleanup. The
++        default is ``False``; shell completion always turns it off.
++
++    .. versionchanged:: 8.2
++        Added the ``validate_nesting`` parameter.
+ 
+     .. versionchanged:: 8.2
+         The ``protected_args`` attribute is deprecated and will be removed in
+@@ -280,6 +297,7 @@ class Context:
+         token_normalize_func: t.Callable[[str], str] | None = None,
+         color: bool | None = None,
+         show_default: bool | None = None,
++        validate_nesting: bool = False,
+     ) -> None:
+         #: the parent context or `None` if none exists.
+         self.parent = parent
+@@ -432,6 +450,14 @@ class Context:
+         self._parameter_source: dict[str, ParameterSource] = {}
+         self._exit_stack = ExitStack()
+ 
++        #: Whether closing this context checks that every child context
++        #: made with :meth:`_make_sub_context` has been closed already.
++        #: Child contexts inherit the setting.
++        self.validate_nesting: bool = validate_nesting
++        #: The child contexts made by :meth:`_make_sub_context` that are
++        #: not closed yet. Only filled while :attr:`validate_nesting` is on.
++        self._child_contexts: list[Context] = []
++
+     @property
+     def protected_args(self) -> list[str]:
+         import warnings
+@@ -477,9 +503,13 @@ class Context:
+         tb: TracebackType | None,
+     ) -> None:
+         self._depth -= 1
+-        if self._depth == 0:
+-            self.close()
+-        pop_context()
++        try:
++            if self._depth == 0:
++                self.close()
++        finally:
++            # A failed nesting validation must not leave this context on
++            # the thread's context stack.
++            pop_context()
+ 
+     @contextmanager
+     def scope(self, cleanup: bool = True) -> cabc.Iterator[Context]:
+@@ -519,6 +549,145 @@ class Context:
+             if not cleanup:
+                 self._depth -= 1
+ 
++    #: Attributes that point at live objects. A snapshot keeps the very
++    #: same object, since copying a command or a parent context would
++    #: produce a second, unrelated one.
++    _state_by_reference: t.ClassVar[frozenset[str]] = frozenset(
++        {"parent", "command", "_exit_stack"}
++    )
++
++    #: Attributes that hold deep copies in a snapshot, so that a change
++    #: made to a nested value afterwards cannot reach the snapshot, and
++    #: restoring cannot hand the snapshot's own values to the context.
++    _state_deep_copied: t.ClassVar[frozenset[str]] = frozenset(
++        {"params", "obj", "_meta", "default_map", "_parameter_source"}
++    )
++
++    #: Bookkeeping of what is open right now. It is saved, but never put
++    #: back: a resource entered, or a child context created, after the
++    #: snapshot cannot be un-entered, and forgetting it would leak it.
++    _state_not_restored: t.ClassVar[frozenset[str]] = frozenset(
++        {"_exit_stack", "_depth", "_child_contexts"}
++    )
++
++    @staticmethod
++    def _copy_state_value(value: t.Any) -> t.Any:
++        """Deep copy a value for a snapshot. A value that cannot be copied,
++        such as an open file or a lock, is shared instead of failing the
++        whole snapshot, since the rest of its container still gets copied.
++        """
++        import copy
++
++        try:
++            return copy.deepcopy(value)
++        except Exception:
++            pass
++
++        if type(value) is dict:
++            return {k: Context._copy_state_value(v) for k, v in value.items()}
++
++        if type(value) is list:
++            return [Context._copy_state_value(v) for v in value]
++
++        return value
++
++    @staticmethod
++    def _copy_state_container(value: t.Any) -> t.Any:
++        """Shallow copy a list, set or dict, so that adding to it later
++        does not change a snapshot. Anything else is returned as is.
++        """
++        if isinstance(value, (list, set, dict)):
++            return value.copy()
++
++        return value
++
++    def _state_attribute_name(self, key: str) -> str:
++        """Map a snapshot key to the attribute it stands for, so that a
++        snapshot may name ``meta`` or ``protected_args`` for the private
++        ``_meta`` and ``_protected_args``.
++        """
++        attributes = vars(self)
++
++        if key in attributes or f"_{key}" not in attributes:
++            return key
++
++        return f"_{key}"
++
++    def save_state(self) -> dict[str, t.Any]:
++        """Take a snapshot of the state of this context, to put back later
++        with :meth:`restore_state`. This is for changing the context for a
++        while and then undoing the change, such as when running a nested
++        command, recovering from an error, or isolating a test.
++
++        The snapshot is a dictionary with one key for every attribute of
++        the context. :attr:`params`, :attr:`obj`, :attr:`meta`,
++        :attr:`default_map` and the parameter sources are deep copies, so
++        changing a nested value afterwards does not reach the snapshot.
++        :attr:`args`, the protected args and the option prefixes are
++        copies. The parent context, the command and the exit stack that
++        holds the registered resources are the same objects, not copies.
++        A value that cannot be deep copied, such as an open file, is
++        shared instead of copied.
++
++        .. versionadded:: 8.2
++        """
++        snapshot: dict[str, t.Any] = {}
++
++        for name, value in vars(self).items():
++            if name in self._state_by_reference:
++                snapshot[name] = value
++            elif name in self._state_deep_copied:
++                snapshot[name] = self._copy_state_value(value)
++            else:
++                snapshot[name] = self._copy_state_container(value)
++
++        return snapshot
++
++    def restore_state(self, snapshot: cabc.Mapping[str, t.Any]) -> None:
++        """Put this context back to the state a snapshot from
++        :meth:`save_state` holds. The snapshot is not changed or used up:
++        it holds its own copies, so it can be restored again later.
++
++        Only what the snapshot names is restored. Resources registered
++        with :meth:`with_resource` or :meth:`call_on_close`, and the
++        nesting depth, are not rolled back, since a resource that was
++        entered cannot be entered again. :attr:`meta` is restored in
++        place, so it stays the dictionary shared with the parent context.
++
++        :param snapshot: What :meth:`save_state` returned.
++
++        .. versionadded:: 8.2
++        """
++        if not isinstance(snapshot, cabc.Mapping):
++            raise TypeError(
++                "'snapshot' must be what 'save_state()' returned, not"
++                f" {type(snapshot).__name__!r}."
++            )
++
++        for key, value in snapshot.items():
++            name = self._state_attribute_name(key)
++
++            if name in self._state_not_restored:
++                continue
++
++            if name in self._state_by_reference:
++                setattr(self, name, value)
++            elif name in self._state_deep_copied:
++                self._restore_deep_copied(name, self._copy_state_value(value))
++            else:
++                setattr(self, name, self._copy_state_container(value))
++
++    def _restore_deep_copied(self, name: str, value: t.Any) -> None:
++        current = vars(self).get(name)
++
++        # The meta dictionary is shared with the parent and the sibling
++        # contexts, so change its contents and keep the dictionary.
++        if name == "_meta" and isinstance(current, dict) and isinstance(value, dict):
++            current.clear()
++            current.update(value)
++        else:
++            setattr(self, name, value)
++
+     @property
+     def meta(self) -> dict[str, t.Any]:
+         """This is a dictionary which is shared with all the contexts
+@@ -606,11 +775,40 @@ class Context:
+         """Invoke all close callbacks registered with
+         :meth:`call_on_close`, and exit all context managers entered
+         with :meth:`with_resource`.
++
++        If :attr:`validate_nesting` is enabled and a child context made
++        by this context is still open, nothing is closed and a
++        :exc:`RuntimeError` naming the open children is raised, so the
++        children can be closed and this context closed again.
+         """
++        if self.validate_nesting and self._child_contexts:
++            raise RuntimeError(self._open_children_message())
++
+         self._exit_stack.close()
+         # In case the context is reused, create a new exit stack.
+         self._exit_stack = ExitStack()
+ 
++        # A closed context is no longer an open child of its parent.
++        if self.parent is not None:
++            self.parent._forget_child_context(self)
++
++    def _open_children_message(self) -> str:
++        """Describe the child contexts that are still open, for the error
++        :meth:`close` raises when :attr:`validate_nesting` is on.
++        """
++        names = ", ".join(repr(_context_name(child)) for child in self._child_contexts)
++        return (
++            f"Cannot close context {_context_name(self)!r} with open child"
++            f" contexts: {names}. The child contexts are still open; close"
++            " them before closing the parent context."
++        )
++
++    def _forget_child_context(self, child: Context) -> None:
++        """Stop tracking a child context that has been closed."""
++        # Compare by identity, a context defines no equality of its own,
++        # and ignore a child that was never tracked or is closed twice.
++        self._child_contexts = [c for c in self._child_contexts if c is not child]
++
+     @property
+     def command_path(self) -> str:
+         """The computed command path.  This is used for the ``usage``
+@@ -726,9 +924,22 @@ class Context:
+         """Create a new context of the same type as this context, but
+         for a new command.
+ 
++        When :attr:`validate_nesting` is on, the new context inherits it
++        and is tracked until it is closed.
++
+         :meta private:
+         """
+-        return type(self)(command, info_name=command.name, parent=self)
++        sub_ctx = type(self)(
++            command,
++            info_name=command.name,
++            parent=self,
++            validate_nesting=self.validate_nesting,
++        )
++
++        if self.validate_nesting:
++            self._child_contexts.append(sub_ctx)
++
++        return sub_ctx
+ 
+     @t.overload
+     def invoke(
+@@ -770,15 +981,21 @@ class Context:
+ 
+             ctx = self._make_sub_context(other_cmd)
+ 
+-            for param in other_cmd.params:
+-                if param.name not in kwargs and param.expose_value:
+-                    kwargs[param.name] = param.type_cast_value(  # type: ignore
+-                        ctx, param.get_default(ctx)
+-                    )
++            try:
++                for param in other_cmd.params:
++                    if param.name not in kwargs and param.expose_value:
++                        kwargs[param.name] = param.type_cast_value(  # type: ignore
++                            ctx, param.get_default(ctx)
++                        )
+ 
+-            # Track all kwargs as params, so that forward() will pass
+-            # them on in subsequent calls.
+-            ctx.params.update(kwargs)
++                # Track all kwargs as params, so that forward() will pass
++                # them on in subsequent calls.
++                ctx.params.update(kwargs)
++            except BaseException:
++                # The sub context never reached its with block below, so
++                # close it here rather than leave it open under its parent.
++                ctx.close()
++                raise
+         else:
+             ctx = self
+ 
+@@ -1539,6 +1756,10 @@ class Group(Command):
+             with sub_ctx.scope(cleanup=False):
+                 commands[name] = command.to_info_dict(sub_ctx)
+ 
++            # The sub context only served the info dict. Close it so a
++            # parent that validates its nesting does not see it as open.
++            sub_ctx.close()
++
+         info_dict.update(commands=commands, chain=self.chain)
+         return info_dict
+ 
+diff --git a/src/click/shell_completion.py b/src/click/shell_completion.py
+index 6fd9e54..a168200 100644
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@ -271,8 +271,15 @@ class ShellComplete:
+         :param incomplete: Value being completed. May be empty.
+         """
+         ctx = _resolve_context(self.cli, self.ctx_args, self.prog_name, args)
+-        obj, incomplete = _resolve_incomplete(ctx, args, incomplete)
+-        return obj.shell_complete(ctx, incomplete)
++        # A completion function receives the context and may change it,
++        # so snapshot it and put it back, whatever the function does.
++        snapshot = ctx.save_state()
++
++        try:
++            obj, incomplete = _resolve_incomplete(ctx, args, incomplete)
++            return obj.shell_complete(ctx, incomplete)
++        finally:
++            ctx.restore_state(snapshot)
+ 
+     def format_completion(self, item: CompletionItem) -> str:
+         """Format a completion item into the form recognized by the
+@@ -544,6 +551,9 @@ def _resolve_context(
+     :param args: List of complete args before the incomplete value.
+     """
+     ctx_args["resilient_parsing"] = True
++    # Completion builds contexts that are never closed in the usual
++    # order, so they must not be held to the nesting validation.
++    ctx_args["validate_nesting"] = False
+     ctx = cli.make_context(prog_name, args.copy(), **ctx_args)
+     args = ctx._protected_args + ctx.args
+ 
+@@ -557,7 +567,13 @@ def _resolve_context(
+                 if cmd is None:
+                     return ctx
+ 
+-                ctx = cmd.make_context(name, args, parent=ctx, resilient_parsing=True)
++                ctx = cmd.make_context(
++                    name,
++                    args,
++                    parent=ctx,
++                    resilient_parsing=True,
++                    validate_nesting=False,
++                )
+                 args = ctx._protected_args + ctx.args
+             else:
+                 sub_ctx = ctx
+@@ -575,6 +591,7 @@ def _resolve_context(
+                         allow_extra_args=True,
+                         allow_interspersed_args=False,
+                         resilient_parsing=True,
++                        validate_nesting=False,
+                     )
+                     args = sub_ctx.args
+ 

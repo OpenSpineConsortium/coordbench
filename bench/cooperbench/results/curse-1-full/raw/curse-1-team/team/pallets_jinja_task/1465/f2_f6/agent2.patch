@@ -1,0 +1,99 @@
+diff --git a/src/jinja2/filters.py b/src/jinja2/filters.py
+index 80ea6504..e1f543f5 100644
+--- a/src/jinja2/filters.py
++++ b/src/jinja2/filters.py
+@@ -1157,12 +1157,26 @@ class _GroupTuple(t.NamedTuple):
+         return tuple.__str__(self)
+ 
+ 
++def _transform_group_key(
++    key: t.Any, key_transform: t.Optional[t.Callable[[t.Any], t.Any]]
++) -> t.Any:
++    """Apply ``key_transform`` to a group key for display, leaving the
++    key as it is when no transform was given.
++    """
++    if key_transform is None:
++        return key
++
++    return key_transform(key)
++
++
+ @pass_environment
+ def sync_do_groupby(
+     environment: "Environment",
+     value: "t.Iterable[V]",
+     attribute: t.Union[str, int],
+     default: t.Optional[t.Any] = None,
++    reverse: bool = False,
++    key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+ ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+     """Group a sequence of objects by an attribute using Python's
+     :func:`itertools.groupby`. The attribute can use dot notation for
+@@ -1203,6 +1217,36 @@ def sync_do_groupby(
+           <li>{{ city }}: {{ items|map(attribute="name")|join(", ") }}</li>
+         {% endfor %}</ul>
+ 
++    By default the groups are sorted in ascending order of the
++    attribute. Pass ``reverse=True`` to sort the groups in descending
++    order instead, for example to list the newest or highest values
++    first.
++
++    .. sourcecode:: jinja
++
++        <ul>{% for year, items in posts|groupby("year", reverse=true) %}
++          <li>{{ year }}: {{ items|map(attribute="title")|join(", ") }}</li>
++        {% endfor %}</ul>
++
++    You can pass a callable as ``key_transform`` to change how each
++    group's key is displayed, for example to format a date. The
++    callable is applied only to the key that is yielded, after the
++    items have been sorted and grouped by the original attribute value,
++    so it never changes which items end up together. It combines with
++    ``reverse``, which only controls the order of the groups.
++
++    .. sourcecode:: jinja
++
++        {% for month, items in events|groupby("date", key_transform=fmt) %}
++          <li>{{ month }}: {{ items|map(attribute="name")|join(", ") }}</li>
++        {% endfor %}
++
++    .. versionchanged:: 3.1
++        Added the ``key_transform`` parameter.
++
++    .. versionchanged:: 3.1
++        Added the ``reverse`` parameter.
++
+     .. versionchanged:: 3.0
+         Added the ``default`` parameter.
+ 
+@@ -1211,8 +1255,8 @@ def sync_do_groupby(
+     """
+     expr = make_attrgetter(environment, attribute, default=default)
+     return [
+-        _GroupTuple(key, list(values))
+-        for key, values in groupby(sorted(value, key=expr), expr)
++        _GroupTuple(_transform_group_key(key, key_transform), list(values))
++        for key, values in groupby(sorted(value, key=expr, reverse=reverse), expr)
+     ]
+ 
+ 
+@@ -1222,11 +1266,17 @@ async def do_groupby(
+     value: "t.Union[t.AsyncIterable[V], t.Iterable[V]]",
+     attribute: t.Union[str, int],
+     default: t.Optional[t.Any] = None,
++    reverse: bool = False,
++    key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+ ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+     expr = make_attrgetter(environment, attribute, default=default)
+     return [
+-        _GroupTuple(key, await auto_to_list(values))
+-        for key, values in groupby(sorted(await auto_to_list(value), key=expr), expr)
++        _GroupTuple(
++            _transform_group_key(key, key_transform), await auto_to_list(values)
++        )
++        for key, values in groupby(
++            sorted(await auto_to_list(value), key=expr, reverse=reverse), expr
++        )
+     ]
+ 
+ 

@@ -1,4 +1,4 @@
-# The curse of coordination: where the experiment stands, 2026-10-16
+# The curse of coordination: where the experiment stands, 2026-10-17
 
 This folder is the handoff from the sessions that ran the experiment on
 2026-10-15 and 2026-10-16 to the session that runs the next step, which
@@ -6,6 +6,31 @@ may work under another account (the checkpoint, below). The question is
 the one in bench/cooperbench/PLAN.md: does Symphony's claim protocol (the
 sdlc arm) let two Claude Code agents finish CooperBench's task pairs as
 often as one agent does, and at what cost in time and tokens.
+
+## 2026-10-17: the full run is done
+
+- A session under the new Project resumed the run as this file said: it
+  merged #27, restored the 179 finished runs from the bundles on a fresh
+  container (restore-bundles.py copied 179 runs and left none out),
+  released the 36 paused runs with batch-boundary.sh at 13:47 UTC and
+  ran them on three lanes at effort xhigh, from 13:47 to about 15:10
+  UTC. All 36 are clean by their audit, none was put back as a harness
+  error and no suite timed out, so none was scored a second time.
+- The full run's 215 runs, the 43 pairs of the order under solo, coop,
+  sdlc, coop-git and team, are all done. ../curse-1-full/ records them:
+  the figures over every run and raw/, the full run's 175 runs (the
+  step's 40 stay in ../curse-1-step-8/raw/).
+- Passes over the 43 pairs: solo 33, coop 30, sdlc 32, coop-git 32 and
+  team 33. coop is the furthest below solo, by three pairs; sdlc and
+  coop-git are one below and team ties. sdlc passed
+  two more pairs than coop at 1.6 times its wall time and 1.2 times its
+  cost. No difference is significant by an exact McNemar test (solo
+  against coop: 5 pairs only solo passed, 2 only coop, p about 0.45).
+  ../curse-1-full/README.md gives each batch and the costs.
+- The figures are the owner's to read first, and stay out of the grant
+  by the owner's rule of 2026-10-15 (18:01 UTC) until xblossom has been
+  tried. What comes next is the owner's choice (step 7 below); no bench
+  run is queued.
 
 ## 2026-10-16, 19:02 UTC: the checkpoint
 
@@ -24,10 +49,11 @@ often as one agent does, and at what cost in time and tokens.
 - Interim, and out of the grant by the owner's rule: over the 35 pairs
   every arm has finished, solo and team passed 26 and coop, sdlc and
   coop-git 25 each. ../curse-1-checkpoint/README.md gives each batch.
-- Where the state is: ../curse-1-checkpoint/raw/ holds the full run's 139
-  finished runs, ../curse-1-checkpoint/interim/ the interim report and
-  summary over all 179 finished runs of the tag, run/curse-1-queue.jsonl
-  the queue at the checkpoint, and run/ the scripts the session drove the
+- Where the state was: ../curse-1-checkpoint/raw/ held the full run's
+  139 finished runs (now in ../curse-1-full/raw/),
+  ../curse-1-checkpoint/interim/ the interim report and summary over
+  all 179 finished runs of the tag, run/curse-1-queue.jsonl the queue
+  at the checkpoint, and run/ the scripts the session drove the
   run with (What is here, below). The logs with their transcripts stay on
   the container that made them and, as a .tar.gz without workspaces, in
   the old Project's shared folder (coordbench/curse-1-logs-2026-10-16.tar.gz,
@@ -112,8 +138,10 @@ often as one agent does, and at what cost in time and tokens.
     copied.
 - run/: the state of the full run on the container that ran it, and the
   scripts that drove it.
-  - curse-1-queue.jsonl: the queue at the checkpoint of 2026-10-16,
-    19:02 UTC: 179 items done and 36 paused, none running. Its item for
+  - curse-1-queue.jsonl: the queue at the end of the full run, on
+    2026-10-17: all 215 items done. At the checkpoint of 2026-10-16 it
+    held 179 done and 36 paused; the repository's history keeps that.
+    Its item for
     sdlc's outlines run holds the second scoring's pass and, under
     rescored, the first scoring's fail.
   - order-43.txt: the 43 gradable pairs in the nested stratified order.
@@ -134,8 +162,9 @@ often as one agent does, and at what cost in time and tokens.
   - record-full.sh: step 7's commands over all 43 pairs (subset.py,
     report.py, summary.py and bundle.py), from a copy of the queue whose
     full-run items get the sample record; it made
-    ../curse-1-checkpoint/interim/.
-  - checkpoint-bundle.sh: how ../curse-1-checkpoint/raw/ was made.
+    ../curse-1-checkpoint/interim/ and the figures of ../curse-1-full/.
+  - checkpoint-bundle.sh: how ../curse-1-checkpoint/raw/ was made, and
+    then ../curse-1-full/raw/.
   - restore-bundles.py: puts the bundled runs back into a logs
     directory on a new container (below).
   - audit-backfill.jsonl: the audit's verdict on each of the 68 runs
@@ -144,15 +173,17 @@ often as one agent does, and at what cost in time and tokens.
   every run:
   - ../curse-1-pilot/
   - ../curse-1-step-8/
-  - ../curse-1-checkpoint/, the full run's finished runs at the
-    checkpoint of 2026-10-16, with the interim figures over every
-    finished run of the tag
+  - ../curse-1-full/, the full run: its figures over all 215 runs of
+    the tag, and its 175 runs
+  - ../curse-1-checkpoint/, the interim figures over the 179 runs
+    finished by the checkpoint of 2026-10-16, kept for the figures
+    read from transcripts
   - ../xblossom-screen/
 
 ## Where things stand
 
-- The full run (step 6 below): 179 of the tag's 215 runs are done and 36
-  paused, as the checkpoint above says.
+- The full run: all 215 runs of the tag are done and recorded in
+  ../curse-1-full/ (2026-10-17, above).
 - The pilot (../curse-1-pilot/) and the step of 8 pairs
   (../curse-1-step-8/, #19). The step ran 40 runs and first reported
   solo 5 of 8 and every two-agent arm 6 of 8, nothing significant.
@@ -232,8 +263,8 @@ On a new container:
    directory is that one.
 3. Put the bundled runs back into the logs directory, from this folder:
    `python3 run/restore-bundles.py .. ~/cooperbench/logs`, whose default
-   bundles are curse-1-pilot, curse-1-step-8 and curse-1-checkpoint,
-   which together hold every one of the tag's 179 finished runs (`--dry-run`
+   bundles are curse-1-pilot, curse-1-step-8 and curse-1-full,
+   which together hold every one of the tag's 215 runs (`--dry-run`
    says what it would copy). It copies each bundled run whose audit is
    clean and never replaces a run the logs already hold, so name every
    bundle in the one call. Where two bundles hold a run at one path,
@@ -243,7 +274,8 @@ On a new container:
    transcripts, so the figures read from them (tool calls, the
    communication overhead) cover only the runs made on the container at
    hand; ../curse-1-checkpoint/interim/ keeps them for the 179 runs
-   finished by the checkpoint.
+   finished by the checkpoint, and ../curse-1-full/report.md has them
+   for the 36 runs made on 2026-10-17.
 4. A session that can read the old Project's shared folder (one of the
    account that made it) can take the archive in place of steps 2 and
    3: `tar -xzf /mnt/project-files/coordbench/curse-1-logs-2026-10-16.tar.gz -C ~/cooperbench`
@@ -251,6 +283,11 @@ On a new container:
    included.
 
 ## The next steps, in order
+
+Steps 1 to 6 are done (2026-10-17, above); they stay as they were
+written, since a rerun of the tag follows them, though restoring now
+gives the 215 runs and leaves nothing to release. What is left is step
+7, the owner's choice.
 
 At the checkpoint of 19:02 UTC on 2026-10-16 everything before the full
 run is done (the reruns, the arms' order and the step of 8's figures),
@@ -342,7 +379,7 @@ name run/, which is this folder.
      deleted, as at the checkpoint;
    - restore-bundles.py's default then names curse-1-full in place of
      curse-1-checkpoint (tests/test_restore_bundles.py holds each
-     default bundle to a raw/), and ../curse-1-checkpoint/raw/ goes,
+     default bundle to a raw/), and the checkpoint's raw/ goes,
      since curse-1-full/raw/ holds all of it;
      ../curse-1-checkpoint/interim/ stays, since on a restored
      container report.py reads tool calls and messages only from the 36

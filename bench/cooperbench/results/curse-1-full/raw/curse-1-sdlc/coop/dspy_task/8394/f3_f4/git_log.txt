@@ -1,0 +1,57 @@
+commit ebc275c10e5e7bcff513eb231855aba3b693092f (main)
+Merge: 4cccc389 1a1d0cf1
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 15:06:37 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit 1a1d0cf1cf9180da8a5620b87271b8fe517c696d (claude/4)
+Merge: 9f473b99 4cccc389
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 15:06:36 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/4
+    
+    # Conflicts:
+    #       dspy/clients/cache.py
+
+commit 9f473b990599e11cabb5c3c2422284a112463cad
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 15:05:40 2026 +0000
+
+    Add cache-statistics API: dspy.cache.stats(), reset_stats() and Prediction.get_cache_usage()
+    
+    Cache.get() counts memory hits, disk hits and misses under the cache lock. With
+    track_usage=True a CacheUsageTracker, set up beside the LM usage tracker, collects
+    the events of one call so Prediction.get_cache_usage() reports them.
+
+ dspy/clients/cache.py         | 45 ++++++++++++++++++++++++++++++++++++++++
+ dspy/primitives/prediction.py | 11 ++++++++++
+ dspy/primitives/program.py    |  8 +++++---
+ dspy/utils/usage_tracker.py   | 48 +++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 109 insertions(+), 3 deletions(-)
+
+commit 4cccc389b8bcc7a5a22b2276789e3296a9cf47f7
+Merge: 3ded7a62 690da2fe
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 15:01:27 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit 690da2fed95133732f6f0ef2dd9559dc70323729 (claude/3)
+Author: agent1 <agent1@coordbench.local>
+Date:   Sat Oct 17 15:01:21 2026 +0000
+
+    Add optional per-entry TTL to the DSPy cache layers
+    
+    ttl switches the memory layer to cachetools.TTLCache and is forwarded to
+    FanoutCache.set(expire=...) on disk; a miss lazily purges expired disk entries.
+    configure_cache(ttl=...), Cache(..., ttl=...) and dspy.clients.set_ttl() set it;
+    ttl=None keeps the old infinite-life behaviour.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ dspy/clients/__init__.py | 18 ++++++++++++++++
+ dspy/clients/cache.py    | 55 +++++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 68 insertions(+), 5 deletions(-)

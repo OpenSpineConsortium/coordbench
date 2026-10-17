@@ -1,0 +1,1647 @@
+{
+  "format": "coordbench-difficulty/1",
+  "method": {
+    "solo_success": "share of the model's scored Solo runs of the pair that passed (binary with one run)",
+    "scored": "eval.json present without an error and no harness error in audit.json; the rest are left out",
+    "d": "1 - mean over the models that scored the pair Solo of Solo_m(t)",
+    "d_tilde": "min-max rescale of d over the pairs scored here, not the paper's 652",
+    "buckets": "10 equal-width buckets over [0, 1], bucket = floor(10 d~), 1.0 in the last",
+    "pairs": "an arm's curves use the pairs both it and that model's Solo scored",
+    "auc": "trapezoid over the filled bucket midpoints, first to last; none with fewer than two",
+    "pooling": "raw counts summed per bucket across models (Algorithm 1 lines 13-17)"
+  },
+  "notes": [
+    "1 Solo model(s): claude-sonnet-5-5; d takes 2 distinct value(s) over 43 pair(s).",
+    "With one or two models d is coarse ({0, 1} or {0, 0.5, 1} with one run each), so at most three buckets fill: the curves, areas and retention are degenerate and not comparable with Table 5's five models.",
+    "d~ is rescaled over the pairs scored here, not the paper's 652; the paper's per-pair Solo outcomes are unpublished, so these pairs cannot be placed on its scale."
+  ],
+  "models": [
+    "claude-sonnet-5-5"
+  ],
+  "range": {
+    "min": 0.0,
+    "max": 1.0
+  },
+  "pairs": {
+    "dottxt_ai_outlines_task/1655/f6_f7": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "dottxt_ai_outlines_task/1655/f7_f10": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "dspy_task/8394/f3_f4": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "dspy_task/8394/f3_f5": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "go_chi_task/26/f1_f2": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "go_chi_task/56/f1_f5": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "huggingface_datasets_task/3997/f2_f4": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "huggingface_datasets_task/6252/f4_f6": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2068/f1_f6": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2068/f2_f10": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "pallets_click_task/2068/f5_f11": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2068/f5_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2068/f6_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2068/f7_f10": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2800/f1_f3": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2800/f1_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2800/f2_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2800/f6_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_click_task/2956/f1_f8": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1465/f2_f3": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1465/f2_f6": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1559/f1_f8": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1559/f4_f10": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1559/f4_f8": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1559/f6_f9": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1621/f1_f6": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1621/f2_f9": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1621/f3_f5": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pallets_jinja_task/1621/f4_f10": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "pallets_jinja_task/1621/f4_f5": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "pallets_jinja_task/1621/f6_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pillow_task/25/f1_f5": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pillow_task/25/f2_f3": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "pillow_task/290/f2_f3": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "pillow_task/290/f3_f5": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "pillow_task/290/f4_f5": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "pillow_task/68/f1_f5": {
+      "d": 1.0,
+      "models": {
+        "claude-sonnet-5-5": 0.0
+      },
+      "d_tilde": 1.0,
+      "bucket": 9
+    },
+    "samuelcolvin_dirty_equals_task/43/f2_f3": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "samuelcolvin_dirty_equals_task/43/f3_f7": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "typst_task/6554/f1_f9": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "typst_task/6554/f4_f9": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "typst_task/6554/f5_f9": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    },
+    "typst_task/6554/f7_f8": {
+      "d": 0.0,
+      "models": {
+        "claude-sonnet-5-5": 1.0
+      },
+      "d_tilde": 0.0,
+      "bucket": 0
+    }
+  },
+  "curves": {
+    "coop|claude-sonnet-5-5": {
+      "arm": "coop",
+      "model": "claude-sonnet-5-5",
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 28,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.8484848484848485,
+          "wilson_arm": [
+            0.6907978686153953,
+            0.9334964074203904
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 2,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.2,
+          "wilson_arm": [
+            0.056680947980693314,
+            0.5098431532792765
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.4718181818181818,
+        "delta_auc": -0.021818181818181848,
+        "retention": 1.0484848484848486,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    },
+    "sdlc|claude-sonnet-5-5": {
+      "arm": "sdlc",
+      "model": "claude-sonnet-5-5",
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 30,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.9090909090909091,
+          "wilson_arm": [
+            0.7642705646564897,
+            0.968596628950737
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 2,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.2,
+          "wilson_arm": [
+            0.056680947980693314,
+            0.5098431532792765
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.4990909090909091,
+        "delta_auc": -0.04909090909090913,
+        "retention": 1.1090909090909091,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    },
+    "coop-git|claude-sonnet-5-5": {
+      "arm": "coop-git",
+      "model": "claude-sonnet-5-5",
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 31,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.9393939393939394,
+          "wilson_arm": [
+            0.8039341828220181,
+            0.9832194695709291
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 1,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.1,
+          "wilson_arm": [
+            0.01787574951572113,
+            0.4041563854975721
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.46772727272727277,
+        "delta_auc": -0.017727272727272814,
+        "retention": 1.0393939393939395,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    },
+    "team|claude-sonnet-5-5": {
+      "arm": "team",
+      "model": "claude-sonnet-5-5",
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 31,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.9393939393939394,
+          "wilson_arm": [
+            0.8039341828220181,
+            0.9832194695709291
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 2,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.2,
+          "wilson_arm": [
+            0.056680947980693314,
+            0.5098431532792765
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.5127272727272727,
+        "delta_auc": -0.06272727272727274,
+        "retention": 1.1393939393939394,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    }
+  },
+  "pooled": {
+    "coop": {
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 28,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.8484848484848485,
+          "wilson_arm": [
+            0.6907978686153953,
+            0.9334964074203904
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 2,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.2,
+          "wilson_arm": [
+            0.056680947980693314,
+            0.5098431532792765
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.4718181818181818,
+        "delta_auc": -0.021818181818181848,
+        "retention": 1.0484848484848486,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    },
+    "sdlc": {
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 30,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.9090909090909091,
+          "wilson_arm": [
+            0.7642705646564897,
+            0.968596628950737
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 2,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.2,
+          "wilson_arm": [
+            0.056680947980693314,
+            0.5098431532792765
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.4990909090909091,
+        "delta_auc": -0.04909090909090913,
+        "retention": 1.1090909090909091,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    },
+    "coop-git": {
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 31,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.9393939393939394,
+          "wilson_arm": [
+            0.8039341828220181,
+            0.9832194695709291
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 1,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.1,
+          "wilson_arm": [
+            0.01787574951572113,
+            0.4041563854975721
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.46772727272727277,
+        "delta_auc": -0.017727272727272814,
+        "retention": 1.0393939393939395,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    },
+    "team": {
+      "buckets": [
+        {
+          "bucket": 0,
+          "midpoint": 0.05,
+          "n": 33,
+          "n_solo": 33,
+          "k_solo": 33,
+          "n_arm": 33,
+          "k_arm": 31,
+          "rate_solo": 1.0,
+          "wilson_solo": [
+            0.8957265699643882,
+            1.0
+          ],
+          "rate_arm": 0.9393939393939394,
+          "wilson_arm": [
+            0.8039341828220181,
+            0.9832194695709291
+          ]
+        },
+        {
+          "bucket": 1,
+          "midpoint": 0.15,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 2,
+          "midpoint": 0.25,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 3,
+          "midpoint": 0.35,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 4,
+          "midpoint": 0.45,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 5,
+          "midpoint": 0.55,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 6,
+          "midpoint": 0.65,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 7,
+          "midpoint": 0.75,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 8,
+          "midpoint": 0.85,
+          "n": 0,
+          "n_solo": 0,
+          "k_solo": 0,
+          "n_arm": 0,
+          "k_arm": 0,
+          "rate_solo": null,
+          "wilson_solo": null,
+          "rate_arm": null,
+          "wilson_arm": null
+        },
+        {
+          "bucket": 9,
+          "midpoint": 0.95,
+          "n": 10,
+          "n_solo": 10,
+          "k_solo": 0,
+          "n_arm": 10,
+          "k_arm": 2,
+          "rate_solo": 0.0,
+          "wilson_solo": [
+            0.0,
+            0.2775401687666166
+          ],
+          "rate_arm": 0.2,
+          "wilson_arm": [
+            0.056680947980693314,
+            0.5098431532792765
+          ]
+        }
+      ],
+      "summary": {
+        "auc_solo": 0.44999999999999996,
+        "auc_arm": 0.5127272727272727,
+        "delta_auc": -0.06272727272727274,
+        "retention": 1.1393939393939394,
+        "limits": [
+          0.05,
+          0.95
+        ],
+        "filled_buckets": 2,
+        "pairs": 43
+      }
+    }
+  }
+}

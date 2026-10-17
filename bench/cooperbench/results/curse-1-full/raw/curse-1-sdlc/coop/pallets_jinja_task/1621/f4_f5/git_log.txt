@@ -1,0 +1,55 @@
+commit 9872413193ca39c881f483376f97e8482de10a17 (main)
+Merge: d253e64 84e52a1
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:35:02 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit 84e52a136666860d1836dfefa1c976176b48b9b6 (claude/4)
+Merge: 57a7077 d253e64
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:34:49 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/4
+
+commit 57a7077e179146135fbeb61a8093764b2f3849aa
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:34:28 2026 +0000
+
+    feat(FileSystemLoader): add search path priority configuration
+    
+    Items in the searchpath list may be (path, priority) tuples. Paths are
+    sorted by priority, highest first, with a stable sort so paths of equal
+    priority keep the order they were given in. A path with no priority has
+    priority 0, so existing code behaves as before.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/jinja2/loaders.py | 60 ++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 57 insertions(+), 3 deletions(-)
+
+commit d253e6480b3a35f4ea2408442c57aac74b65dec4
+Merge: a292075 048fa0c
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:34:27 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit 048fa0cf9cbe4a81170144deaa9d72441d0dc9ab (claude/5)
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:34:20 2026 +0000
+
+    Cache resolved template paths in FileSystemLoader
+    
+    get_source keeps a per-instance map from template name to the path it
+    resolved to, or to None when the name was searched for and not found.
+    A cached path is reopened directly; if the file is gone the entry is
+    dropped and the search paths are walked again. A cached miss raises
+    TemplateNotFound without touching the filesystem.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/jinja2/loaders.py | 56 ++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 42 insertions(+), 14 deletions(-)

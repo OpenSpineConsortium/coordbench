@@ -1,0 +1,169 @@
+diff --git a/dspy/clients/__init__.py b/dspy/clients/__init__.py
+index 52be745ab..3afe943a8 100644
+--- a/dspy/clients/__init__.py
++++ b/dspy/clients/__init__.py
+@@ -33,6 +33,7 @@ def configure_cache(
+     disk_size_limit_bytes: Optional[int] = DISK_CACHE_LIMIT,
+     memory_max_entries: Optional[int] = 1000000,
+     enable_litellm_cache: bool = False,
++    ttl: Optional[int] = None,
+ ):
+     """Configure the cache for DSPy.
+ 
+@@ -43,6 +44,8 @@ def configure_cache(
+         disk_size_limit_bytes: The size limit of the on-disk cache.
+         memory_max_entries: The maximum number of entries in the in-memory cache.
+         enable_litellm_cache: Whether to enable LiteLLM cache.
++        ttl: The time-to-live of every entry in the DSPy cache, in seconds, for both the in-memory and the on-disk
++            cache. `None` (the default) means entries never expire.
+     """
+     if enable_disk_cache and enable_litellm_cache:
+         raise ValueError(
+@@ -72,9 +75,25 @@ def configure_cache(
+         disk_cache_dir,
+         disk_size_limit_bytes,
+         memory_max_entries,
++        ttl=ttl,
+     )
+ 
+ 
++def set_ttl(seconds: Optional[int]) -> None:
++    """Set the time-to-live, in seconds, of the entries the DSPy cache stores from now on.
++
++    The setting applies to the cache in `dspy.cache`, in both its in-memory and its on-disk layer, and leaves its
++    other settings as they are. `None` makes new entries live without limit again. To set the time-to-live together
++    with the other settings, pass `ttl` to `configure_cache` instead.
++
++    Args:
++        seconds: The time-to-live in seconds, or `None` for no expiry.
++    """
++    import dspy
++
++    dspy.cache.set_ttl(seconds)
++
++
+ litellm.telemetry = False
+ litellm.cache = None  # By default we disable litellm cache and use DSPy on-disk cache.
+ 
+@@ -84,6 +103,7 @@ DSPY_CACHE = Cache(
+     disk_cache_dir=DISK_CACHE_DIR,
+     disk_size_limit_bytes=DISK_CACHE_LIMIT,
+     memory_max_entries=1000000,
++    ttl=None,
+ )
+ 
+ # Turn off by default to avoid LiteLLM logging during every LM call.
+@@ -112,4 +132,5 @@ __all__ = [
+     "enable_litellm_logging",
+     "disable_litellm_logging",
+     "configure_cache",
++    "set_ttl",
+ ]
+diff --git a/dspy/clients/cache.py b/dspy/clients/cache.py
+index bfa7dbde8..c16f0c65d 100644
+--- a/dspy/clients/cache.py
++++ b/dspy/clients/cache.py
+@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
+ import cloudpickle
+ import pydantic
+ import ujson
+-from cachetools import LRUCache
++from cachetools import LRUCache, TTLCache
+ from diskcache import FanoutCache
+ 
+ logger = logging.getLogger(__name__)
+@@ -19,8 +19,12 @@ class Cache:
+     """DSPy Cache
+ 
+     `Cache` provides 2 levels of caching (in the given order):
+-        1. In-memory cache - implemented with cachetools.LRUCache
++        1. In-memory cache - implemented with cachetools.LRUCache, or cachetools.TTLCache when a `ttl` is set
+         2. On-disk cache - implemented with diskcache.FanoutCache
++
++    When `ttl` is given, every entry expires `ttl` seconds after it was written, in both levels. Without it, entries
++    live until they are evicted for size, as before. An entry that is read back from disk into the in-memory cache
++    starts its in-memory life at that moment.
+     """
+ 
+     def __init__(
+@@ -30,7 +34,7 @@ class Cache:
+         disk_cache_dir: str,
+         disk_size_limit_bytes: Optional[int] = 1024 * 1024 * 10,
+         memory_max_entries: Optional[int] = 1000000,
+-
++        ttl: Optional[int] = None,
+     ):
+         """
+         Args:
+@@ -39,12 +43,15 @@ class Cache:
+             disk_cache_dir: The directory where the disk cache is stored.
+             disk_size_limit_bytes: The maximum size of the disk cache (in bytes).
+             memory_max_entries: The maximum size of the in-memory cache (in number of items).
++            ttl: The time-to-live of every cache entry, in seconds. `None` (the default) means entries never expire.
+         """
+ 
+         self.enable_disk_cache = enable_disk_cache
+         self.enable_memory_cache = enable_memory_cache
++        self.memory_max_entries = memory_max_entries
++        self.ttl = ttl
+         if self.enable_memory_cache:
+-            self.memory_cache = LRUCache(maxsize=memory_max_entries)
++            self.memory_cache = self._new_memory_cache()
+         else:
+             self.memory_cache = {}
+         if self.enable_disk_cache:
+@@ -113,6 +120,10 @@ class Cache:
+                 with self._lock:
+                     self.memory_cache[key] = response
+         else:
++            if self.ttl is not None and self.enable_disk_cache:
++                # Lazy purge: a miss is the moment to drop what has expired on disk.
++                self.disk_cache.expire()
++            self._record("misses")
+             return None
+ 
+         response = copy.deepcopy(response)
+@@ -140,7 +151,10 @@ class Cache:
+ 
+         if self.enable_disk_cache:
+             try:
+-                self.disk_cache[key] = value
++                if self.ttl is not None:
++                    self.disk_cache.set(key, value, expire=self.ttl)
++                else:
++                    self.disk_cache[key] = value
+             except Exception as e:
+                 # Disk cache writing can fail for different reasons, e.g. disk full or the `value` is not picklable.
+                 logger.debug(f"Failed to put value in disk cache: {value}, {e}")
+@@ -152,6 +166,31 @@ class Cache:
+         with self._lock:
+             self.memory_cache.clear()
+ 
++    def _new_memory_cache(self):
++        """Make an empty in-memory cache: a TTLCache when a ttl is set, else an LRUCache."""
++        if self.ttl is not None:
++            return TTLCache(maxsize=self.memory_max_entries, ttl=self.ttl)
++        return LRUCache(maxsize=self.memory_max_entries)
++
++    def set_ttl(self, seconds: Optional[int]) -> None:
++        """Change the time-to-live of entries written from now on; `None` makes them live without limit.
++
++        Entries already in the in-memory cache are carried over and start their new life now. Entries already on disk
++        keep the expiry they were written with.
++        """
++        with self._lock:
++            self.ttl = seconds
++            if not self.enable_memory_cache:
++                return
++            old_cache = self.memory_cache
++            self.memory_cache = self._new_memory_cache()
++            for key in list(old_cache):
++                try:
++                    self.memory_cache[key] = old_cache[key]
++                except KeyError:
++                    # The entry expired between listing the keys and reading it.
++                    continue
++
+     def save_memory_cache(self, filepath: str) -> None:
+         if not self.enable_memory_cache:
+             return

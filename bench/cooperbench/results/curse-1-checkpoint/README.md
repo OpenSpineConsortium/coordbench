@@ -1,21 +1,26 @@
 # curse-1: the full run's finished runs, kept through the checkpoint of 2026-10-16
 
+The full run finished on 2026-10-17 and is recorded in ../curse-1-full/;
+this directory keeps the interim figures read from transcripts.
+
 At 18:54 UTC on 2026-10-16 the owner asked every thread to checkpoint,
 and at 18:58 UTC to put everything in git so the work can go on under
 another account. At 18:57 UTC the queue was paused (`queue.py pause`:
 the 36 items still pending became paused), the three runs then in flight
-finished by 19:02 UTC, every one clean, and no lane has run since. No run
-was cut, so the next session reruns nothing: it resumes the 36 paused
-items (../curse-of-coordination-notes/README.md, "The next steps, in
+finished by 19:02 UTC, every one clean, and no lane ran until the
+next session resumed the run on 2026-10-17. No run was cut, so that
+session reran nothing: it resumed the 36 paused items (../curse-of-coordination-notes/README.md, "The next steps, in
 order").
 
 The logs live only on the container that made them, so this directory
-keeps every finished run of the full run, for a new container to restore
-with ../curse-of-coordination-notes/run/restore-bundles.py together with
+kept, until 2026-10-17, every finished run of the full run, for a new
+container to restore with ../curse-of-coordination-notes/run/restore-bundles.py together with
 ../curse-1-pilot/ and ../curse-1-step-8/, which hold the pilot's runs and
 the step's.
 
-- raw/: the 139 finished runs of the full run's 175 items, the 35 pairs
+- raw/ (moved on 2026-10-17 into ../curse-1-full/raw/, which holds
+  every file it held, unchanged, beside the 36 runs made since): the
+  139 finished runs of the full run's 175 items, the 35 pairs
   of the order after the step's 8 under the five arms, each run with the
   files session/bundle.py keeps of a run (no transcript, prompt or run
   token), and each arm its config.json, the pilot's, as in
@@ -40,10 +45,11 @@ the step's.
   has been tried. They are kept because a restored run has no
   transcript, so the figures read from transcripts (tool calls and
   messages) can be had for these runs only from here.
-- No queue.jsonl and no arm summary.json: the queue at the checkpoint is
-  ../curse-of-coordination-notes/run/curse-1-queue.jsonl, 179 items done,
-  36 paused and none running, and the runner rebuilds a summary from its
-  runs.
+- No queue.jsonl and no arm summary.json: the queue at the checkpoint
+  was ../curse-of-coordination-notes/run/curse-1-queue.jsonl, 179 items
+  done, 36 paused and none running (the file now holds the end of the
+  run, 215 done, and the repository's history keeps the checkpoint's),
+  and the runner rebuilds a summary from its runs.
 
 Every run here is clean by its audit, and none has a suite that timed
 out, so none was scored a second time (the tag's one second scoring is

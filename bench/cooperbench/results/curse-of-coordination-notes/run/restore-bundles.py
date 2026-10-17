@@ -40,7 +40,7 @@ import shutil
 import sys
 from pathlib import Path
 
-BUNDLES = "curse-1-pilot,curse-1-step-8,curse-1-checkpoint"
+BUNDLES = "curse-1-pilot,curse-1-step-8,curse-1-full"
 STAGING = ".restore-partial"
 
 

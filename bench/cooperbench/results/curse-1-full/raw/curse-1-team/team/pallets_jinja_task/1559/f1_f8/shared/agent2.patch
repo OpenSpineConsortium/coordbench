@@ -1,0 +1,355 @@
+diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
+index d21b83aa..14c01974 100644
+--- a/src/jinja2/ext.py
++++ b/src/jinja2/ext.py
+@@ -636,6 +636,342 @@ class DebugExtension(Extension):
+         return pprint.pformat(result, depth=3, compact=True)
+ 
+ 
++class ConditionalI18nExtension(Extension):
++    """Adds a ``{% ctrans %}`` tag that renders a translation only when a
++    runtime condition holds, and a mandatory fallback otherwise.
++
++    .. code-block:: html+jinja
++
++        {% ctrans use_i18n %}
++            Hello, {{ name }}!
++        {% fallback %}
++            Hi, {{ name }}!
++        {% endctrans %}
++
++        {% ctrans use_i18n, count trimmed %}
++            {{ count }} item
++        {% pluralize %}
++            {{ count }} items
++        {% fallback %}
++            {{ count }} item(s)
++        {% endctrans %}
++
++    The first expression of the tag is the condition. It is evaluated
++    when the template renders: if it is true the singular and plural
++    blocks go through ``gettext`` and ``ngettext`` exactly as in a
++    ``{% trans %}`` tag, otherwise the ``{% fallback %}`` block is
++    rendered untranslated, with the same variable substitution. The
++    fallback block is required, and it comes after the optional
++    ``{% pluralize %}`` block.
++
++    The variables, ``trimmed`` and ``notrimmed`` that may follow the
++    condition work as they do for ``{% trans %}``, and ``trimmed``
++    applies to the fallback block as well. Commas between the items of
++    the header are optional. A comma ends the condition where it would
++    otherwise take the next word as an argument, as in
++    ``{% ctrans user is defined, count %}``.
++
++    The extension uses the ``gettext`` and ``ngettext`` that the
++    :class:`InternationalizationExtension` installs, so load both.
++    """
++
++    tags = {"ctrans"}
++
++    def parse(self, parser: "Parser") -> t.Union[nodes.Node, t.List[nodes.Node]]:
++        """Parse a conditional translatable tag."""
++        lineno = next(parser.stream).lineno
++        num_called_num = False
++
++        condition = parser.parse_expression()
++
++        # find all the variables referenced.  Additionally a variable can be
++        # defined in the body of the ctrans block too, but this is checked at
++        # a later state.
++        plural_expr: t.Optional[nodes.Expr] = None
++        plural_expr_assignment: t.Optional[nodes.Assign] = None
++        variables: t.Dict[str, nodes.Expr] = {}
++        trimmed = None
++        while parser.stream.current.type != "block_end":
++            # commas only separate, so they may be left out or repeated
++            if parser.stream.skip_if("comma"):
++                continue
++
++            # skip colon for python compatibility
++            if parser.stream.skip_if("colon"):
++                break
++
++            token = parser.stream.expect("name")
++            if token.value in variables:
++                parser.fail(
++                    f"translatable variable {token.value!r} defined twice.",
++                    token.lineno,
++                    exc=TemplateAssertionError,
++                )
++
++            # expressions
++            if parser.stream.current.type == "assign":
++                next(parser.stream)
++                variables[token.value] = var = parser.parse_expression()
++            elif trimmed is None and token.value in ("trimmed", "notrimmed"):
++                trimmed = token.value == "trimmed"
++                continue
++            else:
++                variables[token.value] = var = nodes.Name(token.value, "load")
++
++            if plural_expr is None:
++                if isinstance(var, nodes.Call):
++                    plural_expr = nodes.Name("_trans", "load")
++                    variables[token.value] = plural_expr
++                    plural_expr_assignment = nodes.Assign(
++                        nodes.Name("_trans", "store"), var
++                    )
++                else:
++                    plural_expr = var
++                num_called_num = token.value == "num"
++
++        parser.stream.expect("block_end")
++
++        plural = None
++        have_plural = False
++        referenced = set()
++
++        # now parse until fallback, pluralize or endctrans
++        singular_names, singular = self._parse_block(parser, True)
++        if singular_names:
++            referenced.update(singular_names)
++            if plural_expr is None:
++                plural_expr = nodes.Name(singular_names[0], "load")
++                num_called_num = singular_names[0] == "num"
++
++        # if we have a pluralize block, we parse that too
++        if parser.stream.current.test("name:pluralize"):
++            have_plural = True
++            next(parser.stream)
++            if parser.stream.current.type != "block_end":
++                token = parser.stream.expect("name")
++                if token.value not in variables:
++                    parser.fail(
++                        f"unknown variable {token.value!r} for pluralization",
++                        token.lineno,
++                        exc=TemplateAssertionError,
++                    )
++                plural_expr = variables[token.value]
++                num_called_num = token.value == "num"
++            parser.stream.expect("block_end")
++            plural_names, plural = self._parse_block(parser, False)
++            referenced.update(plural_names)
++
++        # the fallback block is what renders when the condition is false,
++        # so a tag without one is a mistake and not a shorthand
++        if not parser.stream.current.test("name:fallback"):
++            parser.fail("expected 'fallback' block", parser.stream.current.lineno)
++
++        next(parser.stream)
++        parser.stream.expect("block_end")
++        fallback_names, fallback = self._parse_block(parser, False, False)
++        next(parser.stream)
++
++        if not have_plural:
++            plural_expr = None
++        elif plural_expr is None:
++            parser.fail("pluralize without variables", lineno)
++
++        if trimmed is None:
++            trimmed = self.environment.policies.get("ext.i18n.trimmed", False)
++        if trimmed:
++            singular = self._trim_whitespace(singular)
++            if plural is not None:
++                plural = self._trim_whitespace(plural)
++            fallback = self._trim_whitespace(fallback)
++
++        # register free names as simple name expressions, each path with
++        # the names its own text uses next to the declared variables
++        trans_variables = self._with_free_names(variables, referenced)
++        fallback_variables = self._with_free_names(variables, fallback_names)
++
++        node = self._make_conditional_node(
++            condition,
++            singular,
++            plural,
++            fallback,
++            trans_variables,
++            fallback_variables,
++            plural_expr,
++            num_called_num and have_plural,
++        )
++        node.set_lineno(lineno)
++        if plural_expr_assignment is not None:
++            plural_expr_assignment.set_lineno(lineno)
++            return [plural_expr_assignment, node]
++        else:
++            return node
++
++    def _trim_whitespace(self, string: str, _ws_re: t.Pattern[str] = _ws_re) -> str:
++        return _ws_re.sub(" ", string.strip())
++
++    def _with_free_names(
++        self, variables: t.Dict[str, nodes.Expr], names: t.Iterable[str]
++    ) -> t.Dict[str, nodes.Expr]:
++        """Copy the declared variables and add a plain name lookup for
++        each of ``names`` that is not declared.
++        """
++        result = dict(variables)
++
++        for name in names:
++            if name not in result:
++                result[name] = nodes.Name(name, "load")
++
++        return result
++
++    def _parse_block(
++        self, parser: "Parser", allow_pluralize: bool, allow_fallback: bool = True
++    ) -> t.Tuple[t.List[str], str]:
++        """Parse until the next block tag that ends the section: the
++        ``endctrans`` tag, and the ``pluralize`` and ``fallback`` tags
++        where they are allowed.
++        """
++        referenced = []
++        buf = []
++
++        while True:
++            if parser.stream.current.type == "data":
++                buf.append(parser.stream.current.value.replace("%", "%%"))
++                next(parser.stream)
++            elif parser.stream.current.type == "variable_begin":
++                next(parser.stream)
++                name = parser.stream.expect("name").value
++                referenced.append(name)
++                buf.append(f"%({name})s")
++                parser.stream.expect("variable_end")
++            elif parser.stream.current.type == "block_begin":
++                next(parser.stream)
++                if parser.stream.current.test("name:endctrans"):
++                    break
++                elif parser.stream.current.test("name:pluralize"):
++                    if allow_pluralize:
++                        break
++                    if not allow_fallback:
++                        parser.fail(
++                            "the pluralize section must come before the fallback"
++                            " section"
++                        )
++                    parser.fail(
++                        "a conditional translatable section can have only one"
++                        " pluralize section"
++                    )
++                elif parser.stream.current.test("name:fallback"):
++                    if allow_fallback:
++                        break
++                    parser.fail(
++                        "a conditional translatable section can have only one"
++                        " fallback section"
++                    )
++                parser.fail(
++                    "control structures in translatable sections are not allowed"
++                )
++            elif parser.stream.eos:
++                parser.fail("unclosed conditional translation block")
++            else:
++                raise RuntimeError("internal parser error")
++
++        return referenced, concat(buf)
++
++    def _make_conditional_node(
++        self,
++        condition: nodes.Expr,
++        singular: str,
++        plural: t.Optional[str],
++        fallback: str,
++        variables: t.Dict[str, nodes.Expr],
++        fallback_variables: t.Dict[str, nodes.Expr],
++        plural_expr: t.Optional[nodes.Expr],
++        num_called_num: bool,
++    ) -> nodes.If:
++        """Generates an ``If`` node that renders the translation when
++        ``condition`` is true and the fallback when it is false.
++        """
++        translation = self._make_translation_output(
++            singular, plural, variables, plural_expr, num_called_num
++        )
++        fallback_output = self._make_fallback_output(fallback, fallback_variables)
++        return nodes.If(condition, [translation], [], [fallback_output])
++
++    def _make_translation_output(
++        self,
++        singular: str,
++        plural: t.Optional[str],
++        variables: t.Dict[str, nodes.Expr],
++        plural_expr: t.Optional[nodes.Expr],
++        num_called_num: bool,
++    ) -> nodes.Output:
++        """The translated path, built as the ``trans`` tag builds it."""
++        newstyle = getattr(self.environment, "newstyle_gettext", False)
++        node: nodes.Expr
++
++        # old style gettext formats only if there are variables, so
++        # without any the escaped percent signs have to be undone here
++        if not variables and not newstyle:
++            singular = singular.replace("%%", "%")
++            if plural is not None:
++                plural = plural.replace("%%", "%")
++
++        # singular only:
++        if plural_expr is None:
++            gettext = nodes.Name("gettext", "load")
++            node = nodes.Call(gettext, [nodes.Const(singular)], [], None, None)
++
++        # singular and plural
++        else:
++            ngettext = nodes.Name("ngettext", "load")
++            node = nodes.Call(
++                ngettext,
++                [nodes.Const(singular), nodes.Const(plural), plural_expr],
++                [],
++                None,
++                None,
++            )
++
++        # in case newstyle gettext is used, the method is powerful
++        # enough to handle the variable expansion and autoescape
++        # handling itself
++        if newstyle:
++            for key, value in variables.items():
++                # the function adds that later anyways in case num was
++                # called num, so just skip it.
++                if num_called_num and key == "num":
++                    continue
++                node.kwargs.append(nodes.Keyword(key, value))
++
++        # otherwise do that here
++        else:
++            # mark the return value as safe if we are in an
++            # environment with autoescaping turned on
++            node = nodes.MarkSafeIfAutoescape(node)
++            if variables:
++                node = nodes.Mod(node, self._make_dict(variables))
++        return nodes.Output([node])
++
++    def _make_fallback_output(
++        self, fallback: str, variables: t.Dict[str, nodes.Expr]
++    ) -> nodes.Output:
++        """The untranslated path: the fallback text with its variables
++        filled in, escaped as the translated path escapes them.
++        """
++        # Always treat as a format string, like newstyle gettext does:
++        # the text has its percent signs escaped, and formatting a
++        # markup string escapes the variables.
++        node = nodes.Mod(
++            nodes.MarkSafeIfAutoescape(nodes.Const(fallback)),
++            self._make_dict(variables),
++        )
++        return nodes.Output([node])
++
++    def _make_dict(self, variables: t.Dict[str, nodes.Expr]) -> nodes.Dict:
++        return nodes.Dict(
++            [nodes.Pair(nodes.Const(key), value) for key, value in variables.items()]
++        )
++
++
+ def extract_from_ast(
+     ast: nodes.Template,
+     gettext_functions: t.Sequence[str] = GETTEXT_FUNCTIONS,
+@@ -849,6 +1185,7 @@ def babel_extract(
+ 
+ #: nicer import names
+ i18n = InternationalizationExtension
++conditional_i18n = ConditionalI18nExtension
+ do = ExprStmtExtension
+ loopcontrols = LoopControlExtension
+ debug = DebugExtension

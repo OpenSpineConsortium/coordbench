@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "29afbbed1d",
+    "by": "bench-runner",
+    "title": "Implement feature 3",
+    "ts": 1792247857.4974384
+  },
+  {
+    "kind": "create",
+    "task_id": "7b8f5dae14",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 2",
+    "ts": 1792247857.4975083
+  },
+  {
+    "kind": "claim",
+    "task_id": "29afbbed1d",
+    "by": "agent2",
+    "ts": 1792247887.989473
+  },
+  {
+    "kind": "claim",
+    "task_id": "7b8f5dae14",
+    "by": "agent1",
+    "ts": 1792247898.8368568
+  },
+  {
+    "kind": "update",
+    "task_id": "7b8f5dae14",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing IsMac (feature 2) at end of _other.py",
+    "ts": 1792247898.9869192
+  },
+  {
+    "kind": "update",
+    "task_id": "7b8f5dae14",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "IsMac done and tested; waiting for agent2 patch to integrate",
+    "ts": 1792247972.6896684
+  },
+  {
+    "kind": "update",
+    "task_id": "29afbbed1d",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792248036.8887439
+  },
+  {
+    "kind": "update",
+    "task_id": "7b8f5dae14",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged IsMac + agent2's IsEmail, 488 tests pass, patch.txt written",
+    "ts": 1792248077.7926755
+  }
+]

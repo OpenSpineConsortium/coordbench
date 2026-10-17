@@ -1,0 +1,55 @@
+commit 4025ff5a7cdf05555c642e5f7e200f954e7fa820 (claude/6)
+Merge: 211c992 93ab308
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Sat Oct 17 14:28:51 2026 +0000
+
+    Merge team/main into claude/6
+    
+    Keep fallback_searchpath and path_transform together in FileSystemLoader:
+    the transform is applied first, then every directory of searchpath and
+    fallback_searchpath is tried for the transformed name.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+commit fa5ceae8f6b97deac3494c36a5c38d7ca6158940 (main)
+Merge: 93ab308 4025ff5
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:28:51 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 93ab308efed4eb84029ac31ab5ad3197870af352
+Merge: a292075 a7d105f
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:28:00 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit a7d105fc4c627213381c6e3e93accd105d97cfdb (claude/1)
+Author: agent1 <agent1@coordbench.local>
+Date:   Sat Oct 17 14:27:55 2026 +0000
+
+    Add fallback_searchpath to FileSystemLoader
+    
+    Directories in fallback_searchpath are searched, in order, only after every
+    directory in searchpath, by both get_source and list_templates.
+
+ src/jinja2/loaders.py | 27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+commit 211c992aa4bf3e6a29c3c22e573a83e2f5e84562
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Sat Oct 17 14:27:36 2026 +0000
+
+    Add path_transform to template loaders
+    
+    An optional function that rewrites a template name before the loader
+    resolves it, for FileSystemLoader, DictLoader, FunctionLoader,
+    PackageLoader, PrefixLoader, ChoiceLoader and ModuleLoader. The two
+    composite loaders transform once at the top and hand the result to their
+    children. TemplateNotFound keeps the name that was asked for, and errors
+    from the function propagate. Without the argument nothing changes.
+
+ src/jinja2/loaders.py | 160 +++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 145 insertions(+), 15 deletions(-)

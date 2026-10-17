@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_click_task/2800/f2_f7", "verdict": "pass"}
+coordbench run: team-2800-f2_f7-2f7d9b: timings: hub 0.1 s, run_create 0.0 s, shared_volume 0.1 s, provision 2.6 s, agents 403 s (agent1 403 s, agent2 362 s), close 0.0 s, score 14 s, cascade 23 s, teardown 0.4 s
+coordbench run: summary: 37 completed, 0 skipped, 0 failed; evals: 37 evaluated, 28 passed, 9 failed, 0 errors (75.7%); cost: unknown
