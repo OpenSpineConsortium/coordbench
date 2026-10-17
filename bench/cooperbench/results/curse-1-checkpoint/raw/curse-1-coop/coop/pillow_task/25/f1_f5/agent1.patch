@@ -1,0 +1,46 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..7afe789c6 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -258,6 +258,22 @@ class TestImage:
+             assert im.readonly
+             im.save(temp_file)
+ 
++    def test_readonly_save_frombuffer(self, tmp_path: Path) -> None:
++        # Saving an image from a buffer should not disconnect it from the buffer
++        buffer = bytearray([255])
++        im = Image.frombuffer("L", (1, 1), buffer, "raw", "L", 0, 1)
++        assert im.readonly
++        assert im.getpixel((0, 0)) == 255
++
++        buffer[0] = 128
++        assert im.getpixel((0, 0)) == 128
++
++        im.save(tmp_path / "temp.bmp")
++        assert im.readonly
++
++        buffer[0] = 64
++        assert im.getpixel((0, 0)) == 64
++
+     def test_dump(self, tmp_path: Path) -> None:
+         im = Image.new("L", (10, 10))
+         im._dump(str(tmp_path / "temp_L.ppm"))
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..90f350227 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2541,7 +2541,13 @@ class Image:
+                 raise ValueError(msg) from e
+ 
+         # may mutate self!
+-        self._ensure_mutable()
++        # Only copy a read-only image when saving back to the file it was opened
++        # from; otherwise keep it read-only, so that an image made with
++        # frombuffer() continues to reflect changes to its buffer.
++        if hasattr(self, "filename") and self.filename == filename:
++            self._ensure_mutable()
++        else:
++            self.load()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}

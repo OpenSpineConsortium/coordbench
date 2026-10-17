@@ -1,0 +1,59 @@
+commit 8d666e09b62e309c6a49e2e3eedaae67243604ee (claude/2)
+Merge: e29d4a7 9214115
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:55:58 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/2
+    
+    # Conflicts:
+    #       src/click/core.py
+
+commit a6616855ec91c579fcf4f10d07d5e07946175a29 (main)
+Merge: 9214115 8d666e0
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:55:58 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit e29d4a75094a573de6bab72ba320628021a46baf
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:54:52 2026 +0000
+
+    Add an on_exit hook to Context and make_context
+    
+    The callback is stored on the context and called with it when the
+    context is closed, after the close callbacks and entered resources are
+    cleaned up. It runs once per use of the context, since Context.exit and
+    the with block both close it, and an exception it raises is ignored so
+    it cannot break the cleanup. Completion contexts do not carry it over.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ src/click/core.py             | 58 ++++++++++++++++++++++++++++++++++++++++---
+ src/click/shell_completion.py |  3 +++
+ 2 files changed, 57 insertions(+), 4 deletions(-)
+
+commit 9214115fca0137f92435280ff1a41e682d3f7679
+Merge: d8763b9 b504f8c
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:54:22 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit b504f8ce8f5e67083401de72e295f267a8bb9d0a (claude/7)
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Fri Oct 16 18:54:11 2026 +0000
+
+    Add validate_nesting to Context to catch child contexts left open
+    
+    With validate_nesting=True a Context tracks the child contexts made by
+    _make_sub_context and close() raises RuntimeError naming the children
+    still open, instead of leaving them to leak their resources. Children
+    inherit the setting and leave the parent on close. __exit__ always pops
+    the context, even when closing is refused. Shell completion builds
+    contexts it never closes, so _resolve_context turns the check off.
+
+ src/click/core.py             | 61 ++++++++++++++++++++++++++++++++++++++++---
+ src/click/shell_completion.py | 11 +++++++-
+ 2 files changed, 67 insertions(+), 5 deletions(-)

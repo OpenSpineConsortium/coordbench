@@ -1,0 +1,41 @@
+commit d7a0352fc3d9d8110cae56943f53e12af8b102ce (main)
+Merge: 3e2d35f 1530f4c
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:45:54 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 1530f4c88d5cdf175254f90b2ae867f2d57c8f34 (claude/6)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:45:49 2026 +0000
+
+    Add an LRU translation cache to the i18n extension
+    
+    The InternationalizationExtension keeps a bounded cache of translation
+    results, sized by env.i18n_cache_size (default 128). _init_cache,
+    _update_cache_size, _get_from_cache, _put_in_cache and clear_cache
+    manage it; the least recently used entry is evicted first, and a size of
+    0 turns it off. Each environment, overlays included, has its own cache.
+
+ src/jinja2/ext.py | 87 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 87 insertions(+)
+
+commit 3e2d35f0ea055a22d877615ea9d82fafc61c285a
+Merge: 896a621 799eb83
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:45:10 2026 +0000
+
+    Merge claude/9: closes #9
+
+commit 799eb83640307d11d714894ed5052b4935f1fb7e (claude/9)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:45:05 2026 +0000
+
+    Add TranslationExtractorExtension with the extract tag
+    
+    An {% extract %}...{% endextract %} block carries optional key=value
+    metadata (comment, context, priority) that is collected in the
+    environment at compile time and does not change what renders.
+
+ src/jinja2/ext.py | 70 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 70 insertions(+)

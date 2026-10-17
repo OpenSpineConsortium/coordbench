@@ -1,0 +1,24 @@
+{
+  "events": {
+    "run_started": 1,
+    "tool": 34,
+    "message": 4,
+    "tool_done": 34,
+    "receive": 7
+  },
+  "tool_surface": "mcp",
+  "messages_sent": 4,
+  "messages_by_agent": {
+    "agent1": 2,
+    "agent2": 2
+  },
+  "message_chars": 1660,
+  "message_words": 231,
+  "tool_calls": {
+    "broadcast": 1,
+    "receive_messages": 7,
+    "peek_messages": 22,
+    "list_agents": 1,
+    "send_message": 3
+  }
+}

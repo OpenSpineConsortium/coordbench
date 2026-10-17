@@ -1,0 +1,46 @@
+[
+  {
+    "kind": "create",
+    "task_id": "b882d7f593",
+    "by": "bench-runner",
+    "title": "Implement feature 7",
+    "ts": 1792145878.7857678
+  },
+  {
+    "kind": "create",
+    "task_id": "58199011cc",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 3",
+    "ts": 1792145878.7858775
+  },
+  {
+    "kind": "claim",
+    "task_id": "b882d7f593",
+    "by": "agent2",
+    "ts": 1792145915.8225877
+  },
+  {
+    "kind": "update",
+    "task_id": "58199011cc",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "IsEmail implemented, waiting for agent2",
+    "ts": 1792145969.51434
+  },
+  {
+    "kind": "update",
+    "task_id": "b882d7f593",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792145981.3832004
+  },
+  {
+    "kind": "update",
+    "task_id": "58199011cc",
+    "by": "agent1",
+    "status": "done",
+    "note": "Merged IsEmail and agent2 IsHash; patch.txt written",
+    "ts": 1792146014.6667562
+  }
+]

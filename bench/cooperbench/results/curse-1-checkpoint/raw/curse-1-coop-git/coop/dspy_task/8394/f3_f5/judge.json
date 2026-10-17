@@ -1,0 +1,333 @@
+{
+  "format": "coordbench-judge/1",
+  "pair": {
+    "repo": "dspy_task",
+    "task_id": 8394,
+    "features": [
+      3,
+      5
+    ],
+    "arm": "coop-git",
+    "setting": "coop",
+    "model": "claude-sonnet-5-5",
+    "driver": "session",
+    "run_name": "curse-1-coop-git",
+    "run_id": "coop-git-8394-f3_f5-33c068"
+  },
+  "calls": {},
+  "skipped": {},
+  "errors": {},
+  "heuristics": {
+    "unanswered_questions": [],
+    "ignored_questions": [],
+    "near_duplicates": [],
+    "speech_acts_keyword": {
+      "2": "Plan",
+      "8": "Question",
+      "14": null,
+      "20": "Answer",
+      "26": "Ack",
+      "32": "Ack",
+      "44": null,
+      "58": null
+    },
+    "resource_division_candidates": [],
+    "negotiation_candidates": [],
+    "contradictions": [],
+    "overlapping_hunks": [
+      {
+        "file": "dspy/clients/__init__.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            1,
+            7
+          ],
+          [
+            1,
+            7
+          ]
+        ],
+        "same_heading": null
+      },
+      {
+        "file": "dspy/clients/__init__.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            33,
+            38
+          ],
+          [
+            33,
+            38
+          ]
+        ],
+        "same_heading": "def configure_cache("
+      },
+      {
+        "file": "dspy/clients/__init__.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            43,
+            48
+          ],
+          [
+            43,
+            48
+          ]
+        ],
+        "same_heading": "def configure_cache("
+      },
+      {
+        "file": "dspy/clients/__init__.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            72,
+            80
+          ],
+          [
+            72,
+            80
+          ]
+        ],
+        "same_heading": "def configure_cache("
+      },
+      {
+        "file": "dspy/clients/__init__.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            84,
+            89
+          ],
+          [
+            84,
+            89
+          ]
+        ],
+        "same_heading": "DSPY_CACHE = Cache("
+      },
+      {
+        "file": "dspy/clients/__init__.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            112,
+            115
+          ],
+          [
+            112,
+            115
+          ]
+        ],
+        "same_heading": "__all__ = ["
+      },
+      {
+        "file": "dspy/clients/cache.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            1,
+            25
+          ],
+          [
+            1,
+            25
+          ]
+        ],
+        "same_heading": null
+      },
+      {
+        "file": "dspy/clients/cache.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            30,
+            36
+          ],
+          [
+            30,
+            36
+          ]
+        ],
+        "same_heading": "class Cache:"
+      },
+      {
+        "file": "dspy/clients/cache.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            39,
+            68
+          ],
+          [
+            39,
+            68
+          ]
+        ],
+        "same_heading": "class Cache:"
+      },
+      {
+        "file": "dspy/clients/cache.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            108,
+            118
+          ],
+          [
+            108,
+            118
+          ]
+        ],
+        "same_heading": "class Cache:"
+      },
+      {
+        "file": "dspy/clients/cache.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            140,
+            146
+          ],
+          [
+            140,
+            146
+          ]
+        ],
+        "same_heading": "class Cache:"
+      }
+    ],
+    "insertion_markers": [],
+    "missing_final_status": [
+      "agent2"
+    ],
+    "git_disasters": [
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push team agent2 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push team agent2 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push team agent2 --force 2>&1"
+      }
+    ],
+    "git_broken": [],
+    "git_impatience": [
+      {
+        "agent": "agent1",
+        "command": "git fetch team 2>&1",
+        "at": 1792146843.612,
+        "partner_first_push_at": 1792146858.647
+      },
+      {
+        "agent": "agent1",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-8394-f3_f5-33c068-agent1 bash -lc 'git fetch team 2>&1",
+        "at": 1792146856.428,
+        "partner_first_push_at": 1792146858.647
+      },
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-8394-f3_f5-33c068-agent2 bash -lc 'git fetch team",
+        "at": 1792146765.643,
+        "partner_first_push_at": 1792146843.612
+      }
+    ],
+    "git_destructive": []
+  },
+  "heuristics_meta": {
+    "computed_at": "2026-10-16T10:42:16+00:00",
+    "conversation_source": "events.jsonl",
+    "message_count": 8,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
+    "definitions": {
+      "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
+      "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
+      "near_duplicates": "C4a/C4b candidates: [id, id, difflib ratio >= 0.9, both status-like], same sender",
+      "speech_acts_keyword": "the keyword baseline of the speech acts, beside the judge's",
+      "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
+      "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
+      "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
+      "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
+      "insertion_markers": "App D: added comment lines marking where another agent inserts code",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it",
+      "git_disasters": "coordbench's label for git-failures.json's git_disasters: force pushes and hard resets",
+      "git_broken": "coordbench's label for broken: a push followed by a failing test run",
+      "git_impatience": "coordbench's label for impatience: fetches before the partner's first push",
+      "git_destructive": "coordbench's label for destructive: a commit deleting 100 or more lines of a file the partner changed (from git log --stat, approximate when the bar is scaled)"
+    },
+    "final_status_times": {
+      "agent1": {
+        "last_edit_at": null,
+        "last_message_at": 1792147188.2901502
+      },
+      "agent2": {
+        "last_edit_at": 1792147105.138,
+        "last_message_at": 1792147031.1278763
+      }
+    },
+    "git_blog_names": {
+      "impatience": "The Real-Time Interaction Problem",
+      "destructive": "Uncooperative Behaviors",
+      "broken": "The Commitment Problem",
+      "git_disasters": "Misuse of Cooperation Tools",
+      "blame": "Hallucination in Communication",
+      "sagas": "Hallucination in Communication"
+    }
+  }
+}

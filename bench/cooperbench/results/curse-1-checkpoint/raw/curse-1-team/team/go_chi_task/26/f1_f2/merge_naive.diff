@@ -1,0 +1,217 @@
+diff --git a/metrics.go b/metrics.go
+new file mode 100644
+index 0000000..55d86c1
+--- /dev/null
++++ b/metrics.go
+@@ -0,0 +1,77 @@
++package chi
++
++import (
++	"context"
++	"net/http"
++	"time"
++)
++
++// MetricsCollector receives one RecordHit call for every request that the
++// Mux routed to a handler. It is set with Mux.SetMetricsCollector.
++//
++// RecordHit runs on the goroutine that served the request, after the handler
++// has returned, so an implementation must be safe for concurrent use and
++// should return quickly. The routing context in ctx is only valid until
++// RecordHit returns, since chi reuses it for the next request.
++type MetricsCollector interface {
++	RecordHit(ctx context.Context, r *http.Request, duration time.Duration)
++}
++
++// RouteMetric describes one request that was routed to a handler.
++type RouteMetric struct {
++	// Pattern is the matched route pattern, such as "/users/{id}". For a
++	// request served through mounted subrouters it is the whole pattern.
++	Pattern string
++
++	// Method is the HTTP method of the request.
++	Method string
++
++	// Path is the path of the request as it was received.
++	Path string
++
++	// Duration is how long the router took to find and run the handler.
++	Duration time.Duration
++
++	// Params holds the URL parameters of the request keyed by name, such as
++	// {"id": "123"}. It is a copy that the callback may keep.
++	Params map[string]string
++}
++
++// SimpleMetricsCollector is a MetricsCollector that hands every hit to a
++// callback as a RouteMetric. It is meant for basic collection and for tests;
++// a collector that aggregates should implement MetricsCollector itself.
++type SimpleMetricsCollector struct {
++	// OnHit is called once for every routed request. A nil OnHit makes the
++	// collector do nothing.
++	OnHit func(RouteMetric)
++}
++
++var _ MetricsCollector = (*SimpleMetricsCollector)(nil)
++
++// RecordHit builds the RouteMetric for the request and passes it to OnHit.
++func (c *SimpleMetricsCollector) RecordHit(ctx context.Context, r *http.Request, duration time.Duration) {
++	if c == nil || c.OnHit == nil {
++		return
++	}
++
++	metric := RouteMetric{
++		Method:   r.Method,
++		Path:     r.URL.Path,
++		Duration: duration,
++		Params:   map[string]string{},
++	}
++
++	if rctx := RouteContext(ctx); rctx != nil {
++		metric.Pattern = rctx.RoutePattern()
++		for i, key := range rctx.URLParams.Keys {
++			if i >= len(rctx.URLParams.Values) {
++				break
++			}
++			// A key can repeat when subrouters are mounted; the last value
++			// wins, as it does in Context.URLParam.
++			metric.Params[key] = rctx.URLParams.Values[i]
++		}
++	}
++
++	c.OnHit(metric)
++}
+diff --git a/mux.go b/mux.go
+index 56fa4d2..6e5ba7b 100644
+--- a/mux.go
++++ b/mux.go
+@@ -6,6 +6,7 @@ import (
+ 	"net/http"
+ 	"strings"
+ 	"sync"
++	"time"
+ )
+ 
+ var _ Router = &Mux{}
+@@ -45,6 +46,9 @@ type Mux struct {
+ 	// Controls the behaviour of middleware chain generation when a mux
+ 	// is registered as an inline group inside another mux.
+ 	inline bool
++
++	// Optional collector told about every request routed to a handler
++	metricsCollector MetricsCollector
+ }
+ 
+ // NewMux returns a newly initialized Mux object that implements the Router
+@@ -104,6 +108,16 @@ func (mx *Mux) Use(middlewares ...func(http.Handler) http.Handler) {
+ 	mx.middlewares = append(mx.middlewares, middlewares...)
+ }
+ 
++// SetMetricsCollector sets the collector that is told about every request this
++// Mux routes to a handler, with the time the router took to find and run it.
++// Requests that match no route, or whose method is not allowed, are not
++// recorded. Passing nil turns collection off.
++//
++// Like Use, it must be called before the Mux starts serving requests.
++func (mx *Mux) SetMetricsCollector(c MetricsCollector) {
++	mx.metricsCollector = c
++}
++
+ // Handle adds the route `pattern` that matches any http method to
+ // execute the `handler` http.Handler.
+ func (mx *Mux) Handle(pattern string, handler http.Handler) {
+@@ -424,8 +438,31 @@ func (mx *Mux) handle(method methodTyp, pattern string, handler http.Handler) *n
+ }
+ 
+ // routeHTTP routes a http.Request through the Mux routing tree to serve
+-// the matching handler for a particular http method.
++// the matching handler for a particular http method. When a metrics collector
++// is set, it also times the request and reports it once a handler has run.
+ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {
++	if mx.metricsCollector == nil {
++		mx.routeRequest(w, r)
++		return
++	}
++
++	// The routing context gains a pattern each time a route is matched, so
++	// a request that ends in 404 or 405 adds none and is not recorded.
++	rctx := r.Context().Value(RouteCtxKey).(*Context)
++	matched := len(rctx.RoutePatterns)
++
++	start := time.Now()
++	mx.routeRequest(w, r)
++	duration := time.Since(start)
++
++	if len(rctx.RoutePatterns) > matched {
++		mx.metricsCollector.RecordHit(r.Context(), r, duration)
++	}
++}
++
++// routeRequest finds the route for the request and serves its handler, or
++// the not found and method not allowed handlers.
++func (mx *Mux) routeRequest(w http.ResponseWriter, r *http.Request) {
+ 	// Grab the route context object
+ 	rctx := r.Context().Value(RouteCtxKey).(*Context)
+ 
+@@ -454,6 +491,10 @@ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {
+ 
+ 	// Find the route
+ 	if _, _, h := mx.tree.FindRoute(rctx, method, routePath); h != nil {
++		// Set http.Request path values from our request context
++		if supportsPathValue {
++			setPathValue(rctx, r)
++		}
+ 		h.ServeHTTP(w, r)
+ 		return
+ 	}
+diff --git a/path_value.go b/path_value.go
+new file mode 100644
+index 0000000..7e78171
+--- /dev/null
++++ b/path_value.go
+@@ -0,0 +1,20 @@
++//go:build go1.22
++// +build go1.22
++
++package chi
++
++import "net/http"
++
++// supportsPathValue is true if the Go version is 1.22 and above.
++//
++// If this is true, `net/http.Request` has methods `SetPathValue` and `PathValue`.
++const supportsPathValue = true
++
++// setPathValue sets the path values in the Request value
++// based on the provided request context.
++func setPathValue(rctx *Context, r *http.Request) {
++	for i, key := range rctx.URLParams.Keys {
++		value := rctx.URLParams.Values[i]
++		r.SetPathValue(key, value)
++	}
++}
+diff --git a/path_value_fallback.go b/path_value_fallback.go
+new file mode 100644
+index 0000000..f551781
+--- /dev/null
++++ b/path_value_fallback.go
+@@ -0,0 +1,19 @@
++//go:build !go1.22
++// +build !go1.22
++
++package chi
++
++import "net/http"
++
++// supportsPathValue is true if the Go version is 1.22 and above.
++//
++// If this is true, `net/http.Request` has methods `SetPathValue` and `PathValue`.
++const supportsPathValue = false
++
++// setPathValue sets the path values in the Request value
++// based on the provided request context.
++//
++// setPathValue is only supported in Go 1.22 and above so
++// this is just a blank function so that it compiles.
++func setPathValue(rctx *Context, r *http.Request) {
++}

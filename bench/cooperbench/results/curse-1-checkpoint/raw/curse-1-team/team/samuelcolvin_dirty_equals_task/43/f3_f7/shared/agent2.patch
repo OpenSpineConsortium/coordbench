@@ -1,0 +1,83 @@
+diff --git a/dirty_equals/__init__.py b/dirty_equals/__init__.py
+index ba8214e..eca13d5 100644
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@ -18,7 +18,7 @@ from ._numeric import (
+     IsPositiveFloat,
+     IsPositiveInt,
+ )
+-from ._other import FunctionCheck, IsJson, IsUUID
++from ._other import FunctionCheck, IsHash, IsJson, IsUUID
+ from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple
+ from ._strings import IsAnyStr, IsBytes, IsStr
+ 
+@@ -66,6 +66,7 @@ __all__ = (
+     'HasRepr',
+     'IsInstance',
+     # other
++    'IsHash',
+     'FunctionCheck',
+     'IsJson',
+     'IsUUID',
+diff --git a/dirty_equals/_other.py b/dirty_equals/_other.py
+index b2b8379..0233808 100644
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@ -51,6 +51,57 @@ class IsUUID(DirtyEquals[UUID]):
+             return True
+ 
+ 
++class IsHash(DirtyEquals[str]):
++    """
++    A class that checks if a value is a hexadecimal string with the length of a given cryptographic hash algorithm.
++    """
++
++    _hash_lengths = {
++        'md5': 32,
++        'sha1': 40,
++        'sha224': 56,
++        'sha256': 64,
++        'sha384': 96,
++        'sha512': 128,
++    }
++
++    def __init__(self, algorithm: Literal['md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512']):
++        """
++        Args:
++            algorithm: The hash algorithm whose output format the value must have, one of `md5`, `sha1`, `sha224`,
++                `sha256`, `sha384` or `sha512`, in any case. Anything else raises a `ValueError`.
++
++        Only the format is checked, that is the length and the hexadecimal characters (of either case), not
++        that the value is the hash of anything in particular.
++
++        ```py title="IsHash"
++        from dirty_equals import IsHash
++
++        assert 'd41d8cd98f00b204e9800998ecf8427e' == IsHash('md5')
++        assert 'da39a3ee5e6b4b0d3255bfef95601890afd80709' == IsHash('sha1')
++        assert 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' == IsHash('sha256')
++        assert 'd41d8cd98f00b204e9800998ecf8427e' != IsHash('sha1')
++        assert 'g41d8cd98f00b204e9800998ecf8427e' != IsHash('md5')
++        assert 123 != IsHash('md5')
++        ```
++        """
++        try:
++            self.length = self._hash_lengths[algorithm.lower()]
++        except (KeyError, AttributeError):
++            supported = ', '.join(self._hash_lengths)
++            raise ValueError(f'Unsupported hash algorithm {algorithm!r}, expected one of: {supported}') from None
++        self.algorithm = algorithm
++        super().__init__(algorithm)
++
++    def equals(self, other: Any) -> bool:
++        # int(other, 16) is not used as it also accepts a sign, a 0x prefix, underscores and surrounding whitespace
++        return (
++            isinstance(other, str)
++            and len(other) == self.length
++            and all(c in '0123456789abcdefABCDEF' for c in other)
++        )
++
++
+ AnyJson = object
+ JsonType = TypeVar('JsonType', AnyJson, Any)
+ 

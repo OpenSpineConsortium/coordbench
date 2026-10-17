@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "create",
+    "task_id": "d0439bba69",
+    "by": "bench-runner",
+    "title": "Implement feature 9",
+    "ts": 1792164955.4121332
+  },
+  {
+    "kind": "create",
+    "task_id": "edca6c6d95",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 1",
+    "ts": 1792164955.4121711
+  },
+  {
+    "kind": "claim",
+    "task_id": "d0439bba69",
+    "by": "agent2",
+    "ts": 1792165041.116205
+  },
+  {
+    "kind": "claim",
+    "task_id": "edca6c6d95",
+    "by": "agent1",
+    "ts": 1792165313.515909
+  },
+  {
+    "kind": "update",
+    "task_id": "d0439bba69",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch (str.rs first/last strip param, tested)",
+    "ts": 1792165338.6852825
+  },
+  {
+    "kind": "update",
+    "task_id": "edca6c6d95",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 strip + my default in str.rs; patch.txt written; builds, tested",
+    "ts": 1792165459.1221151
+  }
+]

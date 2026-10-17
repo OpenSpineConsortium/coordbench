@@ -1,0 +1,43 @@
+commit d198fd81088be7a26ca2edfc58ac1b65d116665d (main)
+Merge: d3fd599 0e40613
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:21:28 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit d3fd5996bedf16868fd47dc5a2ddd87722fd54f9
+Merge: a292075 114e425
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:21:19 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit 0e40613cf3b038bb7acc9dfed5c4b8e8e072d67f (claude/5)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:21:10 2026 +0000
+
+    Cache resolved template paths in FileSystemLoader
+    
+    Remember which file each template name resolved to, and which names were
+    searched for and not found, so repeated lookups skip the search path
+    walk. A cached file that has disappeared is dropped and the name is
+    resolved again.
+
+ src/jinja2/loaders.py | 55 ++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 41 insertions(+), 14 deletions(-)
+
+commit 114e425c123e1899aad0abdf99e2484127de2227 (claude/3)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:21:00 2026 +0000
+
+    Validate template paths before splitting them
+    
+    validate_template_path rejects empty or None paths, null bytes, absolute
+    paths, Windows drive letters and ASCII control characters other than tab,
+    newline and carriage return, raising TemplateNotFound. split_template_path
+    calls it first, so every loader that splits a path is covered.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ src/jinja2/loaders.py | 41 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 40 insertions(+), 1 deletion(-)

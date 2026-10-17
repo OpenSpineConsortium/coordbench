@@ -1,0 +1,24 @@
+commit ddc6285ffd552bd68b43bb789dd66c9eca521b45 (agent2)
+Merge: e2024f15 ed7cc827
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 16:00:31 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit ed7cc82732fc3bcd6c62de1c2679b96ed940bb80 (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 16:00:16 2026 +0000
+
+    Add default argument for str.first and str.last (with strip, agreed with agent2)
+
+ crates/typst/src/foundations/str.rs | 42 +++++++++++++++++++++++++++++++------
+ 1 file changed, 36 insertions(+), 6 deletions(-)
+
+commit e2024f15ff4803b3be0cb08edb039ce8373b85a6
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 15:59:39 2026 +0000
+
+    Add strip parameter to str.first and str.last
+
+ crates/typst/src/foundations/str.rs | 42 +++++++++++++++++++++++++++++++------
+ 1 file changed, 36 insertions(+), 6 deletions(-)

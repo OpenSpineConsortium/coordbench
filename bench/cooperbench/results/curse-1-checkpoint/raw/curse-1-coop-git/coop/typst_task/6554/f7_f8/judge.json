@@ -1,0 +1,192 @@
+{
+  "format": "coordbench-judge/1",
+  "pair": {
+    "repo": "typst_task",
+    "task_id": 6554,
+    "features": [
+      7,
+      8
+    ],
+    "arm": "coop-git",
+    "setting": "coop",
+    "model": "claude-sonnet-5-5",
+    "driver": "session",
+    "run_name": "curse-1-coop-git",
+    "run_id": "coop-git-6554-f7_f8-d55155"
+  },
+  "calls": {},
+  "skipped": {},
+  "errors": {},
+  "heuristics": {
+    "unanswered_questions": [],
+    "ignored_questions": [],
+    "near_duplicates": [],
+    "speech_acts_keyword": {
+      "2": "Question",
+      "8": "Plan",
+      "17": "Question",
+      "20": "Answer",
+      "29": null,
+      "38": "Question",
+      "49": "Answer"
+    },
+    "resource_division_candidates": [],
+    "negotiation_candidates": [],
+    "contradictions": [],
+    "overlapping_hunks": [
+      {
+        "file": "crates/typst/src/foundations/str.rs",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            178,
+            201
+          ],
+          [
+            178,
+            201
+          ]
+        ],
+        "same_heading": "impl Str {"
+      },
+      {
+        "file": "crates/typst/src/foundations/str.rs",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            835,
+            840
+          ],
+          [
+            835,
+            840
+          ]
+        ],
+        "same_heading": "fn string_is_empty() -> EcoString {"
+      },
+      {
+        "file": "crates/typst/src/foundations/str.rs",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            949,
+            954
+          ],
+          [
+            949,
+            954
+          ]
+        ],
+        "same_heading": "cast! {"
+      }
+    ],
+    "insertion_markers": [],
+    "missing_final_status": [],
+    "git_disasters": [
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-6554-f7_f8-d55155-agent1 bash -lc 'git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push team agent2 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push team agent2 --force 2>&1"
+      }
+    ],
+    "git_broken": [
+      {
+        "agent": "agent1",
+        "push": "docker exec -w /workspace/repo coordbench-coop-git-6554-f7_f8-d55155-agent1 bash -lc 'git push team agent1 --force 2>&1 | tail -2'; B=/root/cooperbench/logs/curse-1-coop-git/coop/typst_task/6554/f7_f8",
+        "test": "cd /root/cooperbench/logs/curse-1-coop-git/coop/typst_task/6554/f7_f8/workspaces/agent1 && python3 - <<'EOF'\np='tests/suite/foundations/str.typ'\ns=open(p).read()\nanchor='--- string-at ---'\nnew='''--- "
+      },
+      {
+        "agent": "agent2",
+        "push": "docker exec -w /workspace/repo coordbench-coop-git-6554-f7_f8-d55155-agent2 bash -lc 'git add -A crates && git commit -qm \"str: add case parameter to first and last\" && git push team agent2 --force 2>",
+        "test": "cat > /root/cooperbench/logs/curse-1-coop-git/coop/typst_task/6554/f7_f8/workspaces/agent2/tests/suite/foundations/zz-scratch-case.typ <<'EOF'\n--- scratch-str-case ---\n#test(\"hello\".first(case: \"upper"
+      }
+    ],
+    "git_impatience": [
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-6554-f7_f8-d55155-agent2 bash -lc 'git fetch team 2>&1",
+        "at": 1792167495.322,
+        "partner_first_push_at": 1792167732.805
+      },
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-6554-f7_f8-d55155-agent2 bash -lc 'git fetch team 2>&1",
+        "at": 1792167715.14,
+        "partner_first_push_at": 1792167732.805
+      },
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-6554-f7_f8-d55155-agent2 bash -lc 'git fetch team 2>&1",
+        "at": 1792167720.956,
+        "partner_first_push_at": 1792167732.805
+      }
+    ],
+    "git_destructive": []
+  },
+  "heuristics_meta": {
+    "computed_at": "2026-10-16T16:32:23+00:00",
+    "conversation_source": "events.jsonl",
+    "message_count": 7,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
+    "definitions": {
+      "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
+      "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
+      "near_duplicates": "C4a/C4b candidates: [id, id, difflib ratio >= 0.9, both status-like], same sender",
+      "speech_acts_keyword": "the keyword baseline of the speech acts, beside the judge's",
+      "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
+      "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
+      "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
+      "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
+      "insertion_markers": "App D: added comment lines marking where another agent inserts code",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it",
+      "git_disasters": "coordbench's label for git-failures.json's git_disasters: force pushes and hard resets",
+      "git_broken": "coordbench's label for broken: a push followed by a failing test run",
+      "git_impatience": "coordbench's label for impatience: fetches before the partner's first push",
+      "git_destructive": "coordbench's label for destructive: a commit deleting 100 or more lines of a file the partner changed (from git log --stat, approximate when the bar is scaled)"
+    },
+    "final_status_times": {
+      "agent1": {
+        "last_edit_at": null,
+        "last_message_at": 1792167735.3512123
+      },
+      "agent2": {
+        "last_edit_at": 1792167689.912,
+        "last_message_at": 1792167842.1460605
+      }
+    },
+    "git_blog_names": {
+      "impatience": "The Real-Time Interaction Problem",
+      "destructive": "Uncooperative Behaviors",
+      "broken": "The Commitment Problem",
+      "git_disasters": "Misuse of Cooperation Tools",
+      "blame": "Hallucination in Communication",
+      "sagas": "Hallucination in Communication"
+    }
+  }
+}

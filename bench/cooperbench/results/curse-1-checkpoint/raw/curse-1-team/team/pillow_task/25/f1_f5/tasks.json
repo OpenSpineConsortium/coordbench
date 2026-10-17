@@ -1,0 +1,29 @@
+[
+  {
+    "id": "45378fab49",
+    "title": "Lead-only: integrate and submit feature 1",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792147882.6167302,
+    "last_note": "integrated agent2 patch (src) with feature 1; merged tree tests pass; patch.txt written",
+    "metadata": {
+      "feature_id": 1,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "e62a29656f",
+    "title": "Implement feature 5",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792147882.6166713,
+    "last_note": "patch at /workspace/shared/agent2.patch (src/PIL/Image.py + Tests/test_image.py)",
+    "metadata": {
+      "feature_id": 5,
+      "assigned_to": "agent2"
+    }
+  }
+]

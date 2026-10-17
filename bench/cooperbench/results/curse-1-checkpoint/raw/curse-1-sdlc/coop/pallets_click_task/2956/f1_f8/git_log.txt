@@ -1,0 +1,45 @@
+commit 8dafdd1c2952c091fae10e1ce1ed43c83d31eac3 (main)
+Merge: 9bad4c0 5ddd14a
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:09:17 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 5ddd14a0b830be73aab6f2fe3bf008e6021be285 (claude/1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:09:09 2026 +0000
+
+    Add auto_complete to Option for context-aware completion
+    
+    An option with auto_complete=True completes its value from its type and
+    name: a flag takes none, a plain string is matched by the words of its
+    name (user, branch, file/path/dir, env) and anything else completes as
+    its type does. A shell_complete function given to the option still wins.
+    auto_complete is also reported in the info dict.
+
+ src/click/core.py  |  60 ++++++++++++++++++++++++++++++++
+ src/click/types.py | 100 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 160 insertions(+)
+
+commit 9bad4c0a23cbe835f1a6636fce506021d45a8b85
+Merge: 5c1239b ba1011f
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 13:09:02 2026 +0000
+
+    Merge claude/8: closes #8
+
+commit ba1011f45a09e0bb3183e61315af09dffdd783f5 (claude/8)
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:08:43 2026 +0000
+
+    Add track_changes to record option value history
+    
+    Commands and groups take track_changes=True; their context then keeps, for
+    each parameter, the value, the source and a timestamp, read back with
+    Context.get_option_history() by parameter name or option flag. It returns
+    None when tracking is off, so the default costs one boolean per context.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ src/click/core.py | 91 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 90 insertions(+), 1 deletion(-)

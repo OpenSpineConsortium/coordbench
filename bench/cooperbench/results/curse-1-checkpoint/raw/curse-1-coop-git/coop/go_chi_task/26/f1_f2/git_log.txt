@@ -1,0 +1,35 @@
+commit bf12769686d96c46fd8ce97447cbc3d39a7ff8a1 (agent1)
+Merge: a65b73e f322e94
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:28:13 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 3d35ee22e719f7dfa04583ce67665999abb27620 (agent2)
+Merge: f322e94 a65b73e
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 13:28:11 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit f322e941bad237d78f28457d5b782a8b116c7e37
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 13:28:06 2026 +0000
+
+    feat(mux): route hit monitoring and metrics
+
+ metrics.go      |  85 ++++++++++++++
+ metrics_test.go | 336 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ mux.go          |  26 +++++
+ 3 files changed, 447 insertions(+)
+
+commit a65b73e79d9c77a12f99439bc0724b39e8514127
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 13:26:52 2026 +0000
+
+    feat(mux): support http.Request.PathValue in Go 1.22
+
+ mux.go                 |  4 ++++
+ path_value.go          | 20 ++++++++++++++++++++
+ path_value_fallback.go | 19 +++++++++++++++++++
+ 3 files changed, 43 insertions(+)

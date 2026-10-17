@@ -1,0 +1,100 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..c106fa488 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -258,6 +258,50 @@ class TestImage:
+             assert im.readonly
+             im.save(temp_file)
+ 
++    def test_save_preserve_readonly(self, tmp_path: Path) -> None:
++        data = bytearray([255])
++        im = Image.frombuffer("L", (1, 1), data, "raw", "L", 0, 1)
++        assert im.readonly
++
++        # By default, saving copies the image and ends the link to the buffer
++        im.save(tmp_path / "temp.bmp")
++        assert not im.readonly
++        data[0] = 64
++        assert im.getdata()[0] == 255
++
++    def test_save_preserve_readonly_true(self, tmp_path: Path) -> None:
++        data = bytearray([255])
++        im = Image.frombuffer("L", (1, 1), data, "raw", "L", 0, 1)
++        assert im.readonly
++
++        temp_file = tmp_path / "temp.bmp"
++        im.save(temp_file, preserve_readonly=True)
++        assert im.readonly
++
++        # The image still reflects changes to the buffer
++        data[0] = 64
++        assert im.getdata()[0] == 64
++
++        # and what was saved is the image as it was
++        with Image.open(temp_file) as reloaded:
++            assert reloaded.getdata()[0] == 255
++
++        # Saving the changed image writes the changed data
++        im.save(temp_file, preserve_readonly=True)
++        assert im.readonly
++        with Image.open(temp_file) as reloaded:
++            assert reloaded.getdata()[0] == 64
++
++    def test_save_preserve_readonly_not_readonly(self, tmp_path: Path) -> None:
++        im = Image.new("L", (1, 1), 255)
++        assert not im.readonly
++
++        temp_file = tmp_path / "temp.bmp"
++        im.save(temp_file, preserve_readonly=True)
++        assert not im.readonly
++        with Image.open(temp_file) as reloaded:
++            assert reloaded.getdata()[0] == 255
++
+     def test_dump(self, tmp_path: Path) -> None:
+         im = Image.new("L", (10, 10))
+         im._dump(str(tmp_path / "temp_L.ppm"))
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..77f6411aa 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2467,7 +2467,11 @@ class Image:
+         )
+ 
+     def save(
+-        self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
++        self,
++        fp: StrOrBytesPath | IO[bytes],
++        format: str | None = None,
++        preserve_readonly: bool = False,
++        **params: Any,
+     ) -> None:
+         """
+         Saves this image under the given filename.  If no format is
+@@ -2490,6 +2494,12 @@ class Image:
+            format to use is determined from the filename extension.
+            If a file object was used instead of a filename, this
+            parameter should always be used.
++        :param preserve_readonly: If ``True``, the image is only loaded before
++           saving, so a readonly image keeps its ``readonly`` flag and stays
++           connected to the data it reflects, such as the buffer of an image
++           created by :py:func:`~PIL.Image.frombuffer`. If ``False``, the
++           default, a readonly image is first copied, which ends that
++           connection.
+         :param params: Extra parameters to the image writer. These can also be
+            set on the image itself through ``encoderinfo``. This is useful when
+            saving multiple images::
+@@ -2540,8 +2550,12 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
+-        # may mutate self!
+-        self._ensure_mutable()
++        if preserve_readonly:
++            # keep the readonly flag, and with it the link to the underlying data
++            self.load()
++        else:
++            # may mutate self!
++            self._ensure_mutable()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}

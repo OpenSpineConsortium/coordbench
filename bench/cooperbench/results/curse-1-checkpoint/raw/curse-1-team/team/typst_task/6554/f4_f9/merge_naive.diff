@@ -1,0 +1,110 @@
+diff --cc crates/typst/src/foundations/str.rs
+index b239c2a5c,09c078dfc..000000000
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@@ -176,12 -176,14 +176,23 @@@ impl Str 
+          self.0.len()
+      }
+  
+++<<<<<<< HEAD
+ +    /// Extracts the first grapheme cluster of the string.
+ +    /// Fails with an error if the string is empty.
+ +    ///
+ +    /// If `strip` is given, all leading characters that occur in it are
+ +    /// ignored before the grapheme cluster is extracted. If nothing remains,
+ +    /// this fails with the same error as for an empty string.
+++=======
++     /// Extracts the first grapheme cluster of the string, or, with `repeat`,
++     /// the first several grapheme clusters.
++     /// Fails with an error if the string has fewer grapheme clusters than
++     /// requested, or is empty.
++     ///
++     /// If `strip` is given, all leading characters that occur in it are
++     /// ignored before the grapheme clusters are extracted. If too little
++     /// remains, this fails with the same error as for a string that short.
+++>>>>>>> agent1
+      ///
+      /// ```example
+      /// #"--foo".first(strip: "- ") \
+@@@ -193,23 -195,30 +204,49 @@@
+          /// The characters to ignore at the start of the string.
+          #[named]
+          strip: Option<Str>,
+++<<<<<<< HEAD
+ +    ) -> StrResult<Str> {
+++=======
++         /// Number of times to repeat this operation. Fails if exceeds string length.
++         #[named]
++         #[default(1)]
++         repeat: usize,
++     ) -> StrResult<Str> {
++         check_repeat(repeat)?;
+++>>>>>>> agent1
+          let text = match &strip {
+              Some(set) => self.0.trim_start_matches(|c: char| set.as_str().contains(c)),
+              None => self.0.as_str(),
+          };
+++<<<<<<< HEAD
+ +        text.graphemes(true)
+ +            .next()
+ +            .map(Into::into)
+ +            .ok_or_else(string_is_empty)
+ +    }
+ +
+ +    /// Extracts the last grapheme cluster of the string.
+ +    /// Fails with an error if the string is empty.
+ +    ///
+ +    /// If `strip` is given, all trailing characters that occur in it are
+ +    /// ignored before the grapheme cluster is extracted. If nothing remains,
+ +    /// this fails with the same error as for an empty string.
+++=======
++         match text.grapheme_indices(true).nth(repeat - 1) {
++             Some((start, grapheme)) => Ok(text[..start + grapheme.len()].into()),
++             None => Err(not_enough_characters(text, repeat)),
++         }
++     }
++ 
++     /// Extracts the last grapheme cluster of the string, or, with `repeat`,
++     /// the last several grapheme clusters.
++     /// Fails with an error if the string has fewer grapheme clusters than
++     /// requested, or is empty.
++     ///
++     /// If `strip` is given, all trailing characters that occur in it are
++     /// ignored before the grapheme clusters are extracted. If too little
++     /// remains, this fails with the same error as for a string that short.
+++>>>>>>> agent1
+      ///
+      /// ```example
+      /// #"bar!!".last(strip: "!?")
+@@@ -220,15 -229,20 +257,31 @@@
+          /// The characters to ignore at the end of the string.
+          #[named]
+          strip: Option<Str>,
+++<<<<<<< HEAD
+ +    ) -> StrResult<Str> {
+++=======
++         /// Number of times to repeat this operation. Fails if exceeds string length.
++         #[named]
++         #[default(1)]
++         repeat: usize,
++     ) -> StrResult<Str> {
++         check_repeat(repeat)?;
+++>>>>>>> agent1
+          let text = match &strip {
+              Some(set) => self.0.trim_end_matches(|c: char| set.as_str().contains(c)),
+              None => self.0.as_str(),
+          };
+++<<<<<<< HEAD
+ +        text.graphemes(true)
+ +            .next_back()
+ +            .map(Into::into)
+ +            .ok_or_else(string_is_empty)
+++=======
++         match text.grapheme_indices(true).rev().nth(repeat - 1) {
++             Some((start, _)) => Ok(text[start..].into()),
++             None => Err(not_enough_characters(text, repeat)),
++         }
+++>>>>>>> agent1
+      }
+  
+      /// Extracts the first grapheme cluster after the specified index. Returns

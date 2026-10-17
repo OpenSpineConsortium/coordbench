@@ -1,0 +1,53 @@
+commit a5d6d70cc407a66a982dfc400fa285e59ca1b999 (main)
+Merge: 58051d0 c606c7d
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:11:26 2026 +0000
+
+    Merge claude/8: closes #8
+
+commit c606c7d1e902d808cd3bd6d01d8f462f9d798689 (claude/8)
+Merge: 4fc0ea4 58051d0
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:11:17 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/8
+
+commit 4fc0ea4730bd328ddc194e2f79ea7048f10b9fd1
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:11:11 2026 +0000
+
+    Add the ctrans tag: conditional translation with a mandatory fallback
+    
+    ConditionalI18nExtension (alias conditional_i18n) registers {% ctrans %}.
+    The condition is evaluated at render time; when true the block goes
+    through the environment gettext or ngettext as a trans tag does, when
+    false the fallback block is rendered with its variables filled in.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ src/jinja2/ext.py | 320 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 320 insertions(+)
+
+commit 58051d0cb22880177bc7feb761954179812420c2
+Merge: 896a621 253f22b
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:07:49 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit 253f22b3626908411759afb9a8824871fd77a4f4 (claude/4)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:07:39 2026 +0000
+
+    Add note, created and modified metadata to the trans tag
+    
+    The parameters take string literals only and are stored on the Output node
+    as trans_metadata for translation tools; nodes without metadata have no
+    such attribute and rendering is unchanged.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ src/jinja2/ext.py | 54 ++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 52 insertions(+), 2 deletions(-)

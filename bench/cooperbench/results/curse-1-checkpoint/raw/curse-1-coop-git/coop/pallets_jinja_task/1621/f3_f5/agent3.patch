@@ -1,0 +1,115 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..401bc479 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -21,10 +21,38 @@ if t.TYPE_CHECKING:
+     from .environment import Template
+ 
+ 
++def validate_template_path(template: str) -> None:
++    """Reject template paths that are empty or could reach outside the
++    template search path. Raises :exc:`TemplateNotFound` for an empty
++    path, a null byte, an absolute path (a leading ``/`` or ``\\``), a
++    Windows drive letter (``C:``), or an ASCII control character other
++    than tab, newline and carriage return.
++    """
++    if not template:
++        raise TemplateNotFound(template)
++
++    if "\x00" in template:
++        raise TemplateNotFound(template)
++
++    if template[0] in ("/", "\\"):
++        raise TemplateNotFound(template)
++
++    first = template[0]
++    if len(template) >= 2 and template[1] == ":" and (
++        "a" <= first <= "z" or "A" <= first <= "Z"
++    ):
++        raise TemplateNotFound(template)
++
++    for char in template:
++        if ord(char) < 32 and char not in "\t\n\r":
++            raise TemplateNotFound(template)
++
++
+ def split_template_path(template: str) -> t.List[str]:
+     """Split a path into segments and perform a sanity check.  If it detects
+     '..' in the path it will raise a `TemplateNotFound` error.
+     """
++    validate_template_path(template)
+     pieces = []
+     for piece in template.split("/"):
+         if (
+@@ -187,32 +215,59 @@ class FileSystemLoader(BaseLoader):
+         self.searchpath = [os.fspath(p) for p in searchpath]
+         self.encoding = encoding
+         self.followlinks = followlinks
++        # Maps a template name to its resolved file path, or to None if
++        # the template was searched for and not found.
++        self._path_cache: t.Dict[str, t.Optional[str]] = {}
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
+         pieces = split_template_path(template)
++
++        if template in self._path_cache:
++            cached = self._path_cache[template]
++
++            if cached is None:
++                raise TemplateNotFound(template)
++
++            f = open_if_exists(cached)
++
++            if f is not None:
++                return self._read_source(f, cached)
++
++            # The file is gone, so forget it and resolve the name again.
++            del self._path_cache[template]
++
+         for searchpath in self.searchpath:
+             filename = os.path.join(searchpath, *pieces)
+             f = open_if_exists(filename)
+             if f is None:
+                 continue
+-            try:
+-                contents = f.read().decode(self.encoding)
+-            finally:
+-                f.close()
+-
+-            mtime = os.path.getmtime(filename)
+ 
+-            def uptodate() -> bool:
+-                try:
+-                    return os.path.getmtime(filename) == mtime
+-                except OSError:
+-                    return False
++            self._path_cache[template] = filename
++            return self._read_source(f, filename)
+ 
+-            return contents, filename, uptodate
++        self._path_cache[template] = None
+         raise TemplateNotFound(template)
+ 
++    def _read_source(
++        self, f: t.BinaryIO, filename: str
++    ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        try:
++            contents = f.read().decode(self.encoding)
++        finally:
++            f.close()
++
++        mtime = os.path.getmtime(filename)
++
++        def uptodate() -> bool:
++            try:
++                return os.path.getmtime(filename) == mtime
++            except OSError:
++                return False
++
++        return contents, filename, uptodate
++
+     def list_templates(self) -> t.List[str]:
+         found = set()
+         for searchpath in self.searchpath:

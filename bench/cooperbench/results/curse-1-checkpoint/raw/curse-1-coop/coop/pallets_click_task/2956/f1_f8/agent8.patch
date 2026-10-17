@@ -1,0 +1,165 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index f57ada6..18b5255 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -437,6 +437,13 @@ class Context:
+         self._close_callbacks: list[t.Callable[[], t.Any]] = []
+         self._depth = 0
+         self._parameter_source: dict[str, ParameterSource] = {}
++        #: Whether the history of option values is recorded. Taken from
++        #: the command's ``track_changes`` attribute, so it is off for a
++        #: command that does not ask for it.
++        self._track_changes: bool = bool(getattr(command, "track_changes", False))
++        #: Maps a parameter name to the list of values it took, oldest
++        #: first. Stays empty unless ``_track_changes`` is set.
++        self._option_history: dict[str, list[dict[str, t.Any]]] = {}
+         self._exit_stack = ExitStack()
+ 
+     @property
+@@ -839,6 +846,81 @@ class Context:
+         """
+         return self._parameter_source.get(name)
+ 
++    def _record_option_change(
++        self, name: str, value: t.Any, source: ParameterSource | None
++    ) -> None:
++        """Append a value of the parameter ``name`` to its history. Does
++        nothing unless the command was created with ``track_changes``.
++
++        An entry holds the ``value``, its ``source`` and the ``timestamp``
++        it was set at. An entry that replaces an earlier one also holds
++        that one's value as ``previous_value``.
++        """
++        if not self._track_changes:
++            return
++
++        # Imported here because click keeps its import time down and
++        # only a command that tracks changes needs the clock.
++        import time
++
++        history = self._option_history.setdefault(name, [])
++        entry: dict[str, t.Any] = {
++            "value": value,
++            "source": source,
++            "timestamp": time.time(),
++        }
++
++        if history:
++            entry["previous_value"] = history[-1]["value"]
++
++        history.append(entry)
++
++    def _resolve_option_name(self, name: str) -> str:
++        """Turn an option flag such as ``--count`` or ``-c`` into the
++        name of the parameter it sets. Anything that is not a flag of
++        this command's options is returned unchanged.
++        """
++        if not name.startswith("-"):
++            return name
++
++        params: list[Parameter] = list(self.command.params)
++        help_option = self.command.get_help_option(self)
++
++        if help_option is not None:
++            params.append(help_option)
++
++        for param in params:
++            if param.name is not None and name in (
++                *param.opts,
++                *getattr(param, "secondary_opts", ()),
++            ):
++                return param.name
++
++        return name
++
++    def get_option_history(self, name: str) -> list[dict[str, t.Any]] | None:
++        """Get the history of the values an option took, with where each
++        value came from. This is only recorded if the command was created
++        with ``track_changes=True``.
++
++        Each entry is a dict with the keys ``value``, ``source`` (a member
++        of :class:`~click.core.ParameterSource`) and ``timestamp`` (seconds
++        since the epoch). An entry that replaced an earlier value also has
++        the key ``previous_value``. Entries are ordered oldest first.
++
++        :param name: The name of the parameter, or one of the option's
++            flags such as ``--count`` or ``-c``.
++        :return: A list of entries, empty if the option has no history
++            or does not exist, or ``None`` if tracking is disabled.
++
++        .. versionadded:: 8.3
++        """
++        if not self._track_changes:
++            return None
++
++        history = self._option_history.get(self._resolve_option_name(name), [])
++        return [dict(entry) for entry in history]
++
+ 
+ class Command:
+     """Commands are the basic building block of command line interfaces in
+@@ -867,6 +949,12 @@ class Command:
+                         indicating that the command is deprecated and highlights
+                         its deprecation in --help. The message can be customized
+                         by using a string as the value.
++    :param track_changes: record the history of the values of this command's
++        options, with where each came from, for
++        :meth:`Context.get_option_history`. Disabled by default.
++
++    .. versionchanged:: 8.3
++        Added the ``track_changes`` parameter.
+ 
+     .. versionchanged:: 8.2
+         This is the base class for all commands, not ``BaseCommand``.
+@@ -916,6 +1004,7 @@ class Command:
+         no_args_is_help: bool = False,
+         hidden: bool = False,
+         deprecated: bool | str = False,
++        track_changes: bool = False,
+     ) -> None:
+         #: the name the command thinks it has.  Upon registering a command
+         #: on a :class:`Group` the group will default the command name
+@@ -945,6 +1034,8 @@ class Command:
+         self.no_args_is_help = no_args_is_help
+         self.hidden = hidden
+         self.deprecated = deprecated
++        #: if the history of option values is recorded in the context.
++        self.track_changes = track_changes
+ 
+     def to_info_dict(self, ctx: Context) -> dict[str, t.Any]:
+         return {
+@@ -1478,8 +1569,13 @@ class Group(Command):
+         all the commands. If ``invoke_without_command`` is enabled, the value
+         will be the value returned by the group's callback, or an empty list if
+         ``chain`` is enabled.
++    :param track_changes: Record the history of the values of this group's
++        options. See :class:`Command`.
+     :param kwargs: Other arguments passed to :class:`Command`.
+ 
++    .. versionchanged:: 8.3
++        Added the ``track_changes`` parameter.
++
+     .. versionchanged:: 8.0
+         The ``commands`` argument can be a list of command objects.
+ 
+@@ -1521,9 +1617,10 @@ class Group(Command):
+         subcommand_metavar: str | None = None,
+         chain: bool = False,
+         result_callback: t.Callable[..., t.Any] | None = None,
++        track_changes: bool = False,
+         **kwargs: t.Any,
+     ) -> None:
+-        super().__init__(name, **kwargs)
++        super().__init__(name, track_changes=track_changes, **kwargs)
+ 
+         if commands is None:
+             commands = {}
+@@ -2420,6 +2517,8 @@ class Parameter:
+ 
+                 value = None
+ 
++        ctx._record_option_change(self.name, value, source)  # type: ignore
++
+         if self.expose_value:
+             ctx.params[self.name] = value  # type: ignore
+ 

@@ -1,0 +1,1 @@
+{"id": "d0439bba69", "title": "Implement feature 9", "owner": "agent2", "status": "done", "created_by": "bench-runner", "created_at": 1792164955.4121306, "last_note": "patch at /workspace/shared/agent2.patch (str.rs first/last strip param, tested)", "metadata": {"feature_id": 9, "assigned_to": "agent2"}}

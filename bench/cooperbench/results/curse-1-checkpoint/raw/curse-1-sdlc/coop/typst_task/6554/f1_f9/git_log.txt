@@ -1,0 +1,54 @@
+commit 0a6d92af917d896dc6d7f4c993df3bdd91b1c0e0 (main)
+Merge: 181b4fc2 92512482
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 15:28:35 2026 +0000
+
+    Merge claude/9: closes #9
+
+commit 92512482a06988f77c332bd85cca2a3fba008129 (claude/9)
+Merge: 2e864af5 181b4fc2
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 15:28:34 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/9
+    
+    # Conflicts:
+    #       crates/typst/src/foundations/str.rs
+
+commit 181b4fc25b5ccffa16c171262ed560bf2df45d6b
+Merge: b8034a34 31eeb954
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 15:16:53 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 31eeb95496a7c9a96e5841429dfb19327a823c28 (claude/1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 15:16:44 2026 +0000
+
+    Add default argument for str.first and str.last
+    
+    Returns the default instead of failing when the string is empty; the
+    behaviour without a default is unchanged.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ crates/typst/src/foundations/str.rs | 26 ++++++++++++++++++++------
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+commit 2e864af5a5dbfccf3aaefc0efcc5793b83e021a4
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 15:16:23 2026 +0000
+
+    Add strip parameter to str.first and str.last
+    
+    Characters in the strip string are trimmed from the start (first) or end
+    (last) before the grapheme cluster is taken. An empty result gives the
+    existing string-is-empty error; without the parameter nothing changes.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ crates/typst/src/foundations/str.rs | 40 +++++++++++++++++++++++++++++++------
+ 1 file changed, 34 insertions(+), 6 deletions(-)

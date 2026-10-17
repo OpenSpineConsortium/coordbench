@@ -1,0 +1,194 @@
+{
+  "repo": "go_chi_task",
+  "task_id": 26,
+  "features": [
+    1,
+    2
+  ],
+  "setting": "coop",
+  "apply_status": {
+    "agent1": "applied",
+    "agent2": "applied"
+  },
+  "merge": {
+    "status": "clean",
+    "strategy": "naive",
+    "diff": "diff --git a/metrics.go b/metrics.go\nnew file mode 100644\nindex 0000000..f9a7d15\n--- /dev/null\n+++ b/metrics.go\n@@ -0,0 +1,82 @@\n+package chi\n+\n+import (\n+\t\"context\"\n+\t\"net/http\"\n+\t\"time\"\n+)\n+\n+// MetricsCollector receives one RecordHit call for every request that the\n+// router matched to a route, after the route's handler has returned.\n+//\n+// The router measures the duration itself, so a collector sees the full\n+// route pattern (for example \"/users/{id}\") and the URL parameters that the\n+// routing context holds at that point, which middleware placed before the\n+// router cannot see. RecordHit is called on the goroutine that serves the\n+// request, so an implementation must be safe for concurrent use and should\n+// return quickly.\n+type MetricsCollector interface {\n+\tRecordHit(ctx context.Context, r *http.Request, duration time.Duration)\n+}\n+\n+// RouteMetric describes one request that was served by a route.\n+type RouteMetric struct {\n+\t// Pattern is the matched route pattern, such as \"/users/{id}\".\n+\tPattern string\n+\n+\t// Method is the HTTP method of the request.\n+\tMethod string\n+\n+\t// Path is the URL path of the request.\n+\tPath string\n+\n+\t// Duration is how long the route's handler took to serve the request.\n+\tDuration time.Duration\n+\n+\t// Params holds the URL parameters of the matched route, keyed by name,\n+\t// such as {\"id\": \"123\"}. It is never nil.\n+\tParams map[string]string\n+}\n+\n+// SimpleMetricsCollector is a MetricsCollector that turns every hit into a\n+// RouteMetric and hands it to the OnHit callback. A SimpleMetricsCollector\n+// with a nil OnHit ignores hits.\n+type SimpleMetricsCollector struct {\n+\t// OnHit is called once per matched request. It may be called from many\n+\t// goroutines at the same time.\n+\tOnHit func(RouteMetric)\n+}\n+\n+var _ MetricsCollector = SimpleMetricsCollector{}\n+var _ MetricsCollector = (*SimpleMetricsCollector)(nil)\n+\n+// RecordHit builds the RouteMetric of the request and passes it to OnHit.\n+// The pattern and the URL parameters come from the routing context in ctx,\n+// and are empty when ctx carries none.\n+func (c SimpleMetricsCollector) RecordHit(ctx context.Context, r *http.Request, duration time.Duration) {\n+\tif c.OnHit == nil {\n+\t\treturn\n+\t}\n+\n+\tmetric := RouteMetric{\n+\t\tMethod:   r.Method,\n+\t\tDuration: duration,\n+\t\tParams:   map[string]string{},\n+\t}\n+\tif r.URL != nil {\n+\t\tmetric.Path = r.URL.Path\n+\t}\n+\n+\tif rctx := RouteContext(ctx); rctx != nil {\n+\t\tmetric.Pattern = rctx.RoutePattern()\n+\t\t// Later entries come from deeper sub-routers and win, as they do in\n+\t\t// Context.URLParam.\n+\t\tfor i, key := range rctx.URLParams.Keys {\n+\t\t\tif i < len(rctx.URLParams.Values) {\n+\t\t\t\tmetric.Params[key] = rctx.URLParams.Values[i]\n+\t\t\t}\n+\t\t}\n+\t}\n+\n+\tc.OnHit(metric)\n+}\ndiff --git a/mux.go b/mux.go\nindex 56fa4d2..b2d5074 100644\n--- a/mux.go\n+++ b/mux.go\n@@ -6,6 +6,7 @@ import (\n \t\"net/http\"\n \t\"strings\"\n \t\"sync\"\n+\t\"time\"\n )\n \n var _ Router = &Mux{}\n@@ -45,6 +46,10 @@ type Mux struct {\n \t// Controls the behaviour of middleware chain generation when a mux\n \t// is registered as an inline group inside another mux.\n \tinline bool\n+\n+\t// Optional collector that is told about every request that this mux\n+\t// routes to a handler, with how long the handler took.\n+\tmetricsCollector MetricsCollector\n }\n \n // NewMux returns a newly initialized Mux object that implements the Router\n@@ -104,6 +109,22 @@ func (mx *Mux) Use(middlewares ...func(http.Handler) http.Handler) {\n \tmx.middlewares = append(mx.middlewares, middlewares...)\n }\n \n+// SetMetricsCollector sets the collector that is told, after each request this\n+// Mux routes to a handler, which route pattern was hit and how long serving it\n+// took. Passing nil turns collection off, which is the default and costs\n+// nothing per request.\n+//\n+// Only requests matched to a route are recorded; a request that ends in the\n+// not found or method not allowed handler is not. A mounted sub-router records\n+// to its own collector, if it has one, and the parent records the whole\n+// request, including the sub-router's part of the pattern.\n+//\n+// Like Use, it is meant to be called while the Mux is being set up, before it\n+// serves requests.\n+func (mx *Mux) SetMetricsCollector(collector MetricsCollector) {\n+\tmx.metricsCollector = collector\n+}\n+\n // Handle adds the route `pattern` that matches any http method to\n // execute the `handler` http.Handler.\n func (mx *Mux) Handle(pattern string, handler http.Handler) {\n@@ -452,9 +473,24 @@ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {\n \t\treturn\n \t}\n \n+\t// Only read the clock when someone collects metrics.\n+\tcollector := mx.metricsCollector\n+\tvar start time.Time\n+\tif collector != nil {\n+\t\tstart = time.Now()\n+\t}\n+\n \t// Find the route\n \tif _, _, h := mx.tree.FindRoute(rctx, method, routePath); h != nil {\n+\t\t// Expose the URL params through http.Request.PathValue where the\n+\t\t// Go version supports it (1.22 and above).\n+\t\tif supportsPathValue {\n+\t\t\tsetPathValue(rctx, r)\n+\t\t}\n \t\th.ServeHTTP(w, r"
+  },
+  "feature1": {
+    "feature_id": 1,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 3,
+    "tests_failed": 0,
+    "test_output": "Note: switching to '9436cc85db0d35be06e66b91b4f74bbc0295b07b'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestPathValue)$\nRunning Go tests...\n=== RUN   TestPathValue\n=== RUN   TestPathValue/Basic_path_value\n=== RUN   TestPathValue/Two_path_values\n--- PASS: TestPathValue (0.00s)\n    --- PASS: TestPathValue/Basic_path_value (0.00s)\n    --- PASS: TestPathValue/Two_path_values (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.005s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.004s [no tests to run]\nAll tests passed!\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics.go\nRemoving path_value.go\nRemoving path_value_fallback.go\nRemoving path_value_test.go\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "feature_id": 2,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 1,
+    "tests_failed": 0,
+    "test_output": "HEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestMetricsCollector)$\nRunning Go tests...\n=== RUN   TestMetricsCollector\n--- PASS: TestMetricsCollector (0.01s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.011s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.003s [no tests to run]\nAll tests passed!\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics.go\nRemoving metrics_test.go\nRemoving path_value.go\nRemoving path_value_fallback.go\nRepository cleaned.\n"
+  },
+  "both_passed": true,
+  "error": null,
+  "evaluated_at": "2026-10-16T13:32:42.332469",
+  "cascade": {
+    "cascade_version": 1,
+    "ran": true,
+    "basis": "the paper's cascade on the CooperBench 63b9d44 dataset",
+    "cooperbench_commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+    "verdict_63b9d44": true,
+    "verdict_paper_era": true,
+    "verdict_paper_era_regex": true,
+    "route": "naive",
+    "route_regex": "naive",
+    "lower_bound": false,
+    "verdict_63b9d44_rerun": true,
+    "deciding_artifact": {
+      "verdict_63b9d44": "merge_naive.diff",
+      "verdict_paper_era": "merge_naive.diff"
+    },
+    "apply_status": {
+      "agent1": "applied",
+      "agent2": "applied"
+    },
+    "has_naive_merge_conflict": false,
+    "naive": {
+      "conflict": false,
+      "conflict_sections": 0,
+      "conflict_lines": 0,
+      "avg_lines_per_conflict": 0,
+      "conflict_score": 0,
+      "severity": "NONE",
+      "diff_file": "merge_naive.diff",
+      "f1": true,
+      "f2": true,
+      "f1_regex": true,
+      "f2_regex": true,
+      "tests": {
+        "f1": {
+          "passed": true,
+          "passed_regex": true,
+          "exit_code": 0,
+          "tests_passed": 3,
+          "tests_failed": 0,
+          "test_output": "Note: switching to '9436cc85db0d35be06e66b91b4f74bbc0295b07b'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestPathValue)$\nRunning Go tests...\n=== RUN   TestPathValue\n=== RUN   TestPathValue/Basic_path_value\n=== RUN   TestPathValue/Two_path_values\n--- PASS: TestPathValue (0.00s)\n    --- PASS: TestPathValue/Basic_path_value (0.00s)\n    --- PASS: TestPathValue/Two_path_values (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.005s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.004s [no tests to run]\nAll tests passed!\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics.go\nRemoving path_value.go\nRemoving path_value_fallback.go\nRemoving path_value_test.go\nRepository cleaned.\n"
+        },
+        "f2": {
+          "passed": true,
+          "passed_regex": true,
+          "exit_code": 0,
+          "tests_passed": 1,
+          "tests_failed": 0,
+          "test_output": "HEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestMetricsCollector)$\nRunning Go tests...\n=== RUN   TestMetricsCollector\n--- PASS: TestMetricsCollector (0.01s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.011s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.003s [no tests to run]\nAll tests passed!\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics.go\nRemoving metrics_test.go\nRemoving path_value.go\nRemoving path_value_fallback.go\nRepository cleaned.\n"
+        }
+      },
+      "tests_from": "test_merged"
+    },
+    "union": {
+      "ran": false,
+      "clean": null,
+      "f1": null,
+      "f2": null,
+      "f1_regex": null,
+      "f2_regex": null,
+      "tests": {
+        "f1": null,
+        "f2": null
+      },
+      "diff_file": null,
+      "reason": "the naive merge was clean"
+    },
+    "llm": {
+      "ran": false,
+      "needed": false,
+      "reason": "not needed: the naive merge was clean"
+    },
+    "agent_alone": {
+      "agent1": {
+        "feature": 1,
+        "patch_file": "agent1.patch",
+        "f1": true,
+        "f2": false,
+        "f1_regex": true,
+        "f2_regex": false,
+        "tests": {
+          "f1": {
+            "passed": true,
+            "passed_regex": true,
+            "exit_code": 0,
+            "tests_passed": 3,
+            "tests_failed": 0,
+            "test_output": "Note: switching to '9436cc85db0d35be06e66b91b4f74bbc0295b07b'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestPathValue)$\nRunning Go tests...\n=== RUN   TestPathValue\n=== RUN   TestPathValue/Basic_path_value\n=== RUN   TestPathValue/Two_path_values\n--- PASS: TestPathValue (0.00s)\n    --- PASS: TestPathValue/Basic_path_value (0.00s)\n    --- PASS: TestPathValue/Two_path_values (0.00s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.007s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.003s [no tests to run]\nAll tests passed!\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving path_value.go\nRemoving path_value_fallback.go\nRemoving path_value_test.go\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestMetricsCollector)$\nRunning Go tests...\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics_test.go\nRemoving path_value.go\nRemoving path_value_fallback.go\nRepository cleaned.\n"
+          }
+        }
+      },
+      "agent2": {
+        "feature": 2,
+        "patch_file": "agent2.patch",
+        "f1": false,
+        "f2": true,
+        "f1_regex": false,
+        "f2_regex": true,
+        "tests": {
+          "f1": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestPathValue)$\nRunning Go tests...\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics.go\nRemoving path_value_test.go\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": true,
+            "passed_regex": true,
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at 9436cc8 go 1.22 ci (#898)\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nReset to base: 9436cc85db0d35be06e66b91b4f74bbc0295b07b\nEnsuring clean repository state...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nApplying test patch...\nTest patch applied successfully.\nApplying feature patch...\nFeature patch applied successfully.\nAnalyzing test patch for test functions...\nFound test functions to run: ^(TestMetricsCollector)$\nRunning Go tests...\n=== RUN   TestMetricsCollector\n--- PASS: TestMetricsCollector (0.01s)\nPASS\nok  \tgithub.com/go-chi/chi/v5\t0.011s\ntesting: warning: no tests to run\nPASS\nok  \tgithub.com/go-chi/chi/v5/middleware\t0.004s [no tests to run]\nAll tests passed!\nTest execution completed!\nCleaning up repository...\nResetting to HEAD (HEAD) and cleaning...\nHEAD is now at 9436cc8 go 1.22 ci (#898)\nRemoving metrics.go\nRemoving metrics_test.go\nRepository cleaned.\n"
+          }
+        }
+      }
+    },
+    "test_file_filter": {
+      "verdict_63b9d44": "63b9d44 eval/sandbox.py _filter_test_files",
+      "verdict_paper_era": "63b9d44 eval/sandbox.py _filter_test_files, so both verdicts judge the same merges; 59bbf65 kept only code files (core/patch.py _filter_patch), see dropped_by_filter"
+    },
+    "dropped_by_filter": {
+      "agent1": {
+        "63b9d44": [],
+        "59bbf65": []
+      },
+      "agent2": {
+        "63b9d44": [
+          "metrics_test.go"
+        ],
+        "59bbf65": [
+          "metrics_test.go"
+        ]
+      }
+    },
+    "filters_agree": true,
+    "rules": {
+      "verdict_63b9d44": "eval.json both_passed, from CooperBench's test_merged: the naive merge's tests when it is clean, else agent1's patch alone against both suites",
+      "verdict_paper_era": "naive merge, then union when naive conflicts, then the learned resolver when union fails a suite (59bbf65 run_merge_evaluation); no agent1-alone fallback; 63b9d44's pass rule",
+      "verdict_paper_era_regex": "the same cascade under 59bbf65's pass rule",
+      "pass_rule": "exit code 0 and a parsed passed count above 0 (63b9d44 eval/sandbox.py _run_tests)",
+      "pass_rule_regex": "59bbf65 evaluation/test_runner.py _parse_test_output: a pass word and no failure word, exit code ignored",
+      "patch_apply": "63b9d44 _setup_branches: git apply, then git apply --3way; 59bbf65 used git apply --whitespace=fix and stopped the evaluation when a patch failed",
+      "conflict_size": "59bbf65 core/merge.py _analyze_diff_content over the conflicted merge's git diff; conflict_score 20 per section and 2 per line; severity by reporter.py _get_severity_level",
+      "llm": "59bbf65 evaluation/llm_merge.py: its system prompt, 5 lines of context, temperature 0, 3 retries, its splice; the merge then tested from its own diff"
+    },
+    "error": null
+  }
+}

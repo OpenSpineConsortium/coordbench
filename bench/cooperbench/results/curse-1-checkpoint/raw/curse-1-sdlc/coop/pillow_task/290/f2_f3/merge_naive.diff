@@ -1,0 +1,150 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..299fa6484 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -182,6 +182,14 @@ MAXCOVERAGE = 1
+ FASTOCTREE = 2
+ LIBIMAGEQUANT = 3
+ 
++# the ways Image.quantize can sort a palette: each takes one palette entry, a
++# tuple of 3 (RGB) or 4 (RGBA) values, and returns what the entries sort by
++_PALETTE_SORT_KEYS = {
++    # integer ITU-R 601-2 luma, as in conversion to "L", so equal colors tie
++    "brightness": lambda color: 299 * color[0] + 587 * color[1] + 114 * color[2],
++    "rgb": lambda color: color,
++}
++
+ if hasattr(core, "DEFAULT_STRATEGY"):
+     DEFAULT_STRATEGY = core.DEFAULT_STRATEGY
+     FILTERED = core.FILTERED
+@@ -1048,7 +1056,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        max_colors=None,
++        sort_palette=None,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1073,12 +1090,44 @@ class Image:
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+            Default: 1 (legacy setting)
++        :param max_colors: The maximum number of colors the palette may hold,
++           <= 256. The palette is never larger than ``max_colors``, and it is
++           never larger than ``colors`` either, so a ``max_colors`` below
++           ``colors`` lowers the number of colors used, while one above it
++           changes nothing. If not given, it defaults to ``colors``, which
++           keeps the previous behaviour. Ignored when ``palette`` is given,
++           since the palette then fixes the colors.
++        :param sort_palette: How to order the palette entries once the image is
++           quantized, with the pixels updated to match. A predictable order can
++           help compression, for example of animation frames that should share
++           a palette order. Available methods are:
++
++           * ``None`` - Keep the order the quantizer chose (default).
++           * ``"brightness"`` - Darkest color first, by perceived brightness
++             (ITU-R 601-2 luma, as used for conversion to mode "L").
++           * ``"rgb"`` - Ascending by red, then green, then blue value.
++
++           Entries that compare equal keep their relative order. All of the
++           first ``colors`` entries are sorted, including any the image does not
++           use. When ``palette`` is given, the entries of that palette are
++           sorted.
+         :returns: A new image
+ 
+         """
+ 
++        if sort_palette is not None and (
++            not isinstance(sort_palette, str) or sort_palette not in _PALETTE_SORT_KEYS
++        ):
++            raise ValueError(
++                "sort_palette must be None or one of: "
++                + ", ".join(repr(name) for name in _PALETTE_SORT_KEYS)
++            )
++
+         self.load()
+ 
++        if max_colors is None:
++            max_colors = colors
++
+         if method is None:
+             # defaults:
+             method = MEDIANCUT
+@@ -1104,17 +1153,66 @@ class Image:
+             im = self.im.convert("P", dither, palette.im)
+             new_im = self._new(im)
+             new_im.palette = palette.palette.copy()
++            if sort_palette is not None:
++                entries = len(new_im.palette.palette) // len(new_im.palette.mode)
++                new_im = new_im._sort_palette(sort_palette, entries)
+             return new_im
+ 
+-        im = self._new(self.im.quantize(colors, method, kmeans))
++        # colors is the target and max_colors the upper limit: the quantizer
++        # is asked for the smaller of the two
++        im = self._new(self.im.quantize(min(colors, max_colors), method, kmeans))
+ 
+         from . import ImagePalette
+ 
+         mode = im.im.getpalettemode()
+         im.palette = ImagePalette.ImagePalette(mode, im.im.getpalette(mode, mode))
+ 
++        if sort_palette is not None:
++            im = im._sort_palette(sort_palette, min(colors, max_colors))
++
+         return im
+ 
++    def _sort_palette(self, how, size):
++        """
++        Reorders the first ``size`` entries of this "P" image's palette, in
++        the order that the key named ``how`` gives, and rewrites the pixels so
++        that the image looks the same.
++
++        :param how: A key of :py:data:`_PALETTE_SORT_KEYS`.
++        :param size: How many palette entries, counted from the first, to sort.
++        :returns: A new image.
++        """
++        from . import ImagePalette
++
++        mode = self.im.getpalettemode()
++        width = len(mode)
++        data = self.im.getpalette(mode, mode)
++        colors = [tuple(data[i : i + width]) for i in range(0, len(data), width)]
++        size = max(0, min(size, 256, len(colors)))
++
++        key = _PALETTE_SORT_KEYS[how]
++        order = sorted(range(size), key=lambda i: key(colors[i]))
++        order += range(size, len(colors))
++
++        # order[new] is the old position of the color now at position new;
++        # pixels move the other way, from the old position to the new one
++        lookup = list(range(256))
++        for new, old in enumerate(order):
++            if old < 256:
++                lookup[old] = new
++
++        new_data = b"".join(bytes(colors[old]) for old in order)
++        new_im = self._new(self.im.point(lookup, None))
++        if mode == "RGBA":
++            # the core takes the colors first and the alpha values after them
++            rgb = b"".join(bytes(colors[old][:3]) for old in order)
++            new_im.im.putpalette("RGB", rgb)
++            new_im.im.putpalettealphas(bytes(colors[old][3] for old in order))
++        else:
++            new_im.im.putpalette(mode, new_data)
++        new_im.palette = ImagePalette.ImagePalette(mode, new_data)
++        return new_im
++
+     def copy(self):
+         """
+         Copies this image. Use this method if you wish to paste things

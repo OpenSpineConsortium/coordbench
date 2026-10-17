@@ -1,0 +1,189 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index 666ad68..57fd016 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -228,6 +228,16 @@ class Context:
+         value is not set, it defaults to the value from the parent
+         context. ``Command.show_default`` overrides this default for the
+         specific command.
++    :param max_resources: the maximum number of resources that may be
++        registered with :meth:`with_resource` at the same time. ``None``,
++        the default, means no limit. A context created with a parent
++        inherits the limit and shares the parent's resource count, so the
++        limit holds for the whole hierarchy. Registering a resource beyond
++        the limit raises :exc:`RuntimeError`. Closing a context releases
++        the resources it registered.
++
++    .. versionchanged:: 8.2
++        Added the ``max_resources`` parameter.
+ 
+     .. versionchanged:: 8.2
+         The ``protected_args`` attribute is deprecated and will be removed in
+@@ -280,6 +290,7 @@ class Context:
+         token_normalize_func: t.Callable[[str], str] | None = None,
+         color: bool | None = None,
+         show_default: bool | None = None,
++        max_resources: int | None = None,
+     ) -> None:
+         #: the parent context or `None` if none exists.
+         self.parent = parent
+@@ -427,6 +438,26 @@ class Context:
+         #: Show option default values when formatting help text.
+         self.show_default: bool | None = show_default
+ 
++        if max_resources is None and parent is not None:
++            max_resources = parent.max_resources
++
++        #: The most resources that may be registered with
++        #: :meth:`with_resource` at once across this context and its
++        #: parents and children, or ``None`` for no limit.
++        #:
++        #: .. versionadded:: 8.2
++        self.max_resources: int | None = max_resources
++
++        # One counter is shared by a whole context hierarchy, so the
++        # limit holds for the total and not for each context alone. It is
++        # a one item list so that every context sees the same count.
++        self._resource_tracker: list[int] = (
++            parent._resource_tracker if parent is not None else [0]
++        )
++        # How much of the shared count this context registered, so that
++        # closing it gives back only its own share.
++        self._resource_count = 0
++
+         self._close_callbacks: list[t.Callable[[], t.Any]] = []
+         self._depth = 0
+         self._parameter_source: dict[str, ParameterSource] = {}
+@@ -585,10 +616,29 @@ class Context:
+ 
+         :param context_manager: The context manager to enter.
+         :return: Whatever ``context_manager.__enter__()`` returns.
++        :raises RuntimeError: If ``max_resources`` is set and that many
++            resources are already registered.
++
++        .. versionchanged:: 8.2
++            Raises :exc:`RuntimeError` when ``max_resources`` is reached.
+ 
+         .. versionadded:: 8.0
+         """
+-        return self._exit_stack.enter_context(context_manager)
++        if (
++            self.max_resources is not None
++            and self._resource_tracker[0] >= self.max_resources
++        ):
++            raise RuntimeError(
++                f"Maximum number of resources ({self.max_resources}) exceeded:"
++                " cannot register another resource."
++            )
++
++        # Count a resource only once it has been entered, so a context
++        # manager that fails to enter does not use up the limit.
++        rv = self._exit_stack.enter_context(context_manager)
++        self._resource_tracker[0] += 1
++        self._resource_count += 1
++        return rv
+ 
+     def call_on_close(self, f: t.Callable[..., t.Any]) -> t.Callable[..., t.Any]:
+         """Register a function to be called when the context tears down.
+@@ -607,7 +657,13 @@ class Context:
+         :meth:`call_on_close`, and exit all context managers entered
+         with :meth:`with_resource`.
+         """
+-        self._exit_stack.close()
++        try:
++            self._exit_stack.close()
++        finally:
++            # The resources are gone even if one failed to exit, so give
++            # back this context's share of the count.
++            self._resource_tracker[0] -= self._resource_count
++            self._resource_count = 0
+         # In case the context is reused, create a new exit stack.
+         self._exit_stack = ExitStack()
+ 
+diff --git a/src/click/shell_completion.py b/src/click/shell_completion.py
+index 6fd9e54..34ea598 100644
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@ -544,44 +544,51 @@ def _resolve_context(
+     :param args: List of complete args before the incomplete value.
+     """
+     ctx_args["resilient_parsing"] = True
+-    ctx = cli.make_context(prog_name, args.copy(), **ctx_args)
+-    args = ctx._protected_args + ctx.args
++    # Each context is entered so that it is closed, and with it any file
++    # opened by a parameter, once it is no longer needed. Click's File
++    # type relies on the context's close callbacks to close its handle.
++    with cli.make_context(prog_name, args.copy(), **ctx_args) as ctx:
++        args = ctx._protected_args + ctx.args
+ 
+-    while args:
+-        command = ctx.command
++        while args:
++            command = ctx.command
+ 
+-        if isinstance(command, Group):
+-            if not command.chain:
+-                name, cmd, args = command.resolve_command(ctx, args)
+-
+-                if cmd is None:
+-                    return ctx
+-
+-                ctx = cmd.make_context(name, args, parent=ctx, resilient_parsing=True)
+-                args = ctx._protected_args + ctx.args
+-            else:
+-                sub_ctx = ctx
+-
+-                while args:
++            if isinstance(command, Group):
++                if not command.chain:
+                     name, cmd, args = command.resolve_command(ctx, args)
+ 
+                     if cmd is None:
+                         return ctx
+ 
+-                    sub_ctx = cmd.make_context(
+-                        name,
+-                        args,
+-                        parent=ctx,
+-                        allow_extra_args=True,
+-                        allow_interspersed_args=False,
+-                        resilient_parsing=True,
+-                    )
+-                    args = sub_ctx.args
+-
+-                ctx = sub_ctx
+-                args = [*sub_ctx._protected_args, *sub_ctx.args]
+-        else:
+-            break
++                    with cmd.make_context(
++                        name, args, parent=ctx, resilient_parsing=True
++                    ) as sub_ctx:
++                        ctx = sub_ctx
++                        args = ctx._protected_args + ctx.args
++                else:
++                    sub_ctx = ctx
++
++                    while args:
++                        name, cmd, args = command.resolve_command(ctx, args)
++
++                        if cmd is None:
++                            return ctx
++
++                        with cmd.make_context(
++                            name,
++                            args,
++                            parent=ctx,
++                            allow_extra_args=True,
++                            allow_interspersed_args=False,
++                            resilient_parsing=True,
++                        ) as sub_sub_ctx:
++                            sub_ctx = sub_sub_ctx
++                            args = sub_ctx.args
++
++                    ctx = sub_ctx
++                    args = [*sub_ctx._protected_args, *sub_ctx.args]
++            else:
++                break
+ 
+     return ctx
+ 

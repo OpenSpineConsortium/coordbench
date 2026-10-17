@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/dottxt_ai_outlines_task/1655/f7_f10", "verdict": "pass"}
+coordbench run: coop-git-1655-f7_f10-a6dd2f: timings: hub 0.2 s, run_create 0.0 s, git_remote 0.9 s, provision 3.7 s, agents 129 s (agent1 124 s, agent2 129 s), close 0.0 s, score 484 s, cascade 278 s, teardown 1.6 s
+coordbench run: summary: 24 completed, 0 skipped, 0 failed; evals: 24 evaluated, 17 passed, 7 failed, 0 errors (70.8%); cost: unknown

@@ -1,0 +1,294 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..e05db004 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -71,6 +71,74 @@ class BaseLoader:
+     #: .. versionadded:: 2.4
+     has_source_access = True
+ 
++    def add_alias(self, alias: str, target: str) -> None:
++        """Make the template ``target`` available under the name ``alias``.
++
++        Aliases are resolved before a template is looked up, so the
++        loader sees only the target name. Several aliases can point to
++        one template, and adding an alias that exists already replaces
++        it. Aliases do not chain: if ``target`` is itself an alias, it
++        is looked up as a template name and not resolved again.
++
++        :param alias: The additional name for the template. Any string
++            is allowed.
++        :param target: The name of the template the alias stands for.
++            It does not have to exist when the alias is added.
++        """
++        self._alias_map()[alias] = target
++
++    def remove_alias(self, alias: str) -> None:
++        """Remove ``alias`` so that the name is looked up as an ordinary
++        template name again. An alias that does not exist is ignored.
++        """
++        self._alias_map().pop(alias, None)
++
++    def _alias_map(self) -> t.Dict[str, str]:
++        # Loaders do not call ``BaseLoader.__init__``, so the mapping is
++        # created the first time it is needed.
++        aliases: t.Optional[t.Dict[str, str]] = getattr(self, "_aliases", None)
++
++        if aliases is None:
++            aliases = self._aliases = {}
++
++        return aliases
++
++    def _resolve_alias(self, template: str) -> str:
++        """Return the template name ``template`` is an alias for, or
++        ``template`` itself if it is not an alias. The result is not
++        resolved again.
++        """
++        aliases: t.Optional[t.Dict[str, str]] = getattr(self, "_aliases", None)
++
++        if aliases:
++            return aliases.get(template, template)
++
++        return template
++
++    def _track_alias(self, name: str, template: "Template") -> "Template":
++        """Make ``template``, loaded as ``name``, out of date once an
++        alias changes what ``name`` stands for.
++
++        Without this an environment with ``auto_reload`` would go on
++        returning the cached template for an alias that was removed or
++        pointed at another template. The loader is held weakly so the
++        template does not keep it alive.
++        """
++        target = self._resolve_alias(name)
++        loader_ref = weakref.ref(self)
++        uptodate = template._uptodate
++
++        def is_current() -> bool:
++            loader = loader_ref()
++
++            if loader is not None and loader._resolve_alias(name) != target:
++                return False
++
++            return uptodate is None or uptodate()
++
++        template._uptodate = is_current
++        return template
++
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, t.Optional[str], t.Optional[t.Callable[[], bool]]]:
+@@ -90,7 +158,13 @@ class BaseLoader:
+         changed.  No arguments are passed so the function must store the
+         old state somewhere (for example in a closure).  If it returns `False`
+         the template will be reloaded.
++
++        Loaders that look templates up by name should first pass the
++        name through :meth:`_resolve_alias`, as the loaders in this
++        module do, so that names added with :meth:`add_alias` work.
+         """
++        template = self._resolve_alias(template)
++
+         if not self.has_source_access:
+             raise RuntimeError(
+                 f"{type(self).__name__} cannot provide access to the source"
+@@ -143,9 +217,10 @@ class BaseLoader:
+             bucket.code = code
+             bcc.set_bucket(bucket)
+ 
+-        return environment.template_class.from_code(
++        template = environment.template_class.from_code(
+             environment, code, globals, uptodate
+         )
++        return self._track_alias(name, template)
+ 
+ 
+ class FileSystemLoader(BaseLoader):
+@@ -165,32 +240,77 @@ class FileSystemLoader(BaseLoader):
+ 
+         loader = FileSystemLoader(["/override/templates", "/default/templates"])
+ 
++    A path can also be given as a ``(path, priority)`` tuple. Paths with a
++    higher priority are searched first, regardless of the order they were
++    given in. A path without an explicit priority has priority ``0``, and
++    priorities can be negative. Paths with the same priority are searched
++    in the order they were given.
++
++    .. code-block:: python
++
++        loader = FileSystemLoader([
++            ("/high/priority/themes", 100),
++            ("/medium/priority/plugins", 50),
++            "/default/templates",
++            ("/low/priority/fallback", -10),
++        ])
++
++    Plain paths and ``(path, priority)`` tuples can be mixed in one list.
++
+     :param searchpath: A path, or list of paths, to the directory that
+-        contains the templates.
++        contains the templates. Each item may also be a
++        ``(path, priority)`` tuple, where a higher priority is searched
++        first and a plain path has priority ``0``.
+     :param encoding: Use this encoding to read the text from template
+         files.
+     :param followlinks: Follow symbolic links in the path.
+ 
++    .. versionchanged:: 3.1
++        Paths can be given as ``(path, priority)`` tuples to control the
++        order they are searched in.
++
+     .. versionchanged:: 2.8
+         Added the ``followlinks`` parameter.
+     """
+ 
+     def __init__(
+         self,
+-        searchpath: t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]],
++        searchpath: t.Union[
++            str,
++            os.PathLike,
++            t.Sequence[
++                t.Union[str, os.PathLike, t.Tuple[t.Union[str, os.PathLike], int]]
++            ],
++        ],
+         encoding: str = "utf-8",
+         followlinks: bool = False,
+     ) -> None:
+         if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+             searchpath = [searchpath]
+ 
+-        self.searchpath = [os.fspath(p) for p in searchpath]
++        # Pair each path with its priority; a plain path has priority 0.
++        # Only a two item tuple is read as (path, priority); anything else
++        # is handled as a plain path, as it was before priorities existed.
++        prioritized: t.List[t.Tuple[str, int]] = []
++
++        for item in searchpath:
++            if isinstance(item, tuple) and len(item) == 2:
++                path, priority = item
++            else:
++                path, priority = item, 0
++
++            prioritized.append((os.fspath(path), priority))
++
++        # The sort is stable, so equal priorities keep their given order.
++        prioritized.sort(key=lambda pair: pair[1], reverse=True)
++        self.searchpath = [path for path, _ in prioritized]
+         self.encoding = encoding
+         self.followlinks = followlinks
+ 
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Callable[[], bool]]:
++        template = self._resolve_alias(template)
+         pieces = split_template_path(template)
+         for searchpath in self.searchpath:
+             filename = os.path.join(searchpath, *pieces)
+@@ -326,6 +446,7 @@ class PackageLoader(BaseLoader):
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, str, t.Optional[t.Callable[[], bool]]]:
++        template = self._resolve_alias(template)
+         p = os.path.join(self._template_root, *split_template_path(template))
+         up_to_date: t.Optional[t.Callable[[], bool]]
+ 
+@@ -407,6 +528,8 @@ class DictLoader(BaseLoader):
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, None, t.Callable[[], bool]]:
++        template = self._resolve_alias(template)
++
+         if template in self.mapping:
+             source = self.mapping[template]
+             return source, None, lambda: source == self.mapping.get(template)
+@@ -450,6 +573,7 @@ class FunctionLoader(BaseLoader):
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, t.Optional[str], t.Optional[t.Callable[[], bool]]]:
++        template = self._resolve_alias(template)
+         rv = self.load_func(template)
+ 
+         if rv is None:
+@@ -493,6 +617,7 @@ class PrefixLoader(BaseLoader):
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, t.Optional[str], t.Optional[t.Callable[[], bool]]]:
++        template = self._resolve_alias(template)
+         loader, name = self.get_loader(template)
+         try:
+             return loader.get_source(environment, name)
+@@ -508,13 +633,15 @@ class PrefixLoader(BaseLoader):
+         name: str,
+         globals: t.Optional[t.MutableMapping[str, t.Any]] = None,
+     ) -> "Template":
+-        loader, local_name = self.get_loader(name)
++        resolved = self._resolve_alias(name)
++        loader, local_name = self.get_loader(resolved)
+         try:
+-            return loader.load(environment, local_name, globals)
++            template = loader.load(environment, local_name, globals)
+         except TemplateNotFound as e:
+             # re-raise the exception with the correct filename here.
+             # (the one that includes the prefix)
+-            raise TemplateNotFound(name) from e
++            raise TemplateNotFound(resolved) from e
++        return self._track_alias(name, template)
+ 
+     def list_templates(self) -> t.List[str]:
+         result = []
+@@ -544,6 +671,8 @@ class ChoiceLoader(BaseLoader):
+     def get_source(
+         self, environment: "Environment", template: str
+     ) -> t.Tuple[str, t.Optional[str], t.Optional[t.Callable[[], bool]]]:
++        template = self._resolve_alias(template)
++
+         for loader in self.loaders:
+             try:
+                 return loader.get_source(environment, template)
+@@ -558,12 +687,16 @@ class ChoiceLoader(BaseLoader):
+         name: str,
+         globals: t.Optional[t.MutableMapping[str, t.Any]] = None,
+     ) -> "Template":
++        resolved = self._resolve_alias(name)
++
+         for loader in self.loaders:
+             try:
+-                return loader.load(environment, name, globals)
++                template = loader.load(environment, resolved, globals)
+             except TemplateNotFound:
+                 pass
+-        raise TemplateNotFound(name)
++            else:
++                return self._track_alias(name, template)
++        raise TemplateNotFound(resolved)
+ 
+     def list_templates(self) -> t.List[str]:
+         found = set()
+@@ -630,7 +763,8 @@ class ModuleLoader(BaseLoader):
+         name: str,
+         globals: t.Optional[t.MutableMapping[str, t.Any]] = None,
+     ) -> "Template":
+-        key = self.get_template_key(name)
++        resolved = self._resolve_alias(name)
++        key = self.get_template_key(resolved)
+         module = f"{self.package_name}.{key}"
+         mod = getattr(self.module, module, None)
+ 
+@@ -638,7 +772,7 @@ class ModuleLoader(BaseLoader):
+             try:
+                 mod = __import__(module, None, None, ["root"])
+             except ImportError as e:
+-                raise TemplateNotFound(name) from e
++                raise TemplateNotFound(resolved) from e
+ 
+             # remove the entry from sys.modules, we only want the attribute
+             # on the module object we have stored on the loader.
+@@ -647,6 +781,7 @@ class ModuleLoader(BaseLoader):
+         if globals is None:
+             globals = {}
+ 
+-        return environment.template_class.from_module_dict(
++        template = environment.template_class.from_module_dict(
+             environment, mod.__dict__, globals
+         )
++        return self._track_alias(name, template)

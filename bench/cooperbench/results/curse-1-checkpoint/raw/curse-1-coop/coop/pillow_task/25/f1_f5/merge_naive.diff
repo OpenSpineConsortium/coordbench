@@ -1,0 +1,93 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..4cf2c720d 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2466,6 +2466,57 @@ class Image:
+             (w, h), Transform.AFFINE, matrix, resample, fillcolor=fillcolor
+         )
+ 
++    def _red_palette_index(self) -> int:
++        """
++        Returns the index of red in this palette image's palette, adding red
++        to the palette if there is room, else the entry nearest to red.
++        """
++        try:
++            assert self.palette is not None
++            return self.palette.getcolor((255, 0, 0), self)
++        except ValueError:
++            # The palette cannot take another colour
++            rgb = self.getpalette("RGB") or []
++            entries = [rgb[i : i + 3] for i in range(0, len(rgb) - 2, 3)]
++            return min(
++                range(len(entries)),
++                key=lambda i: (255 - entries[i][0]) ** 2
++                + entries[i][1] ** 2
++                + entries[i][2] ** 2,
++                default=0,
++            )
++
++    def _mark_corners(self) -> None:
++        """
++        Sets the top-left and bottom-right pixels of this image to red.
++
++        The red is converted to this image's mode, so that it also works for
++        modes such as ``L``, ``CMYK`` and ``P``. An empty image has no corners
++        and is left alone.
++        """
++        width, height = self.size
++        if not width or not height:
++            return
++        self._ensure_mutable()
++
++        color: Any
++        if self.mode in ("P", "PA"):
++            index = self._red_palette_index()
++            color = index if self.mode == "P" else (index, 255)
++        else:
++            try:
++                red = new("RGB", (1, 1), (255, 0, 0)).convert(self.mode)
++                color = red.getpixel((0, 0))
++            except ValueError:
++                # There is no conversion from RGB to this mode
++                from . import ImageColor
++
++                color = ImageColor.getcolor("red", self.mode)
++        self.im.putpixel((0, 0), color)
++        self.im.putpixel((width - 1, height - 1), color)
++        # A palette that red was added to reaches the image before it is saved
++        self.load()
++
+     def save(
+         self, fp: StrOrBytesPath | IO[bytes], format: str | None = None, **params: Any
+     ) -> None:
+@@ -2505,6 +2556,10 @@ class Image:
+              red = Image.new("RGB", (1, 1), "#f00")
+              red.encoderinfo = {"xmp": b"test"}
+              black.save("out.mpo", save_all=True, append_images=[red])
++        :param mark_corners: If true, the top-left and the bottom-right pixels
++           of this image are set to red before it is saved, as a visual sign
++           that the image has been processed. The image itself is changed, not
++           only the file, and the mark is lossy in formats such as JPEG.
+         :returns: None
+         :exception ValueError: If the output format could not be determined
+            from the file name.  Use the format option to solve this.
+@@ -2541,9 +2596,18 @@ class Image:
+                 raise ValueError(msg) from e
+ 
+         # may mutate self!
+-        self._ensure_mutable()
++        # Only copy a read-only image when saving back to the file it was opened
++        # from; otherwise keep it read-only, so that an image made with
++        # frombuffer() continues to reflect changes to its buffer.
++        if hasattr(self, "filename") and self.filename == filename:
++            self._ensure_mutable()
++        else:
++            self.load()
+ 
+         save_all = params.pop("save_all", None)
++        mark_corners = params.pop("mark_corners", False)
++        if mark_corners:
++            self._mark_corners()
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}
+         self.encoderconfig: tuple[Any, ...] = ()
+ 

@@ -1,0 +1,189 @@
+{
+  "repo": "typst_task",
+  "task_id": 6554,
+  "features": [
+    4,
+    9
+  ],
+  "setting": "coop",
+  "apply_status": {
+    "agent1": "applied",
+    "agent2": "applied"
+  },
+  "merge": {
+    "status": "conflicts",
+    "strategy": "solo-agent1",
+    "diff": ""
+  },
+  "feature1": {
+    "feature_id": 4,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 1,
+    "tests_failed": 0,
+    "test_output": "Note: switching to 'b8034a343831e8609aec2ec81eb7eeda57aa5d81'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: patch1.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 36.75s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-repeat-parameter str-repeat-too-many \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.24s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "feature_id": 9,
+    "passed": true,
+    "exit_code": 0,
+    "tests_passed": 1,
+    "tests_failed": 0,
+    "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: patch1.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.04s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-strip-exhaust str-strip-parameter \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.58s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+  },
+  "both_passed": true,
+  "error": null,
+  "evaluated_at": "2026-10-16T12:10:32.136600",
+  "cascade": {
+    "cascade_version": 1,
+    "ran": true,
+    "basis": "the paper's cascade on the CooperBench 63b9d44 dataset",
+    "cooperbench_commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+    "verdict_63b9d44": true,
+    "verdict_paper_era": false,
+    "verdict_paper_era_regex": false,
+    "route": "none",
+    "route_regex": "none",
+    "lower_bound": true,
+    "verdict_63b9d44_rerun": true,
+    "deciding_artifact": {
+      "verdict_63b9d44": "agent4.patch",
+      "verdict_paper_era": "merge_union.diff"
+    },
+    "apply_status": {
+      "agent1": "applied",
+      "agent2": "applied"
+    },
+    "has_naive_merge_conflict": true,
+    "naive": {
+      "conflict": true,
+      "conflict_sections": 5,
+      "conflict_lines": 62,
+      "avg_lines_per_conflict": 12.4,
+      "conflict_score": 224,
+      "severity": "CRITICAL",
+      "diff_file": "merge_naive.diff",
+      "f1": null,
+      "f2": null,
+      "f1_regex": null,
+      "f2_regex": null,
+      "tests": {
+        "f1": null,
+        "f2": null
+      },
+      "tests_from": null
+    },
+    "union": {
+      "ran": true,
+      "clean": true,
+      "f1": false,
+      "f2": false,
+      "f1_regex": false,
+      "f2_regex": false,
+      "tests": {
+        "f1": {
+          "passed": false,
+          "passed_regex": false,
+          "exit_code": 101,
+          "tests_passed": 0,
+          "tests_failed": 0,
+          "test_output": "Note: switching to 'b8034a343831e8609aec2ec81eb7eeda57aa5d81'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nOr undo this operation with:\n\n  git switch -\n\nTurn off this advice by setting config variable advice.detachedHead to false\n\nHEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: union_diff.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\nerror: mismatched closing delimiter: `)`\n   --> crates/typst/src/foundations/str.rs:204:25\n    |\n204 |     ) -> StrResult<Str> {\n    |                         ^ unclosed delimiter\n...\n209 |     ) -> StrResult<Str> {\n    |     ^ mismatched closing delimiter\n\nerror: mismatched closing delimiter: `)`\n   --> crates/typst/src/foundations/str.rs:251:25\n    |\n251 |     ) -> StrResult<Str> {\n    |                         ^ unclosed delimiter\n...\n256 |     ) -> StrResult<Str> {\n    |     ^ mismatched closing delimiter\n\nerror: unexpected closing delimiter: `}`\n   --> crates/typst/src/foundations/str.rs:676:1\n    |\n209 |     ) -> StrResult<Str> {\n    |     - missing open `(` for this delimiter\n...\n256 |     ) -> StrResult<Str> {\n    |     - missing open `(` for this delimiter\n...\n676 | }\n    | ^ unexpected closing delimiter\n\nerror: could not compile `typst` (lib) due to 3 previous errors\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+        },
+        "f2": {
+          "passed": false,
+          "passed_regex": false,
+          "exit_code": 101,
+          "tests_passed": 0,
+          "tests_failed": 0,
+          "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: union_diff.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\nerror: mismatched closing delimiter: `)`\n   --> crates/typst/src/foundations/str.rs:204:25\n    |\n204 |     ) -> StrResult<Str> {\n    |                         ^ unclosed delimiter\n...\n209 |     ) -> StrResult<Str> {\n    |     ^ mismatched closing delimiter\n\nerror: mismatched closing delimiter: `)`\n   --> crates/typst/src/foundations/str.rs:251:25\n    |\n251 |     ) -> StrResult<Str> {\n    |                         ^ unclosed delimiter\n...\n256 |     ) -> StrResult<Str> {\n    |     ^ mismatched closing delimiter\n\nerror: unexpected closing delimiter: `}`\n   --> crates/typst/src/foundations/str.rs:676:1\n    |\n209 |     ) -> StrResult<Str> {\n    |     - missing open `(` for this delimiter\n...\n256 |     ) -> StrResult<Str> {\n    |     - missing open `(` for this delimiter\n...\n676 | }\n    | ^ unexpected closing delimiter\n\nerror: could not compile `typst` (lib) due to 3 previous errors\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+        }
+      },
+      "diff_file": "merge_union.diff"
+    },
+    "llm": {
+      "ran": false,
+      "needed": true,
+      "reason": "no resolver endpoint: set COORDBENCH_RESOLVER_URL to an OpenAI-compatible API base serving the paper's learned resolver (Qwen2.5-Coder-0.5B-Merge-Resolver); coordbench runs no model server"
+    },
+    "agent_alone": {
+      "agent1": {
+        "feature": 4,
+        "patch_file": "agent4.patch",
+        "f1": true,
+        "f2": true,
+        "f1_regex": false,
+        "f2_regex": false,
+        "tests": {
+          "f1": {
+            "passed": true,
+            "passed_regex": false,
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: patch1.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.36s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-repeat-parameter str-repeat-too-many \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.92s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": true,
+            "passed_regex": false,
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: patch1.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.52s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-strip-exhaust str-strip-parameter \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.92s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+          }
+        }
+      },
+      "agent2": {
+        "feature": 9,
+        "patch_file": "agent9.patch",
+        "f1": false,
+        "f2": true,
+        "f1_regex": false,
+        "f2_regex": false,
+        "tests": {
+          "f1": {
+            "passed": false,
+            "passed_regex": false,
+            "exit_code": 1,
+            "tests_passed": 0,
+            "tests_failed": 1,
+            "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: patch2.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 34.61s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-repeat-parameter str-repeat-too-many \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.35s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n\u274c str-repeat-parameter (tests/suite/foundations/str.typ:332)\n  not annotated\n    Error: 334:21-334:30 unexpected argument: repeat\n0 passed, 1 failed, 2355 skipped\nerror: test failed, to rerun pass `-p typst-tests --test tests`\n\nCaused by:\n  process didn't exit successfully: `/workspace/repo/target/debug/deps/tests-52a2759a859b1a53 str-repeat-parameter` (exit status: 1)\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n\u274c str-repeat-too-many (tests/suite/foundations/str.typ:348)\n  not emitted\n    Error: 349:2-349:23 not enough characters (requested 5, but string only has 2) (tests/suite/foundations/str.typ:348)\n  not annotated\n    Error: 349:13-349:22 unexpected argument: repeat\n0 passed, 1 failed, 2355 skipped\nerror: test failed, to rerun pass `-p typst-tests --test tests`\n\nCaused by:\n  process didn't exit successfully: `/workspace/repo/target/debug/deps/tests-52a2759a859b1a53 str-repeat-too-many` (exit status: 1)\nSome tests failed.\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+          },
+          "f2": {
+            "passed": true,
+            "passed_regex": false,
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: patch2.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.97s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-strip-exhaust str-strip-parameter \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.07s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+          }
+        }
+      }
+    },
+    "test_file_filter": {
+      "verdict_63b9d44": "63b9d44 eval/sandbox.py _filter_test_files",
+      "verdict_paper_era": "63b9d44 eval/sandbox.py _filter_test_files, so both verdicts judge the same merges; 59bbf65 kept only code files (core/patch.py _filter_patch), see dropped_by_filter"
+    },
+    "dropped_by_filter": {
+      "agent1": {
+        "63b9d44": [],
+        "59bbf65": []
+      },
+      "agent2": {
+        "63b9d44": [],
+        "59bbf65": []
+      }
+    },
+    "filters_agree": true,
+    "rules": {
+      "verdict_63b9d44": "eval.json both_passed, from CooperBench's test_merged: the naive merge's tests when it is clean, else agent1's patch alone against both suites",
+      "verdict_paper_era": "naive merge, then union when naive conflicts, then the learned resolver when union fails a suite (59bbf65 run_merge_evaluation); no agent1-alone fallback; 63b9d44's pass rule",
+      "verdict_paper_era_regex": "the same cascade under 59bbf65's pass rule",
+      "pass_rule": "exit code 0 and a parsed passed count above 0 (63b9d44 eval/sandbox.py _run_tests)",
+      "pass_rule_regex": "59bbf65 evaluation/test_runner.py _parse_test_output: a pass word and no failure word, exit code ignored",
+      "patch_apply": "63b9d44 _setup_branches: git apply, then git apply --3way; 59bbf65 used git apply --whitespace=fix and stopped the evaluation when a patch failed",
+      "conflict_size": "59bbf65 core/merge.py _analyze_diff_content over the conflicted merge's git diff; conflict_score 20 per section and 2 per line; severity by reporter.py _get_severity_level",
+      "llm": "59bbf65 evaluation/llm_merge.py: its system prompt, 5 lines of context, temperature 0, 3 retries, its splice; the merge then tested from its own diff"
+    },
+    "error": null
+  }
+}

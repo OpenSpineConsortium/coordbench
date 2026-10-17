@@ -1,0 +1,87 @@
+diff --git a/src/jinja2/ext.py b/src/jinja2/ext.py
+index d21b83aa..359390d1 100644
+--- a/src/jinja2/ext.py
++++ b/src/jinja2/ext.py
+@@ -636,6 +636,77 @@ class DebugExtension(Extension):
+         return pprint.pformat(result, depth=3, compact=True)
+ 
+ 
++class TranslationExtractorExtension(Extension):
++    """Adds an ``{% extract %}...{% endextract %}`` block that annotates
++    translatable content with metadata for translation tools.
++
++    .. code-block:: html+jinja
++
++        {% extract comment="Greeting on the landing page", context="home" %}
++          {{ _("Welcome back") }}
++        {% endextract %}
++
++    The attributes are collected while the template is compiled and are
++    available from ``environment.extraction_markers()``. Each entry is a
++    dict with the line number of the block (``lineno``), the attributes
++    (``markers``) and the parsed body (``body``). The block does not
++    change what the template renders.
++    """
++
++    tags = {"extract"}
++
++    def __init__(self, environment: Environment) -> None:
++        super().__init__(environment)
++        environment.extend(extraction_markers=self._get_extraction_markers)
++
++        if not hasattr(environment, "_extraction_markers"):
++            setattr(environment, "_extraction_markers", [])
++
++    def parse(self, parser: "Parser") -> t.Union[nodes.Node, t.List[nodes.Node]]:
++        lineno = next(parser.stream).lineno
++        markers: t.Dict[str, nodes.Expr] = {}
++
++        while parser.stream.current.type != "block_end":
++            # Attributes are separated by commas, which are optional so
++            # that a trailing comma does no harm.
++            if parser.stream.skip_if("comma"):
++                continue
++
++            key = parser.stream.expect("name").value
++            parser.stream.expect("assign")
++            markers[key] = parser.parse_expression()
++
++        body = parser.parse_statements(("name:endextract",), drop_needle=True)
++        return self._create_extraction_marker_node(markers, body, lineno)
++
++    def _create_extraction_marker_node(
++        self, markers: t.Dict[str, nodes.Expr], body: t.List[nodes.Node], lineno: int
++    ) -> nodes.Node:
++        marker_info: t.Dict[str, t.Any] = {}
++
++        for key, value_node in markers.items():
++            if isinstance(value_node, nodes.Const):
++                marker_info[key] = value_node.value
++            else:
++                marker_info[key] = str(value_node)
++
++        if not hasattr(self.environment, "_extraction_markers"):
++            setattr(self.environment, "_extraction_markers", [])
++
++        self._get_extraction_markers().append(
++            {"lineno": lineno, "markers": marker_info, "body": body}
++        )
++
++        # Render the body as it is; the markers only live on the environment.
++        return nodes.Scope(body, lineno=lineno)
++
++    def _get_extraction_markers(self) -> t.List[t.Dict[str, t.Any]]:
++        found: t.List[t.Dict[str, t.Any]] = getattr(
++            self.environment, "_extraction_markers", []
++        )
++        return found
++
++
+ def extract_from_ast(
+     ast: nodes.Template,
+     gettext_functions: t.Sequence[str] = GETTEXT_FUNCTIONS,
+@@ -852,3 +923,4 @@ i18n = InternationalizationExtension
+ do = ExprStmtExtension
+ loopcontrols = LoopControlExtension
+ debug = DebugExtension
++extractor = TranslationExtractorExtension

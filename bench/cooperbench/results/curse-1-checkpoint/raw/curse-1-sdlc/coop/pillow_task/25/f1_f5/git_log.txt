@@ -1,0 +1,57 @@
+commit 0a6b30cf799008dca00836b54b2c0e81e378fa04 (main)
+Merge: f572936c6 a1f8811bb
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 11:05:38 2026 +0000
+
+    Merge claude/5: closes #5
+
+commit a1f8811bb05714350eb2482bad3c8b1f1833a064 (claude/5)
+Merge: d8e9e70cd f572936c6
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:05:23 2026 +0000
+
+    Merge team/main into claude/5
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+commit d8e9e70cd4f7c37d340d8e1fe960fe92e4618755
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:05:00 2026 +0000
+
+    Add mark_corners option to Image.save
+    
+    With mark_corners=True the top-left and bottom-right pixels are set to
+    red (the nearest colour the mode can hold) before the image is written,
+    a simple visual sign that an image has been processed, for any format.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ Tests/test_image.py | 133 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py    |  31 ++++++++++++
+ 2 files changed, 164 insertions(+)
+
+commit f572936c6a59346aa36a7992286c5a04099b2409
+Merge: 869aa5843 ec7fc8226
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 11:02:41 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit ec7fc82262707e275a2d7f0c890ed3e1581f81e1 (claude/1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:02:32 2026 +0000
+
+    Only ensure an image is mutable when saving to the filename it was opened from
+    
+    save() copied every readonly image, so an image made by frombuffer()
+    stopped reflecting its buffer after a save. Only an image opened from
+    the file it is saved to needs the copy, since the file is memory-mapped.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ Tests/test_image.py | 41 +++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py    | 21 ++++++++++++++++++++-
+ 2 files changed, 61 insertions(+), 1 deletion(-)

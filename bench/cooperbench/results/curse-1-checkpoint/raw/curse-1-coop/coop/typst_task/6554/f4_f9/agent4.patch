@@ -1,0 +1,118 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..651a17af7 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -176,26 +176,62 @@ impl Str {
+         self.0.len()
+     }
+ 
+-    /// Extracts the first grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// Extracts the first grapheme cluster of the string, or, with `repeat`,
++    /// the first several. Fails with an error if the string is empty or has
++    /// fewer grapheme clusters than requested.
++    ///
++    /// ```example
++    /// #"hello".first() \
++    /// #"hello".first(repeat: 3)
++    /// ```
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn first(
++        &self,
++        /// Number of times to repeat this operation. Fails if exceeds string length.
++        #[named]
++        #[default(1)]
++        repeat: usize,
++        /// Characters to ignore at the start of the string before extracting.
++        /// Every character contained in this string is stripped.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        let text = match &strip {
++            Some(set) if !set.is_empty() => {
++                self.0.trim_start_matches(|c| set.0.contains(c))
++            }
++            _ => self.0.as_str(),
++        };
++        extract_graphemes(text, repeat, false)
+     }
+ 
+-    /// Extracts the last grapheme cluster of the string.
+-    /// Fails with an error if the string is empty.
++    /// Extracts the last grapheme cluster of the string, or, with `repeat`,
++    /// the last several. Fails with an error if the string is empty or has
++    /// fewer grapheme clusters than requested.
++    ///
++    /// ```example
++    /// #"hello".last() \
++    /// #"hello".last(repeat: 2)
++    /// ```
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next_back()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn last(
++        &self,
++        /// Number of times to repeat this operation. Fails if exceeds string length.
++        #[named]
++        #[default(1)]
++        repeat: usize,
++        /// Characters to ignore at the end of the string before extracting.
++        /// Every character contained in this string is stripped.
++        #[named]
++        strip: Option<Str>,
++    ) -> StrResult<Str> {
++        let text = match &strip {
++            Some(set) if !set.is_empty() => {
++                self.0.trim_end_matches(|c| set.0.contains(c))
++            }
++            _ => self.0.as_str(),
++        };
++        extract_graphemes(text, repeat, true)
+     }
+ 
+     /// Extracts the first grapheme cluster after the specified index. Returns
+@@ -835,6 +871,34 @@ fn string_is_empty() -> EcoString {
+     "string is empty".into()
+ }
+ 
++/// Extracts `repeat` grapheme clusters from the start (or, with `from_end`,
++/// the end) of `text`.
++fn extract_graphemes(text: &str, repeat: usize, from_end: bool) -> StrResult<Str> {
++    if repeat == 0 {
++        bail!("repeat must be at least 1");
++    }
++    if text.is_empty() {
++        return Err(string_is_empty());
++    }
++    let available = text.graphemes(true).count();
++    if repeat > available {
++        bail!(
++            "not enough characters (requested {repeat}, but string only has {available})"
++        );
++    }
++    Ok(if from_end {
++        let start = text
++            .grapheme_indices(true)
++            .rev()
++            .nth(repeat - 1)
++            .map_or(0, |(i, _)| i);
++        text[start..].into()
++    } else {
++        let end = text.grapheme_indices(true).nth(repeat).map_or(text.len(), |(i, _)| i);
++        text[..end].into()
++    })
++}
++
+ /// A regular expression.
+ ///
+ /// Can be used as a [show rule selector]($styling/#show-rules) and with

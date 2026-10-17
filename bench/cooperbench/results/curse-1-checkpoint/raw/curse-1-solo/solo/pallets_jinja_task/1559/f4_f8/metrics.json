@@ -1,0 +1,11 @@
+{
+  "events": {
+    "run_started": 1
+  },
+  "tool_surface": "mcp",
+  "messages_sent": 0,
+  "messages_by_agent": {},
+  "message_chars": 0,
+  "message_words": 0,
+  "tool_calls": {}
+}

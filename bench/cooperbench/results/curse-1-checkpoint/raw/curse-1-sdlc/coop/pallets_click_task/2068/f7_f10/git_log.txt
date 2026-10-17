@@ -1,0 +1,53 @@
+commit 97a6dc7ee53da84bd8385c9899a5947738bdf9e6 (main)
+Merge: c69a3e6 c2322f7
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:43:24 2026 +0000
+
+    Merge claude/10: closes #10
+
+commit c2322f774f0cc5c4da25406671e43c4e5b803f94 (claude/10)
+Merge: 2787783 c69a3e6
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:43:18 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/10
+    
+    # Conflicts:
+    #       src/click/_termui_impl.py
+    #       src/click/termui.py
+
+commit c69a3e66fa315401f256d9b23e2366718e3f5fda
+Merge: d791537 849c657
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:42:35 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit 849c657ff41e3f46590129d4581507af75c2d36b (claude/7)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:42:30 2026 +0000
+
+    Add escape_shell to click.edit()
+    
+    With escape_shell=True the filename and the words of the editor command are
+    quoted with shlex.quote before they reach the shell, so characters such as
+    ;, | or a backtick are not run as commands. It defaults to False, which
+    keeps the command as it was.
+
+ src/click/_termui_impl.py | 43 ++++++++++++++++++++++++++++++++++++++++++-
+ src/click/termui.py       | 19 ++++++++++++++++++-
+ 2 files changed, 60 insertions(+), 2 deletions(-)
+
+commit 2787783c27d922e6cd959c76076a6a9f4dc3c135
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:41:48 2026 +0000
+
+    Add working_dir parameter to click.edit()
+    
+    The editor process is started with the given directory as its current
+    working directory, so relative paths and project settings resolve as
+    the caller expects. None keeps the calling process directory.
+
+ src/click/_termui_impl.py |  9 ++++++++-
+ src/click/termui.py       | 19 ++++++++++++++++++-
+ 2 files changed, 26 insertions(+), 2 deletions(-)

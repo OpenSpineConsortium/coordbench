@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/typst_task/6554/f7_f8", "verdict": "pass"}
+coordbench run: coop-git-6554-f7_f8-d55155: timings: hub 0.1 s, run_create 0.0 s, git_remote 4.5 s, provision 49 s, agents 439 s (agent1 439 s, agent2 413 s), close 0.0 s, score 179 s, cascade 268 s, teardown 13 s
+coordbench run: summary: 26 completed, 0 skipped, 0 failed; evals: 26 evaluated, 19 passed, 7 failed, 0 errors (73.1%); cost: unknown

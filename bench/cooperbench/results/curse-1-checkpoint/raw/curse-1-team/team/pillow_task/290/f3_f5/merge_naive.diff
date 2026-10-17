@@ -1,0 +1,117 @@
+diff --cc src/PIL/Image.py
+index 345bb6b03,c02a51f52..000000000
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@@ -1056,6 -1062,7 +1062,10 @@@ class Image
+          palette=None,
+          dither=1,
+          lightness_factor=1.0,
+++<<<<<<< HEAD
+++=======
++         sort_palette=None,
+++>>>>>>> agent1
+      ):
+          """
+          Convert the image to 'P' mode with the specified number
+@@@ -1090,6 -1097,14 +1100,17 @@@
+             and each channel is clamped to the range 0-255. The alpha channel
+             of an RGBA palette is not changed. Must be greater than zero,
+             otherwise a :py:exc:`ValueError` is raised.
+++<<<<<<< HEAD
+++=======
++         :param sort_palette: Order of the palette entries of the result, applied
++            after ``lightness_factor``.
++            ``None`` (default) keeps the order the quantization produced.
++            ``"brightness"`` sorts from the darkest to the brightest color,
++            using the luma ``0.299 * R + 0.587 * G + 0.114 * B``, and ``"rgb"``
++            sorts by red, then green, then blue. Colors that compare equal keep
++            their relative order. The pixels are remapped, so the image looks
++            the same; only the palette indexes change.
+++>>>>>>> agent1
+          :returns: A new image
+  
+          """
+@@@ -1097,6 -1112,12 +1118,15 @@@
+          if not lightness_factor > 0:
+              raise ValueError("lightness_factor must be greater than 0")
+  
+++<<<<<<< HEAD
+++=======
++         if sort_palette is not None and sort_palette not in _PALETTE_SORT_KEYS:
++             raise ValueError(
++                 "sort_palette must be None, "
++                 + ", ".join(repr(name) for name in _PALETTE_SORT_KEYS)
++             )
++ 
+++>>>>>>> agent1
+          self.load()
+  
+          if method is None:
+@@@ -1126,6 -1147,8 +1156,11 @@@
+              new_im.palette = palette.palette.copy()
+              if lightness_factor != 1.0:
+                  _scale_palette_lightness(new_im, lightness_factor)
+++<<<<<<< HEAD
+++=======
++             if sort_palette is not None:
++                 new_im = new_im._sorted_palette(sort_palette)
+++>>>>>>> agent1
+              return new_im
+  
+          im = self._new(self.im.quantize(colors, method, kmeans))
+@@@ -1138,6 -1161,52 +1173,55 @@@
+          if lightness_factor != 1.0:
+              _scale_palette_lightness(im, lightness_factor)
+  
+++<<<<<<< HEAD
+++=======
++         if sort_palette is not None:
++             im = im._sorted_palette(sort_palette)
++ 
++         return im
++ 
++     def _sorted_palette(self, sort_palette):
++         """
++         Reorders the palette entries of this "P" image by the named key of
++         ``_PALETTE_SORT_KEYS`` and remaps the pixels to match, so that every
++         pixel keeps its color.
++ 
++         Only the entries up to the highest index in use are sorted. The
++         quantizers pad the palette to 256 entries with black, and sorting
++         those with the real colors would put them among them.
++ 
++         :returns: A new image
++         """
++         from . import ImagePalette
++ 
++         mode = self.im.getpalettemode()
++         size = len(mode)
++         data = self.im.getpalette(mode, mode)
++ 
++         histogram = self.histogram()
++         used = max((i for i, count in enumerate(histogram) if count), default=-1) + 1
++         entries = [tuple(data[i * size : (i + 1) * size]) for i in range(used)]
++ 
++         key = _PALETTE_SORT_KEYS[sort_palette]
++         order = sorted(range(used), key=lambda i: key(entries[i]))
++ 
++         # order[new] is the old index of the entry that moves to position new
++         lut = list(range(256))
++         new_data = bytearray(data)
++         for new, old in enumerate(order):
++             lut[old] = new
++             new_data[new * size : (new + 1) * size] = bytes(entries[old])
++ 
++         im = self.point(lut)
++         if mode == "RGBA":
++             # the core takes the colors and the alpha values separately
++             rgb = bytes(value for i, value in enumerate(new_data) if i % 4 != 3)
++             im.im.putpalette("RGB", rgb)
++             im.im.putpalettealphas(bytes(new_data[3::4]))
++         else:
++             im.im.putpalette(mode, bytes(new_data))
++         im.palette = ImagePalette.ImagePalette(mode, bytes(new_data))
+++>>>>>>> agent1
+          return im
+  
+      def copy(self):

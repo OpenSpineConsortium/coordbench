@@ -1,0 +1,47 @@
+commit 97928c1a3fdd64a2983ac930367892f56f1e69be (main)
+Merge: f146306 27e9425
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:52:50 2026 +0000
+
+    Merge claude/10: closes #10
+
+commit 27e94252f3d75eb18f288f785f435b3195cad503 (claude/10)
+Merge: d6a7ec1 f146306
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:52:41 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/10
+
+commit d6a7ec16364468c4eb0482e41bea1028ad8b90e6
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:52:35 2026 +0000
+
+    Add template path aliasing to loaders
+    
+    BaseLoader gains add_alias and remove_alias. Every loader resolves an alias
+    to its target, once and without chaining, before it looks the template up,
+    so TemplateNotFound names the target. A template loaded under an alias goes
+    stale in the environment cache when the alias is removed or changed.
+
+ src/jinja2/loaders.py | 110 +++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 99 insertions(+), 11 deletions(-)
+
+commit f146306298c85920327f4072484c3b2f10fcf119
+Merge: a292075 c5642cb
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:50:51 2026 +0000
+
+    Merge claude/4: closes #4
+
+commit c5642cb4a831c7c3bc24fe8fb8e79783d16bd0ef (claude/4)
+Author: agent1 <agent1@coordbench.local>
+Date:   Fri Oct 16 17:50:47 2026 +0000
+
+    feat(FileSystemLoader): add search path priority configuration
+    
+    A search path can be given as a (path, priority) tuple. Paths with a higher
+    priority are searched first; paths without one have priority 0, and paths of
+    equal priority keep the order they were given in.
+
+ src/jinja2/loaders.py | 48 +++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 45 insertions(+), 3 deletions(-)

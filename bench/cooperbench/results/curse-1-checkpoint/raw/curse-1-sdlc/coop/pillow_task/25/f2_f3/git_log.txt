@@ -1,0 +1,53 @@
+commit f6d06863aeb0cb44203853f7356bf48698cbda6d (main)
+Merge: 045a7fed1 3aa74d94e
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 11:13:01 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit 3aa74d94e8cad9e79f8b05a1345329329cae52b0 (claude/3)
+Merge: 17ee7b95e 045a7fed1
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:12:52 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/3
+    
+    # Conflicts:
+    #       src/PIL/Image.py
+
+commit 17ee7b95e9a5f3bf8be97ba025354a2db5eb345a
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:11:58 2026 +0000
+
+    Add dry_run option to Image.save
+    
+    With dry_run=True the image is encoded as for a real save, so the same
+    errors are raised (unsupported mode, bad options, unknown format), but into
+    an in-memory buffer: no file is created or changed, and a file object passed
+    in is left untouched.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01EpWePoGTe85LfAhrkZwL7X
+
+ Tests/test_image.py | 93 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py    | 22 +++++++++++--
+ 2 files changed, 113 insertions(+), 2 deletions(-)
+
+commit 045a7fed1b2b5d0b483db41a780dcdeb98313ca8
+Merge: 869aa5843 8f2280fdd
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 11:10:31 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit 8f2280fdd2ea4fc650cc7321143a2e779583de53 (claude/2)
+Author: agent1 <agent1@coordbench.local>
+Date:   Fri Oct 16 11:10:14 2026 +0000
+
+    Add preserve_readonly option to Image.save()
+    
+    With preserve_readonly=True, save() only loads the image instead of calling _ensure_mutable(), so an image made by frombuffer() keeps its readonly flag and stays connected to its buffer. The default keeps the existing behaviour.
+
+ Tests/test_image.py | 37 +++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py    | 20 +++++++++++++++++---
+ 2 files changed, 54 insertions(+), 3 deletions(-)

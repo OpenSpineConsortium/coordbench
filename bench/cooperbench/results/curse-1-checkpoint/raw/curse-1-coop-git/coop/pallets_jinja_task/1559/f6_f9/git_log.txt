@@ -1,0 +1,24 @@
+commit 33f8e0ac8818a10779aa50cd47afffa9a018176f (agent2)
+Merge: 33ad45f 1d4e6fc
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:50:49 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 1d4e6fc23fec377f9be29d53eb77eca91fc07d0f (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:50:32 2026 +0000
+
+    feat(i18n): add LRU translation cache to InternationalizationExtension
+
+ src/jinja2/ext.py | 78 ++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 77 insertions(+), 1 deletion(-)
+
+commit 33ad45f2139b584566ef063773639b2070928c1d
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 17:49:42 2026 +0000
+
+    feat(ext): add TranslationExtractorExtension for extraction markers
+
+ src/jinja2/ext.py | 72 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 72 insertions(+)

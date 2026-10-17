@@ -1,0 +1,26 @@
+commit 2294ab08e1cb7ec6aa36e9003f0c683aa4c6b212 (agent2, agent1)
+Merge: 86af1376 91a41a59
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:32:51 2026 +0000
+
+    Merge team/agent1 into agent2
+
+commit 86af1376fdac60c4823918d7492656870ba3f3bf
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:32:10 2026 +0000
+
+    Add lightness_factor to Image.quantize()
+
+ Tests/test_image_quantize.py | 139 +++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py             |  69 ++++++++++++++++++++-
+ 2 files changed, 207 insertions(+), 1 deletion(-)
+
+commit 91a41a592f78374f153e91d9c6ed4bc67e9c68e8
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:29:27 2026 +0000
+
+    Add error_threshold parameter to Image.quantize
+
+ Tests/test_image_quantize.py | 105 +++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py             |  64 +++++++++++++++++++++++++-
+ 2 files changed, 167 insertions(+), 2 deletions(-)

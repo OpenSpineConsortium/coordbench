@@ -1,0 +1,29 @@
+[
+  {
+    "id": "58372cb133",
+    "title": "Lead-only: integrate and submit feature 1",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792156401.1582541,
+    "last_note": "feature 1 implemented; agent2's feature 8 patch applied; merged diff in patch.txt",
+    "metadata": {
+      "feature_id": 1,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  },
+  {
+    "id": "b729aa567d",
+    "title": "Implement feature 8",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792156401.1582127,
+    "last_note": "patch at /workspace/shared/agent2.patch (core.py only)",
+    "metadata": {
+      "feature_id": 8,
+      "assigned_to": "agent2"
+    }
+  }
+]

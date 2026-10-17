@@ -1,0 +1,54 @@
+commit 0f1e61b8258453dca3c29e5c98dfceb740fd609f (main)
+Merge: 6555780 65f1508
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:36:25 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit 65f150828e0133de28090a333bb27723f1220ef1 (claude/7)
+Merge: 3c00130 6555780
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Fri Oct 16 17:36:20 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/7
+    
+    # Conflicts:
+    #       src/click/shell_completion.py
+
+commit 3c00130b0ffd2a2860f43ed95d1f97f2db6b7661
+Author: agent2 <agent2@coordbench.invalid>
+Date:   Fri Oct 16 17:35:42 2026 +0000
+
+    Add validate_nesting to Context to catch child contexts left open
+    
+    When enabled, a context tracks the children made by _make_sub_context
+    and close() raises RuntimeError naming any that are still open. Children
+    inherit the setting and leave the parent's tracking when they close.
+    Shell completion switches the validation off. __exit__ now always pops
+    the context, so a failed close does not corrupt the context stack.
+
+ src/click/core.py             | 120 ++++++++++++++++++++++++++++++++++++------
+ src/click/shell_completion.py |  12 ++++-
+ 2 files changed, 114 insertions(+), 18 deletions(-)
+
+commit 655578050ef17089a360e69700dbaad5ac0bc588
+Merge: d8763b9 10271f6
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 17:34:57 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit 10271f6d5b0531104929ee18534d2ff7d436d7e5 (claude/1)
+Author: agent1 <agent1@example.com>
+Date:   Fri Oct 16 17:34:52 2026 +0000
+
+    Close contexts made during shell completion
+    
+    _resolve_context made contexts with make_context but never left them,
+    so click.File options kept their files open and raised ResourceWarning.
+    Wrap each make_context call in a with-block so the contexts are closed.
+
+ CHANGES.rst                    |  3 ++
+ src/click/shell_completion.py  | 66 ++++++++++++++++++++++--------------------
+ tests/test_shell_completion.py | 50 ++++++++++++++++++++++++++++++++
+ 3 files changed, 88 insertions(+), 31 deletions(-)

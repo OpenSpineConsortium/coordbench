@@ -1,0 +1,29 @@
+[
+  {
+    "id": "83bb8f78e7",
+    "title": "Implement feature 7",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792173635.448997,
+    "last_note": "patch at /workspace/shared/agent2.patch",
+    "metadata": {
+      "feature_id": 7,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "a95e9e47f8",
+    "title": "Lead-only: integrate and submit feature 6",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792173635.449052,
+    "last_note": "f6 + f7 merged in loaders.py, 841 tests pass, patch.txt written",
+    "metadata": {
+      "feature_id": 6,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

@@ -1,0 +1,125 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..5696513fa 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -182,6 +182,14 @@ MAXCOVERAGE = 1
+ FASTOCTREE = 2
+ LIBIMAGEQUANT = 3
+ 
++# Keys that quantize(sort_palette=...) sorts palette entries by; each takes one
++# entry, a tuple of red, green, blue and perhaps alpha, and returns what to
++# compare. Ties keep the quantizer's order.
++_PALETTE_SORT_KEYS = {
++    "brightness": lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2],
++    "rgb": lambda c: tuple(c[:3]),
++}
++
+ if hasattr(core, "DEFAULT_STRATEGY"):
+     DEFAULT_STRATEGY = core.DEFAULT_STRATEGY
+     FILTERED = core.FILTERED
+@@ -1048,7 +1056,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        max_colors=None,
++        sort_palette=None,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1073,10 +1090,32 @@ class Image:
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+            Default: 1 (legacy setting)
++        :param max_colors: The largest number of colors the palette may have.
++           The quantizer aims for ``colors`` but never produces more than
++           ``max_colors``, so when ``max_colors`` is smaller than ``colors``
++           it sets the number of colors. If omitted, it is ``colors``, which
++           keeps the previous behaviour. Ignored when ``palette`` is given.
++        :param sort_palette: How to order the palette colors after
++           quantization: ``"brightness"`` (darkest first, by luma) or ``"rgb"``
++           (by red, then green, then blue value). By default the order is the
++           one the quantizer chose. The pixels are renumbered to match, so the
++           image looks the same. Ignored when ``palette`` is given.
+         :returns: A new image
+ 
+         """
+ 
++        if sort_palette is not None and sort_palette not in _PALETTE_SORT_KEYS:
++            raise ValueError(
++                "sort_palette must be one of "
++                + ", ".join(repr(name) for name in _PALETTE_SORT_KEYS)
++                + " or None"
++            )
++
++        if max_colors is None:
++            max_colors = colors
++        elif max_colors < 1:
++            raise ValueError("max_colors must be at least 1")
++
+         self.load()
+ 
+         if method is None:
+@@ -1106,15 +1145,53 @@ class Image:
+             new_im.palette = palette.palette.copy()
+             return new_im
+ 
+-        im = self._new(self.im.quantize(colors, method, kmeans))
++        im = self._new(self.im.quantize(min(colors, max_colors), method, kmeans))
+ 
+         from . import ImagePalette
+ 
+         mode = im.im.getpalettemode()
+         im.palette = ImagePalette.ImagePalette(mode, im.im.getpalette(mode, mode))
+ 
++        if sort_palette is not None:
++            im = im._sorted_palette(sort_palette)
++
+         return im
+ 
++    def _sorted_palette(self, sort_palette):
++        """
++        Returns a copy of this 'P' image whose palette entries are ordered by
++        the named key in ``_PALETTE_SORT_KEYS``, with the pixels renumbered so
++        that every pixel keeps its color. The entries the image uses come first,
++        in sorted order; the unused ones follow in their old order, so the
++        quantizer's empty padding never lands among the real colors.
++        """
++        from . import ImagePalette
++
++        mode = self.palette.mode
++        size = len(mode)
++        data = self.palette.palette
++        entries = [tuple(data[i : i + size]) for i in range(0, len(data), size)]
++
++        used = sorted(index for _, index in self.getcolors())
++        unused = [i for i in range(len(entries)) if i not in used]
++        key = _PALETTE_SORT_KEYS[sort_palette]
++        order = sorted(used, key=lambda i: key(entries[i])) + unused
++
++        # order[new] is the old index; the lookup table goes the other way
++        lut = list(range(256))
++        for new, old in enumerate(order):
++            lut[old] = new
++
++        sorted_im = self.point(lut)
++        colors = [entries[old] for old in order]
++        sorted_im.im.putpalette("RGB", bytes(v for color in colors for v in color[:3]))
++        if mode == "RGBA":
++            sorted_im.im.putpalettealphas(bytes(color[3] for color in colors))
++        sorted_im.palette = ImagePalette.ImagePalette(
++            mode, bytes(v for color in colors for v in color)
++        )
++        return sorted_im
++
+     def copy(self):
+         """
+         Copies this image. Use this method if you wish to paste things

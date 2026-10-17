@@ -1,0 +1,30 @@
+commit a0c22a604cee63ec899dfc016e9357b815f48aea (agent2, agent1)
+Merge: 37d7e22 a5185a8
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 06:02:53 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+    
+    # Conflicts:
+    #       src/click/_termui_impl.py
+    #       src/click/termui.py
+
+commit 37d7e22fd00ca3430de4dc8be90ec8e3f8994795
+Author: agent1 <agent@cooperbench.local>
+Date:   Thu Oct 15 06:02:28 2026 +0000
+
+    Add lock_files option to click.edit()
+
+ src/click/_termui_impl.py | 70 +++++++++++++++++++++++++++++++++++++++++++++++
+ src/click/termui.py       | 17 +++++++++++-
+ 2 files changed, 86 insertions(+), 1 deletion(-)
+
+commit a5185a804d67f726d2432f01910f030c1826b57c
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 06:02:16 2026 +0000
+
+    Add escape_shell option to click.edit
+
+ src/click/_termui_impl.py | 37 ++++++++++++++++++++++++++++++++++++-
+ src/click/termui.py       | 15 ++++++++++++++-
+ 2 files changed, 50 insertions(+), 2 deletions(-)

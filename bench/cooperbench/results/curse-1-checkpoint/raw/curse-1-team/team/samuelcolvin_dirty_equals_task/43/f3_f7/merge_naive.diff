@@ -1,0 +1,16 @@
+diff --cc dirty_equals/__init__.py
+index eca13d5,37817b4..0000000
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@@ -18,7 -18,7 +18,11 @@@ from ._numeric import 
+      IsPositiveFloat,
+      IsPositiveInt,
+  )
+++<<<<<<< HEAD
+ +from ._other import FunctionCheck, IsHash, IsJson, IsUUID
+++=======
++ from ._other import FunctionCheck, IsEmail, IsHash, IsJson, IsUUID
+++>>>>>>> agent1
+  from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple
+  from ._strings import IsAnyStr, IsBytes, IsStr
+  

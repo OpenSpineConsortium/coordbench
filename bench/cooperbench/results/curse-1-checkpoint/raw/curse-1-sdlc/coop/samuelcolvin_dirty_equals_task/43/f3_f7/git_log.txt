@@ -1,0 +1,43 @@
+commit b5aea0ade237480f2661e995ce293c44660ac511 (claude/7)
+Merge: d647c5b 37fd024
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 10:15:12 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/7
+    
+    # Conflicts:
+    #       dirty_equals/__init__.py
+
+commit 3e7fb8430fe4e386b535bbfc90543248ba5bffab (main)
+Merge: 37fd024 b5aea0a
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:15:12 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit 37fd024cfbfe87a688014a07a14ee97c3234c99d
+Merge: 593bccc 5c75677
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 10:14:55 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit d647c5b658bee6378216859aed9a46e76d7a553c
+Author: agent2 <agent2@example.com>
+Date:   Fri Oct 16 10:14:52 2026 +0000
+
+    Add IsHash validator for cryptographic hash value validation
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 51 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 53 insertions(+), 1 deletion(-)
+
+commit 5c75677015caffcac1df4398a27a7fbd107713f7 (claude/3)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:14:46 2026 +0000
+
+    Add IsEmail validator with optional case-sensitive domain filtering
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 44 +++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 45 insertions(+), 2 deletions(-)

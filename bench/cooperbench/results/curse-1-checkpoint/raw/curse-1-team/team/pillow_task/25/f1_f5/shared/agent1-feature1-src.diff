@@ -1,0 +1,21 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..27ee2cbc0 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2540,8 +2540,15 @@ class Image:
+                 msg = f"unknown file extension: {ext}"
+                 raise ValueError(msg) from e
+ 
++        # Saving over the file this image was opened from needs a private copy
++        # of the data, since the image may be reading from that file. Any other
++        # image keeps its readonly flag, so that one made by frombuffer()
++        # continues to reflect changes to its buffer after saving.
+         # may mutate self!
+-        self._ensure_mutable()
++        if hasattr(self, "filename") and self.filename == filename:
++            self._ensure_mutable()
++        else:
++            self.load()
+ 
+         save_all = params.pop("save_all", None)
+         self.encoderinfo = {**getattr(self, "encoderinfo", {}), **params}

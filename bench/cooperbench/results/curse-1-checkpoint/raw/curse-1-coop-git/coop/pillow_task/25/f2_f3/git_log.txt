@@ -1,0 +1,36 @@
+commit b55894206d637e971501094971a89e48e789fbdd (agent1)
+Merge: 358d894a2 2d2b39c42
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:13:31 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+    
+    # Conflicts:
+    #       src/PIL/Image.py
+
+commit a39fb45403825bf9df8f18e7770533e1335a57eb (agent2)
+Merge: 2d2b39c42 358d894a2
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:13:12 2026 +0000
+
+    Merge team/agent1 into agent2
+
+commit 2d2b39c42fd222b7811f9ae143a4d2251c37d998
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:12:54 2026 +0000
+
+    Add dry_run option to Image.save
+
+ Tests/test_image.py | 75 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/PIL/Image.py    | 21 +++++++++++++--
+ 2 files changed, 94 insertions(+), 2 deletions(-)
+
+commit 358d894a2c25f54abe8c7e353cd8c5aa033a6731
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 11:11:34 2026 +0000
+
+    Add preserve_readonly option to Image.save
+
+ Tests/test_image.py | 28 ++++++++++++++++++++++++++++
+ src/PIL/Image.py    | 20 +++++++++++++++++---
+ 2 files changed, 45 insertions(+), 3 deletions(-)

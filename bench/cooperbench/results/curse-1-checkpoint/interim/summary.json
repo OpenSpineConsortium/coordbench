@@ -1,0 +1,436 @@
+{
+  "tag": "curse-1",
+  "prices_usd_per_mtok": {
+    "claude-sonnet-5-5": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "claude-haiku-5-5": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125
+    }
+  },
+  "bases": [
+    "solo",
+    "coop"
+  ],
+  "arms": {
+    "solo": {
+      "attempts": 36,
+      "attempts_passed": 27,
+      "pass_rate_errors_as_failures": 0.75,
+      "wilson_95_errors_as_failures": [
+        0.5893,
+        0.8625
+      ],
+      "pairs": 36,
+      "passed": 27,
+      "pass_rate": 0.75,
+      "wilson_95": [
+        0.5893,
+        0.8625
+      ],
+      "agent_errors": 0,
+      "wall_seconds_median": 191.7,
+      "wall_seconds_mean": 260.31,
+      "agents_wall_seconds_median": 166.2,
+      "agent_seconds_sum_median": 166.2,
+      "agent_seconds_sum_mean": 211.36,
+      "tokens_per_pair_mean": {
+        "input": 29.5,
+        "cache_read": 1373093.08,
+        "cache_write": 76598.17,
+        "output": 15146.39,
+        "total": 1464867.14
+      },
+      "tokens_per_pair_median": {
+        "input": 26.0,
+        "cache_read": 1134786.5,
+        "cache_write": 69629.0,
+        "output": 11294.0,
+        "total": 1216066.5
+      },
+      "output_lower_bound_pairs": 31,
+      "unmeasured_token_pairs": 0,
+      "cost_usd_total": 22.23,
+      "priced_pairs": 36,
+      "cost_usd_per_pair_mean": 0.62,
+      "cost_usd_per_pair_median": 0.5,
+      "cost_usd_per_passing_pair": 0.82,
+      "tool_calls_per_pair_mean": 16.59,
+      "messages_per_pair_mean": 0.0,
+      "message_words_per_pair_mean": 0.0,
+      "merge_conflict_pairs": 0,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null,
+      "harness_errors": 0,
+      "harness_error_runs": [],
+      "audited_pairs": 36,
+      "api_calls_per_pair_mean": 14.75,
+      "prefix_share_of_tokens": 0.7401,
+      "net_tokens_per_pair_mean": 380651.22,
+      "net_tokens_per_pair_median": 246147.5,
+      "refusal_pairs": 0,
+      "efforts": [
+        "xhigh"
+      ]
+    },
+    "coop": {
+      "attempts": 36,
+      "attempts_passed": 25,
+      "pass_rate_errors_as_failures": 0.6944,
+      "wilson_95_errors_as_failures": [
+        0.5314,
+        0.82
+      ],
+      "pairs": 36,
+      "passed": 25,
+      "pass_rate": 0.6944,
+      "wilson_95": [
+        0.5314,
+        0.82
+      ],
+      "agent_errors": 0,
+      "wall_seconds_median": 253.6,
+      "wall_seconds_mean": 286.33,
+      "agents_wall_seconds_median": 238.6,
+      "agent_seconds_sum_median": 400.1,
+      "agent_seconds_sum_mean": 471.84,
+      "tokens_per_pair_mean": {
+        "input": 65.83,
+        "cache_read": 2949493.64,
+        "cache_write": 139107.94,
+        "output": 25507.25,
+        "total": 3114174.67
+      },
+      "tokens_per_pair_median": {
+        "input": 62.0,
+        "cache_read": 2624147.0,
+        "cache_write": 128105.5,
+        "output": 22145.5,
+        "total": 2772340.5
+      },
+      "output_lower_bound_pairs": 36,
+      "unmeasured_token_pairs": 0,
+      "cost_usd_total": 42.94,
+      "priced_pairs": 36,
+      "cost_usd_per_pair_mean": 1.19,
+      "cost_usd_per_pair_median": 1.1,
+      "cost_usd_per_passing_pair": 1.72,
+      "tool_calls_per_pair_mean": 37.07,
+      "messages_per_pair_mean": 6.19,
+      "message_words_per_pair_mean": 686.75,
+      "merge_conflict_pairs": 2,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null,
+      "harness_errors": 0,
+      "harness_error_runs": [],
+      "audited_pairs": 36,
+      "api_calls_per_pair_mean": 32.92,
+      "prefix_share_of_tokens": 0.7799,
+      "net_tokens_per_pair_mean": 685286.72,
+      "net_tokens_per_pair_median": 535002.5,
+      "refusal_pairs": 10,
+      "efforts": [
+        "xhigh"
+      ]
+    },
+    "sdlc": {
+      "attempts": 36,
+      "attempts_passed": 26,
+      "pass_rate_errors_as_failures": 0.7222,
+      "wilson_95_errors_as_failures": [
+        0.5601,
+        0.8415
+      ],
+      "pairs": 36,
+      "passed": 26,
+      "pass_rate": 0.7222,
+      "wilson_95": [
+        0.5601,
+        0.8415
+      ],
+      "agent_errors": 0,
+      "wall_seconds_median": 390.6,
+      "wall_seconds_mean": 412.66,
+      "agents_wall_seconds_median": 370.5,
+      "agent_seconds_sum_median": 587.7,
+      "agent_seconds_sum_mean": 645.96,
+      "tokens_per_pair_mean": {
+        "input": 79.11,
+        "cache_read": 3656843.53,
+        "cache_write": 144462.36,
+        "output": 23680.78,
+        "total": 3825065.78
+      },
+      "tokens_per_pair_median": {
+        "input": 74.0,
+        "cache_read": 3290344.5,
+        "cache_write": 139519.0,
+        "output": 22122.0,
+        "total": 3439021.5
+      },
+      "output_lower_bound_pairs": 36,
+      "unmeasured_token_pairs": 0,
+      "cost_usd_total": 47.86,
+      "priced_pairs": 36,
+      "cost_usd_per_pair_mean": 1.33,
+      "cost_usd_per_pair_median": 1.2,
+      "cost_usd_per_passing_pair": 1.84,
+      "tool_calls_per_pair_mean": 44.93,
+      "messages_per_pair_mean": 3.75,
+      "message_words_per_pair_mean": 267.06,
+      "merge_conflict_pairs": 1,
+      "claims": 72,
+      "prs_opened": 72,
+      "merges": 72,
+      "protocol_merge_conflicts": 2,
+      "time_to_first_merge_median": 124.6,
+      "harness_errors": 0,
+      "harness_error_runs": [],
+      "audited_pairs": 36,
+      "api_calls_per_pair_mean": 39.56,
+      "prefix_share_of_tokens": 0.756,
+      "net_tokens_per_pair_mean": 933424.42,
+      "net_tokens_per_pair_median": 752978.5,
+      "refusal_pairs": 1,
+      "efforts": [
+        "xhigh"
+      ]
+    },
+    "coop-git": {
+      "attempts": 36,
+      "attempts_passed": 26,
+      "pass_rate_errors_as_failures": 0.7222,
+      "wilson_95_errors_as_failures": [
+        0.5601,
+        0.8415
+      ],
+      "pairs": 36,
+      "passed": 26,
+      "pass_rate": 0.7222,
+      "wilson_95": [
+        0.5601,
+        0.8415
+      ],
+      "agent_errors": 0,
+      "wall_seconds_median": 265.4,
+      "wall_seconds_mean": 292.58,
+      "agents_wall_seconds_median": 249.2,
+      "agent_seconds_sum_median": 482.3,
+      "agent_seconds_sum_mean": 512.04,
+      "tokens_per_pair_mean": {
+        "input": 78.83,
+        "cache_read": 3629656.31,
+        "cache_write": 140950.19,
+        "output": 24440.94,
+        "total": 3795126.28
+      },
+      "tokens_per_pair_median": {
+        "input": 74.0,
+        "cache_read": 3253359.5,
+        "cache_write": 136086.5,
+        "output": 22831.5,
+        "total": 3423563.0
+      },
+      "output_lower_bound_pairs": 36,
+      "unmeasured_token_pairs": 0,
+      "cost_usd_total": 47.62,
+      "priced_pairs": 36,
+      "cost_usd_per_pair_mean": 1.32,
+      "cost_usd_per_pair_median": 1.3,
+      "cost_usd_per_passing_pair": 1.83,
+      "tool_calls_per_pair_mean": 41.85,
+      "messages_per_pair_mean": 6.19,
+      "message_words_per_pair_mean": 338.92,
+      "merge_conflict_pairs": 4,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null,
+      "harness_errors": 0,
+      "harness_error_runs": [],
+      "audited_pairs": 36,
+      "api_calls_per_pair_mean": 39.42,
+      "prefix_share_of_tokens": 0.7671,
+      "net_tokens_per_pair_mean": 883833.33,
+      "net_tokens_per_pair_median": 770141.0,
+      "refusal_pairs": 10,
+      "efforts": [
+        "xhigh"
+      ]
+    },
+    "team": {
+      "attempts": 35,
+      "attempts_passed": 26,
+      "pass_rate_errors_as_failures": 0.7429,
+      "wilson_95_errors_as_failures": [
+        0.5793,
+        0.8584
+      ],
+      "pairs": 35,
+      "passed": 26,
+      "pass_rate": 0.7429,
+      "wilson_95": [
+        0.5793,
+        0.8584
+      ],
+      "agent_errors": 0,
+      "wall_seconds_median": 256.7,
+      "wall_seconds_mean": 307.86,
+      "agents_wall_seconds_median": 238.7,
+      "agent_seconds_sum_median": 436.9,
+      "agent_seconds_sum_mean": 494.7,
+      "tokens_per_pair_mean": {
+        "input": 77.14,
+        "cache_read": 3489457.37,
+        "cache_write": 144300.2,
+        "output": 24448.17,
+        "total": 3658282.89
+      },
+      "tokens_per_pair_median": {
+        "input": 74,
+        "cache_read": 3268275,
+        "cache_write": 144966,
+        "output": 22262,
+        "total": 3421835
+      },
+      "output_lower_bound_pairs": 35,
+      "unmeasured_token_pairs": 0,
+      "cost_usd_total": 45.62,
+      "priced_pairs": 35,
+      "cost_usd_per_pair_mean": 1.3,
+      "cost_usd_per_pair_median": 1.2,
+      "cost_usd_per_passing_pair": 1.75,
+      "tool_calls_per_pair_mean": 43.8,
+      "messages_per_pair_mean": 4.23,
+      "message_words_per_pair_mean": 329.54,
+      "merge_conflict_pairs": 21,
+      "claims": 0,
+      "prs_opened": 0,
+      "merges": 0,
+      "protocol_merge_conflicts": 0,
+      "time_to_first_merge_median": null,
+      "harness_errors": 0,
+      "harness_error_runs": [],
+      "audited_pairs": 35,
+      "api_calls_per_pair_mean": 38.57,
+      "prefix_share_of_tokens": 0.7807,
+      "net_tokens_per_pair_mean": 802266.49,
+      "net_tokens_per_pair_median": 698337,
+      "refusal_pairs": 0,
+      "efforts": [
+        "xhigh"
+      ]
+    }
+  },
+  "paired": {
+    "solo vs coop": {
+      "shared_pairs": 36,
+      "both": 23,
+      "only_a": 4,
+      "only_b": 2,
+      "neither": 7,
+      "wall_seconds_ratio_b_over_a": 1.323,
+      "agent_seconds_sum_ratio_b_over_a": 2.407,
+      "total_tokens_ratio_b_over_a": 2.28,
+      "net_tokens_ratio_b_over_a": 2.174,
+      "cost_ratio_b_over_a": 1.978
+    },
+    "solo vs sdlc": {
+      "shared_pairs": 36,
+      "both": 24,
+      "only_a": 3,
+      "only_b": 2,
+      "neither": 7,
+      "wall_seconds_ratio_b_over_a": 2.037,
+      "agent_seconds_sum_ratio_b_over_a": 3.536,
+      "total_tokens_ratio_b_over_a": 2.828,
+      "net_tokens_ratio_b_over_a": 3.059,
+      "cost_ratio_b_over_a": 2.252
+    },
+    "solo vs coop-git": {
+      "shared_pairs": 36,
+      "both": 25,
+      "only_a": 2,
+      "only_b": 1,
+      "neither": 8,
+      "wall_seconds_ratio_b_over_a": 1.384,
+      "agent_seconds_sum_ratio_b_over_a": 2.902,
+      "total_tokens_ratio_b_over_a": 2.815,
+      "net_tokens_ratio_b_over_a": 3.129,
+      "cost_ratio_b_over_a": 2.309
+    },
+    "solo vs team": {
+      "shared_pairs": 35,
+      "both": 24,
+      "only_a": 2,
+      "only_b": 2,
+      "neither": 7,
+      "wall_seconds_ratio_b_over_a": 1.395,
+      "agent_seconds_sum_ratio_b_over_a": 2.656,
+      "total_tokens_ratio_b_over_a": 2.833,
+      "net_tokens_ratio_b_over_a": 2.859,
+      "cost_ratio_b_over_a": 2.312
+    },
+    "coop vs solo": {
+      "shared_pairs": 36,
+      "both": 23,
+      "only_a": 2,
+      "only_b": 4,
+      "neither": 7,
+      "wall_seconds_ratio_b_over_a": 0.756,
+      "agent_seconds_sum_ratio_b_over_a": 0.415,
+      "total_tokens_ratio_b_over_a": 0.439,
+      "net_tokens_ratio_b_over_a": 0.46,
+      "cost_ratio_b_over_a": 0.506
+    },
+    "coop vs sdlc": {
+      "shared_pairs": 36,
+      "both": 24,
+      "only_a": 1,
+      "only_b": 2,
+      "neither": 9,
+      "wall_seconds_ratio_b_over_a": 1.54,
+      "agent_seconds_sum_ratio_b_over_a": 1.469,
+      "total_tokens_ratio_b_over_a": 1.24,
+      "net_tokens_ratio_b_over_a": 1.407,
+      "cost_ratio_b_over_a": 1.139
+    },
+    "coop vs coop-git": {
+      "shared_pairs": 36,
+      "both": 24,
+      "only_a": 1,
+      "only_b": 2,
+      "neither": 9,
+      "wall_seconds_ratio_b_over_a": 1.046,
+      "agent_seconds_sum_ratio_b_over_a": 1.205,
+      "total_tokens_ratio_b_over_a": 1.235,
+      "net_tokens_ratio_b_over_a": 1.44,
+      "cost_ratio_b_over_a": 1.167
+    },
+    "coop vs team": {
+      "shared_pairs": 35,
+      "both": 25,
+      "only_a": 0,
+      "only_b": 1,
+      "neither": 9,
+      "wall_seconds_ratio_b_over_a": 0.983,
+      "agent_seconds_sum_ratio_b_over_a": 1.096,
+      "total_tokens_ratio_b_over_a": 1.236,
+      "net_tokens_ratio_b_over_a": 1.352,
+      "cost_ratio_b_over_a": 1.178
+    }
+  }
+}

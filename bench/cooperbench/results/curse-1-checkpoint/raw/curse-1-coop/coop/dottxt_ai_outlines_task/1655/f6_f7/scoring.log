@@ -1,4 +1,0 @@
-{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/dottxt_ai_outlines_task/1655/f6_f7", "verdict": "pass"}
-coordbench run: coop-1655-f6_f7-11c6bd: an earlier attempt's files in the pair directory were packed into previous-20261016T041751.tar.gz
-coordbench run: coop-1655-f6_f7-11c6bd: timings: hub 0.2 s, run_create 0.0 s, provision 19 s, agents 148 s (agent1 148 s, agent2 140 s), close 0.0 s, score 287 s, cascade 541 s, teardown 0.9 s
-coordbench run: summary: 1 completed, 0 skipped, 0 failed; evals: 1 evaluated, 1 passed, 0 failed, 0 errors (100.0%); cost: unknown

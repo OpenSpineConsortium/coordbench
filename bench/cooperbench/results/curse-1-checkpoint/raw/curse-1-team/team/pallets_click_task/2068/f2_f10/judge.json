@@ -1,0 +1,173 @@
+{
+  "format": "coordbench-judge/1",
+  "pair": {
+    "repo": "pallets_click_task",
+    "task_id": 2068,
+    "features": [
+      2,
+      10
+    ],
+    "arm": "team",
+    "setting": "team",
+    "model": "claude-sonnet-5-5",
+    "driver": "session",
+    "run_name": "curse-1-team",
+    "run_id": "team-2068-f2_f10-88cdef"
+  },
+  "calls": {},
+  "skipped": {},
+  "errors": {},
+  "heuristics": {
+    "unanswered_questions": [],
+    "ignored_questions": [],
+    "near_duplicates": [],
+    "speech_acts_keyword": {
+      "20": null,
+      "29": "Question",
+      "38": "Answer"
+    },
+    "resource_division_candidates": [],
+    "negotiation_candidates": [],
+    "contradictions": [
+      {
+        "message_id": "38",
+        "agent": "agent2",
+        "name": "patch.txt",
+        "kind": "path"
+      },
+      {
+        "message_id": "38",
+        "agent": "agent2",
+        "name": "edit_file",
+        "kind": "identifier"
+      }
+    ],
+    "overlapping_hunks": [
+      {
+        "file": "src/click/_termui_impl.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            485,
+            495
+          ],
+          [
+            485,
+            495
+          ]
+        ],
+        "same_heading": "class Editor:"
+      },
+      {
+        "file": "src/click/_termui_impl.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            516,
+            523
+          ],
+          [
+            516,
+            522
+          ]
+        ],
+        "same_heading": "class Editor:"
+      },
+      {
+        "file": "src/click/termui.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            21,
+            26
+          ],
+          [
+            21,
+            26
+          ]
+        ],
+        "same_heading": "from .utils import echo"
+      },
+      {
+        "file": "src/click/termui.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            650,
+            655
+          ],
+          [
+            650,
+            655
+          ]
+        ],
+        "same_heading": "def edit("
+      },
+      {
+        "file": "src/click/termui.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            677,
+            686
+          ],
+          [
+            677,
+            686
+          ]
+        ],
+        "same_heading": "def edit("
+      }
+    ],
+    "insertion_markers": [],
+    "missing_final_status": [
+      "agent1"
+    ]
+  },
+  "heuristics_meta": {
+    "computed_at": "2026-10-15T06:00:32+00:00",
+    "conversation_source": "events.jsonl",
+    "message_count": 3,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
+    "definitions": {
+      "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
+      "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
+      "near_duplicates": "C4a/C4b candidates: [id, id, difflib ratio >= 0.9, both status-like], same sender",
+      "speech_acts_keyword": "the keyword baseline of the speech acts, beside the judge's",
+      "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
+      "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
+      "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
+      "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
+      "insertion_markers": "App D: added comment lines marking where another agent inserts code",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it"
+    },
+    "final_status_times": {
+      "agent1": {
+        "last_edit_at": 1792043962.66,
+        "last_message_at": 1792043852.517959
+      },
+      "agent2": {
+        "last_edit_at": 1792043877.948,
+        "last_message_at": 1792043893.7472456
+      }
+    },
+    "git_blog_names": null
+  }
+}

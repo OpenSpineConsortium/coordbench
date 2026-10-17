@@ -1,0 +1,26 @@
+diff --git a/outlines/types/__init__.py b/outlines/types/__init__.py
+index 85af9adc..7a2c012d 100644
+--- a/outlines/types/__init__.py
++++ b/outlines/types/__init__.py
+@@ -68,3 +68,21 @@ email = Regex(
+ isbn = Regex(
+     r"(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]"
+ )
++
++# Matches a 16-digit credit card number written as four groups of four digits.
++# The groups are either run together or all separated by a single space, or all
++# separated by a single hyphen; mixing separators ("1234-5678 9012-3456") does
++# not match. The three forms are spelled out instead of using a backreference
++# because the finite state machines used for structured generation do not
++# support backreferences. [0-9] is used rather than \d, which in Python also
++# matches non-ASCII digits.
++#
++# Note that this only checks the format: it does not verify the Luhn check
++# digit, the card network's prefix or the card's length, which is not always 16.
++credit_card = Regex(
++    r"(?:[0-9]{16}|[0-9]{4}(?: [0-9]{4}){3}|[0-9]{4}(?:-[0-9]{4}){3})"
++)
++
++# Matches a SHA-256 hash in its usual hexadecimal form: exactly 64 characters
++# among the digits and the letters a-f in either case.
++hash_sha256 = Regex(r"[a-fA-F0-9]{64}")

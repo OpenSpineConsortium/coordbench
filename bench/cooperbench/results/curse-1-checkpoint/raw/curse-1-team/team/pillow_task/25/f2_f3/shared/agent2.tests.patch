@@ -1,0 +1,55 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..bff40004c 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -752,6 +752,50 @@ class TestImage:
+ 
+         assert not os.path.exists(temp_file)
+ 
++    def test_save_dry_run(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++
++        hopper().save(temp_file, dry_run=True)
++
++        assert not temp_file.exists()
++
++    def test_save_dry_run_keeps_existing_file(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++        temp_file.write_bytes(b"existing")
++
++        hopper().save(temp_file, dry_run=True)
++
++        assert temp_file.read_bytes() == b"existing"
++
++    def test_save_dry_run_file_object(self) -> None:
++        with io.BytesIO() as b:
++            hopper().save(b, format="PNG", dry_run=True)
++
++            assert b.getvalue() == b""
++            assert not b.closed
++
++    def test_save_dry_run_still_raises(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.jpg"
++
++        # JPEG cannot store alpha
++        with pytest.raises(OSError):
++            Image.new("RGBA", (10, 10)).save(temp_file, dry_run=True)
++        assert not temp_file.exists()
++
++        with pytest.raises(ValueError):
++            hopper().save(tmp_path / "temp.unknown", dry_run=True)
++
++        with pytest.raises(OSError):
++            hopper().save(tmp_path / "temp.png", dry_run=True, compress_level=99)
++        assert not (tmp_path / "temp.png").exists()
++
++    def test_save_dry_run_false(self, tmp_path: Path) -> None:
++        temp_file = tmp_path / "temp.png"
++
++        hopper().save(temp_file, dry_run=False)
++
++        assert_image_equal_tofile(hopper(), temp_file)
++
+     def test_load_on_nonexclusive_multiframe(self) -> None:
+         with open("Tests/images/frozenpond.mpo", "rb") as fp:
+ 

@@ -1,0 +1,80 @@
+diff --git a/dirty_equals/__init__.py b/dirty_equals/__init__.py
+index ba8214e..7f2b6ff 100644
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@ -21,6 +21,7 @@ from ._numeric import (
+ from ._other import FunctionCheck, IsJson, IsUUID
+ from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple
+ from ._strings import IsAnyStr, IsBytes, IsStr
++from ._other import IsHash
+ 
+ __all__ = (
+     # base
+@@ -67,6 +68,7 @@ __all__ = (
+     'IsInstance',
+     # other
+     'FunctionCheck',
++    'IsHash',
+     'IsJson',
+     'IsUUID',
+     # strings
+diff --git a/dirty_equals/_other.py b/dirty_equals/_other.py
+index b2b8379..c510633 100644
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@ -120,6 +120,55 @@ class IsJson(DirtyEquals[JsonType]):
+             return False
+ 
+ 
++class IsHash(DirtyEquals[str]):
++    """
++    A class that checks if a value is a hexadecimal digest in the format of a given hash algorithm.
++    """
++
++    # length in characters of the hexadecimal digest produced by each supported algorithm
++    _hex_lengths = {
++        'md5': 32,
++        'sha1': 40,
++        'sha224': 56,
++        'sha256': 64,
++        'sha384': 96,
++        'sha512': 128,
++    }
++    _hex_digits = frozenset('0123456789abcdefABCDEF')
++
++    def __init__(self, algorithm: str):
++        """
++        Args:
++            algorithm: The hash algorithm whose digest format is expected, one of `md5`, `sha1`, `sha224`,
++                `sha256`, `sha384` or `sha512`, case is ignored.
++
++        Only the format is checked: a digest has to be a string of the right length which contains nothing but
++        hexadecimal characters, there's no check that it's the hash of anything in particular.
++
++        ```py title="IsHash"
++        from dirty_equals import IsHash
++
++        assert 'd41d8cd98f00b204e9800998ecf8427e' == IsHash('md5')
++        assert 'da39a3ee5e6b4b0d3255bfef95601890afd80709' == IsHash('sha1')
++        assert 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' == IsHash('SHA256')
++        assert 'd41d8cd98f00b204e9800998ecf8427e' != IsHash('sha1')
++        assert 'd41d8cd98f00b204e9800998ecf8427z' != IsHash('md5')
++        assert 123 != IsHash('md5')
++        ```
++        """
++        try:
++            self.expected_length = self._hex_lengths[algorithm.lower()]
++        except (AttributeError, KeyError):
++            supported = ', '.join(self._hex_lengths)
++            raise ValueError(f'Unsupported hash algorithm {algorithm!r}, expected one of: {supported}') from None
++        self.algorithm = algorithm
++        # the algorithm is repeated as given, so that the repr shows what the user wrote
++        super().__init__(algorithm)
++
++    def equals(self, other: Any) -> bool:
++        return isinstance(other, str) and len(other) == self.expected_length and self._hex_digits.issuperset(other)
++
++
+ class FunctionCheck(DirtyEquals[Any]):
+     """
+     Use a function to check if a value "equals" whatever you want to check

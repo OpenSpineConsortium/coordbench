@@ -1,0 +1,31 @@
+diff --cc src/PIL/Image.py
+index 001e82830,2fc532194..000000000
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@@ -2470,6 -2470,7 +2470,10 @@@ class Image
+          self,
+          fp: StrOrBytesPath | IO[bytes],
+          format: str | None = None,
+++<<<<<<< HEAD
+++=======
++         preserve_readonly: bool = False,
+++>>>>>>> agent1
+          *,
+          dry_run: bool = False,
+          **params: Any,
+@@@ -2495,6 -2496,12 +2499,15 @@@
+             format to use is determined from the filename extension.
+             If a file object was used instead of a filename, this
+             parameter should always be used.
+++<<<<<<< HEAD
+++=======
++         :param preserve_readonly: If ``True``, the image is only loaded before
++            saving, so a readonly image (such as one made by
++            :py:func:`~PIL.Image.frombuffer`) stays readonly and keeps
++            reflecting changes to the underlying buffer. If ``False``
++            (the default), a readonly image is first copied, which makes it
++            mutable but breaks that connection.
+++>>>>>>> agent1
+          :param dry_run: If ``True``, the image is fully processed for saving,
+             including format conversion and compression, but nothing is
+             written: no file is created or changed, and a file object passed

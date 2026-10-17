@@ -1,0 +1,156 @@
+{
+  "repo": "huggingface_datasets_task",
+  "task_id": 3997,
+  "features": [
+    2,
+    4
+  ],
+  "setting": "solo",
+  "run_id": "solo-3997-f2_f4-3abbbc",
+  "run_name": "curse-1-solo",
+  "agent_framework": "claude_code_subagent",
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-10-16T10:35:30.192064",
+  "ended_at": "2026-10-16T10:38:34.271237",
+  "duration_seconds": 184.079173,
+  "agent": {
+    "status": "Submitted",
+    "cost": null,
+    "steps": null,
+    "input_tokens": 26,
+    "output_tokens": null,
+    "cache_read_tokens": 1075008,
+    "cache_write_tokens": 61343,
+    "patch_lines": 165,
+    "error": null,
+    "id": "agent1",
+    "features": [
+      2,
+      4
+    ],
+    "role": "solo",
+    "duration_ms": null,
+    "api_duration_ms": null,
+    "end_reason": null,
+    "model_requested": "claude-sonnet-5-5",
+    "model": "claude-sonnet-5-5",
+    "model_differs": false,
+    "claude_code_version": "2.1.301",
+    "tools": null,
+    "mcp_servers": null,
+    "cost_source": null,
+    "output_tokens_lower_bound": 13859,
+    "cost_lower_bound": null
+  },
+  "total_cost": null,
+  "total_steps": null,
+  "log_dir": "/root/cooperbench/logs/curse-1-solo/solo/huggingface_datasets_task/3997/f2_f4",
+  "error_kind": null,
+  "arm": "solo",
+  "driver": "session",
+  "agents_seconds": 167.88686,
+  "isolation": "advisory",
+  "options": {},
+  "agent_models": {},
+  "max_turns": null,
+  "timeout_s": 2700.0,
+  "disallowed_tools": [
+    "WebFetch",
+    "WebSearch"
+  ],
+  "provenance": {
+    "cooperbench": {
+      "dir": "/root/cooperbench",
+      "commit": "63b9d44d9f39a02fccf5bf0052db48a917a011fd",
+      "modified": [
+        "src/cooperbench/agents/claude_code/setup.sh"
+      ],
+      "modified_count": 1
+    },
+    "dataset": {
+      "dir": "/root/cooperbench/dataset",
+      "git_tree": "9c9e5802e06d89c7f84a9ebb13c3a5998b007e36",
+      "last_commit": "55a63e9329e1ef4e9957113534d5cad57c0f1f88",
+      "modified": false,
+      "sha256": "b0d33805162fa8001deba5f891de65e7b54e96351c2f21d810a0f0ac142710f6",
+      "files": 774
+    },
+    "coordbench": {
+      "dir": "/home/user/coordbench/coordbench",
+      "commit": "3cfca342e9ec3ab8c2ac90f4edd3ca72f2d3f59c",
+      "modified": [],
+      "modified_count": 0
+    }
+  },
+  "image": {
+    "image": "akhatua/cooperbench-huggingface-datasets:task3997",
+    "id": "sha256:16123b01f8ea0c2f6cdb276459038db23563954bf0545f80a0f258a44c23688d",
+    "repo_digests": [
+      "akhatua/cooperbench-huggingface-datasets@sha256:16123b01f8ea0c2f6cdb276459038db23563954bf0545f80a0f258a44c23688d"
+    ],
+    "overlay": "cloud-session"
+  },
+  "metrics": {
+    "events": {
+      "run_started": 1
+    },
+    "tool_surface": "mcp",
+    "messages_sent": 0,
+    "messages_by_agent": {},
+    "message_chars": 0,
+    "message_words": 0,
+    "tool_calls": {}
+  },
+  "timings": [
+    {
+      "phase": "hub",
+      "agent": null,
+      "started": "2026-10-16T10:35:29.933402",
+      "ended": "2026-10-16T10:35:30.035974",
+      "seconds": 0.102572
+    },
+    {
+      "phase": "run_create",
+      "agent": null,
+      "started": "2026-10-16T10:35:30.274829",
+      "ended": "2026-10-16T10:35:30.279692",
+      "seconds": 0.004863
+    },
+    {
+      "phase": "provision",
+      "agent": "agent1",
+      "started": "2026-10-16T10:35:30.279869",
+      "ended": "2026-10-16T10:35:39.184838",
+      "seconds": 8.904969
+    },
+    {
+      "phase": "agent",
+      "agent": "agent1",
+      "started": "2026-10-16T10:35:39.184892",
+      "ended": "2026-10-16T10:38:27.071752",
+      "seconds": 167.88686
+    },
+    {
+      "phase": "close",
+      "agent": null,
+      "started": "2026-10-16T10:38:34.271259",
+      "ended": "2026-10-16T10:38:34.284125",
+      "seconds": 0.012866
+    },
+    {
+      "phase": "teardown",
+      "agent": null,
+      "started": "2026-10-16T10:38:34.289853",
+      "ended": "2026-10-16T10:39:01.317885",
+      "seconds": 27.028032
+    },
+    {
+      "phase": "score",
+      "agent": null,
+      "started": "2026-10-16T10:39:01.317984",
+      "ended": "2026-10-16T10:39:43.535457",
+      "seconds": 42.217473
+    }
+  ],
+  "utc_offset_seconds": 0
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "124f682a1f",
+    "title": "Implement feature 3",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792172347.5917027,
+    "last_note": "patch at /workspace/shared/agent2.patch",
+    "metadata": {
+      "feature_id": 3,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "217d01c55f",
+    "title": "Lead-only: integrate and submit feature 2",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792172347.591754,
+    "last_note": "merged agent2 patch; patch.txt written with both features",
+    "metadata": {
+      "feature_id": 2,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

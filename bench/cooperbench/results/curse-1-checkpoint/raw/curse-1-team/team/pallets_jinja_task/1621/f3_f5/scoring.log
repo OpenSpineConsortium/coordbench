@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-team/team/pallets_jinja_task/1621/f3_f5", "verdict": "pass"}
+coordbench run: team-1621-f3_f5-f60c80: timings: hub 0.1 s, run_create 0.0 s, shared_volume 0.1 s, provision 2.2 s, agents 162 s (agent1 162 s, agent2 138 s), close 0.0 s, score 17 s, cascade 24 s, teardown 0.5 s
+coordbench run: summary: 22 completed, 0 skipped, 0 failed; evals: 22 evaluated, 16 passed, 6 failed, 0 errors (72.7%); cost: unknown

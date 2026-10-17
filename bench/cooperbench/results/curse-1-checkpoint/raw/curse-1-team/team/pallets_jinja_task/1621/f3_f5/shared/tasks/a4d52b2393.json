@@ -1,0 +1,1 @@
+{"id": "a4d52b2393", "title": "Lead-only: integrate and submit feature 3", "owner": "agent1", "status": "in_progress", "created_by": "bench-runner", "created_at": 1792156547.349044, "last_note": "feature 3 implemented in loaders.py, awaiting agent2 patch for integration", "metadata": {"feature_id": 3, "assigned_to": "agent1", "lead_task": true}}

@@ -1,0 +1,158 @@
+diff --git a/crates/typst/src/foundations/str.rs b/crates/typst/src/foundations/str.rs
+index d90b6f206..401e4e4f5 100644
+--- a/crates/typst/src/foundations/str.rs
++++ b/crates/typst/src/foundations/str.rs
+@@ -178,24 +178,76 @@ impl Str {
+ 
+     /// Extracts the first grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If a `pattern` is given, the first grapheme cluster whose leading
++    /// character belongs to that character class is extracted instead. Fails
++    /// with an error if no grapheme cluster matches.
++    ///
++    /// ```example
++    /// #"123abc".first(pattern: "alpha") \
++    /// #"hello world".first(pattern: "whitespace")
++    /// ```
+     #[func]
+-    pub fn first(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn first(
++        &self,
++        /// A built-in character class to look for instead of the very first
++        /// grapheme cluster. One of `{"alpha"}`, `{"numeric"}`,
++        /// `{"alphanumeric"}`, `{"uppercase"}`, `{"lowercase"}` or
++        /// `{"whitespace"}`.
++        #[named]
++        pattern: Option<Str>,
++    ) -> StrResult<Str> {
++        let mut graphemes = self.0.graphemes(true);
++        match pattern {
++            None => graphemes.next().map(Into::into).ok_or_else(string_is_empty),
++            Some(name) => {
++                if self.0.is_empty() {
++                    return Err(string_is_empty());
++                }
++                let class = CharClass::parse(&name)?;
++                graphemes
++                    .find(|g| class.matches_leading(g))
++                    .map(Into::into)
++                    .ok_or_else(|| no_char_matches_pattern(&name))
++            }
++        }
+     }
+ 
+     /// Extracts the last grapheme cluster of the string.
+     /// Fails with an error if the string is empty.
++    ///
++    /// If a `pattern` is given, the last grapheme cluster whose leading
++    /// character belongs to that character class is extracted instead. Fails
++    /// with an error if no grapheme cluster matches.
++    ///
++    /// ```example
++    /// #"hello123".last(pattern: "alpha") \
++    /// #"hello123".last(pattern: "numeric")
++    /// ```
+     #[func]
+-    pub fn last(&self) -> StrResult<Str> {
+-        self.0
+-            .graphemes(true)
+-            .next_back()
+-            .map(Into::into)
+-            .ok_or_else(string_is_empty)
++    pub fn last(
++        &self,
++        /// A built-in character class to look for instead of the very last
++        /// grapheme cluster. One of `{"alpha"}`, `{"numeric"}`,
++        /// `{"alphanumeric"}`, `{"uppercase"}`, `{"lowercase"}` or
++        /// `{"whitespace"}`.
++        #[named]
++        pattern: Option<Str>,
++    ) -> StrResult<Str> {
++        let mut graphemes = self.0.graphemes(true);
++        match pattern {
++            None => graphemes.next_back().map(Into::into).ok_or_else(string_is_empty),
++            Some(name) => {
++                if self.0.is_empty() {
++                    return Err(string_is_empty());
++                }
++                let class = CharClass::parse(&name)?;
++                graphemes
++                    .rfind(|g| class.matches_leading(g))
++                    .map(Into::into)
++                    .ok_or_else(|| no_char_matches_pattern(&name))
++            }
++        }
+     }
+ 
+     /// Extracts the first grapheme cluster after the specified index. Returns
+@@ -835,6 +887,64 @@ fn string_is_empty() -> EcoString {
+     "string is empty".into()
+ }
+ 
++/// A built-in character class that `str.first` and `str.last` can look for.
++#[derive(Debug, Copy, Clone, Eq, PartialEq)]
++enum CharClass {
++    Alpha,
++    Numeric,
++    Alphanumeric,
++    Uppercase,
++    Lowercase,
++    Whitespace,
++}
++
++impl CharClass {
++    /// Looks up a class by the name callers pass as `pattern`.
++    fn parse(name: &str) -> StrResult<Self> {
++        Ok(match name {
++            "alpha" => Self::Alpha,
++            "numeric" => Self::Numeric,
++            "alphanumeric" => Self::Alphanumeric,
++            "uppercase" => Self::Uppercase,
++            "lowercase" => Self::Lowercase,
++            "whitespace" => Self::Whitespace,
++            _ => return Err(unknown_char_class(name)),
++        })
++    }
++
++    /// Whether a single character belongs to the class.
++    fn matches(self, c: char) -> bool {
++        match self {
++            Self::Alpha => c.is_alphabetic(),
++            Self::Numeric => c.is_numeric(),
++            Self::Alphanumeric => c.is_alphanumeric(),
++            Self::Uppercase => c.is_uppercase(),
++            Self::Lowercase => c.is_lowercase(),
++            Self::Whitespace => c.is_whitespace(),
++        }
++    }
++
++    /// Whether the first character of a grapheme cluster belongs to the class.
++    fn matches_leading(self, grapheme: &str) -> bool {
++        grapheme.chars().next().is_some_and(|c| self.matches(c))
++    }
++}
++
++/// The error message when no grapheme cluster matches the requested class.
++#[cold]
++fn no_char_matches_pattern(name: &str) -> EcoString {
++    eco_format!("no character matches pattern \"{}\"", name)
++}
++
++/// The error message when the requested character class does not exist.
++#[cold]
++fn unknown_char_class(name: &str) -> EcoString {
++    eco_format!(
++        "unknown pattern \"{}\" (expected \"alpha\", \"numeric\", \"alphanumeric\", \"uppercase\", \"lowercase\" or \"whitespace\")",
++        name
++    )
++}
++
+ /// A regular expression.
+ ///
+ /// Can be used as a [show rule selector]($styling/#show-rules) and with

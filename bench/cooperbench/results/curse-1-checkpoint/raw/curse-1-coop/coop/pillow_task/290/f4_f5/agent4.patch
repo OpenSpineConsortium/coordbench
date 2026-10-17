@@ -1,0 +1,232 @@
+diff --git a/Tests/test_image_quantize.py b/Tests/test_image_quantize.py
+index bd9db362c..75dded1f6 100644
+--- a/Tests/test_image_quantize.py
++++ b/Tests/test_image_quantize.py
+@@ -77,6 +77,115 @@ def test_quantize_dither_diff():
+     assert dither.tobytes() != nodither.tobytes()
+ 
+ 
++def mean_square_error(image, quantized):
++    channels = len(image.getbands())
++    pixels = image.width * image.height * channels
++    total = sum(
++        (a - b) ** 2
++        for a, b in zip(image.tobytes(), quantized.convert(image.mode).tobytes())
++    )
++    return total / pixels
++
++
++def test_quantize_error_threshold_default():
++    image = hopper()
++    assert (
++        image.quantize(50, error_threshold=None).tobytes()
++        == image.quantize(50).tobytes()
++    )
++
++
++def test_quantize_error_threshold_fewer_colors():
++    image = hopper()
++
++    converted = image.quantize(256, error_threshold=100)
++
++    assert_image(converted, "P", converted.size)
++    assert len(converted.getcolors()) < 256
++    assert mean_square_error(image, converted) <= 100
++
++
++def test_quantize_error_threshold_is_smallest_count():
++    image = hopper()
++
++    converted = image.quantize(256, error_threshold=100)
++    colors = len(converted.getcolors())
++
++    # With one color fewer, the threshold is no longer met
++    fewer = image.quantize(colors - 1)
++    assert mean_square_error(image, fewer) > 100
++
++
++def test_quantize_error_threshold_larger_threshold_fewer_colors():
++    image = hopper()
++
++    strict = image.quantize(256, error_threshold=30)
++    loose = image.quantize(256, error_threshold=500)
++
++    assert len(loose.getcolors()) < len(strict.getcolors())
++    assert mean_square_error(image, strict) <= 30
++    assert mean_square_error(image, loose) <= 500
++
++
++def test_quantize_error_threshold_not_met():
++    image = hopper()
++
++    # Even 16 colors are not enough for an error of 1, so all 16 are used
++    converted = image.quantize(16, error_threshold=1)
++
++    assert len(converted.getcolors()) == 16
++    assert converted.tobytes() == image.quantize(16).tobytes()
++
++
++def test_quantize_error_threshold_zero():
++    image = hopper()
++    converted = image.quantize(256, error_threshold=0)
++    assert len(converted.getcolors()) == 256
++
++    # Two flat colors are represented exactly by two colors
++    image = Image.new("RGB", (4, 4), (255, 0, 0))
++    image.paste((0, 0, 255), (0, 0, 4, 2))
++    converted = image.quantize(256, error_threshold=0)
++    assert len(converted.getcolors()) == 2
++    assert mean_square_error(image, converted) == 0
++
++
++@pytest.mark.parametrize(
++    "method", (Image.MEDIANCUT, Image.MAXCOVERAGE, Image.FASTOCTREE)
++)
++def test_quantize_error_threshold_methods(method):
++    image = hopper()
++
++    converted = image.quantize(256, method=method, error_threshold=200)
++
++    assert len(converted.getcolors()) < 256
++    assert mean_square_error(image, converted) <= 200
++
++
++@pytest.mark.parametrize("mode", ("L", "P", "RGBA"))
++def test_quantize_error_threshold_modes(mode):
++    image = hopper().convert(mode)
++
++    converted = image.quantize(64, error_threshold=100)
++
++    assert_image(converted, "P", converted.size)
++    assert len(converted.getcolors()) < 64
++
++
++def test_quantize_error_threshold_negative():
++    with pytest.raises(ValueError):
++        hopper().quantize(error_threshold=-1)
++
++
++def test_quantize_error_threshold_palette():
++    image = hopper()
++    palette = hopper("P")
++
++    converted = image.quantize(palette=palette, error_threshold=1)
++
++    assert converted.palette.palette == palette.palette.palette
++
++
+ def test_transparent_colors_equal():
+     im = Image.new("RGBA", (1, 2), (0, 0, 0, 0))
+     px = im.load()
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..de77a2a97 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -1048,7 +1048,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        error_threshold=None,
++        lightness_factor=1.0,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1073,12 +1082,24 @@ class Image:
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+            Default: 1 (legacy setting)
++        :param error_threshold: The maximum acceptable mean square error (MSE)
++           between this image and the quantized image, averaged over every pixel
++           and every channel, in the squared units of an 8-bit channel (so the
++           largest possible value is 255 * 255). If given, the smallest number
++           of colors, up to ``colors``, whose quantized image stays within the
++           threshold is used, so the result may have fewer than ``colors``
++           colors. If the threshold cannot be met with ``colors`` colors, then
++           ``colors`` colors are used. Ignored when ``palette`` is given, since
++           the palette fixes the colors. Default: None (always use ``colors``)
+         :returns: A new image
+ 
+         """
+ 
+         self.load()
+ 
++        if error_threshold is not None and error_threshold < 0:
++            raise ValueError("error_threshold must not be negative")
++
+         if method is None:
+             # defaults:
+             method = MEDIANCUT
+@@ -1106,6 +1127,9 @@ class Image:
+             new_im.palette = palette.palette.copy()
+             return new_im
+ 
++        if error_threshold is not None:
++            colors = self._colors_within_error(colors, method, kmeans, error_threshold)
++
+         im = self._new(self.im.quantize(colors, method, kmeans))
+ 
+         from . import ImagePalette
+@@ -1115,6 +1139,54 @@ class Image:
+ 
+         return im
+ 
++    def _colors_within_error(self, colors, method, kmeans, error_threshold):
++        """
++        The fewest colors, at most ``colors``, for which quantizing this image
++        gives a mean square error within ``error_threshold``; ``colors`` if
++        no number of them does.
++
++        Adding colors lowers the error, so a binary search finds the count
++        with a handful of quantizations instead of one for every count.
++        """
++        errors = {}
++
++        def within_threshold(count):
++            if count not in errors:
++                quantized = self._new(self.im.quantize(count, method, kmeans))
++                errors[count] = self._mean_square_error(quantized)
++            return errors[count] <= error_threshold
++
++        if not within_threshold(colors):
++            return colors
++
++        # libimagequant cannot make fewer than two colors
++        low = 2 if method == LIBIMAGEQUANT else 1
++        high = colors
++        while low < high:
++            middle = (low + high) // 2
++            if within_threshold(middle):
++                high = middle
++            else:
++                low = middle + 1
++        return high
++
++    def _mean_square_error(self, quantized):
++        """
++        The mean square error between this image and a quantized copy of it,
++        averaged over every pixel and every channel.
++        """
++        from . import ImageChops
++
++        mode = "RGBA" if self.mode == "RGBA" else "RGB"
++        difference = ImageChops.difference(self.convert(mode), quantized.convert(mode))
++
++        # The histogram holds 256 counts per band, one band after another
++        squared = sum(
++            (index % 256) ** 2 * count
++            for index, count in enumerate(difference.histogram())
++        )
++        return squared / (difference.width * difference.height * len(mode))
++
+     def copy(self):
+         """
+         Copies this image. Use this method if you wish to paste things

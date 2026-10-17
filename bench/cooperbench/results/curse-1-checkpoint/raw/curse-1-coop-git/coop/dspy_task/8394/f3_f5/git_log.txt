@@ -1,0 +1,26 @@
+commit 0e0b40b34158284a152e749c7fc17971c6805af4 (agent2, agent1)
+Merge: 0f806e60 12f0d06a
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:36:11 2026 +0000
+
+    Merge team/agent1 (TTL) into agent2
+
+commit 0f806e60e1f4716ae62c31d7b7bece187a1b59f7
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:35:37 2026 +0000
+
+    Add optional disk-cache compression with DSPC header and eviction knobs
+
+ dspy/clients/__init__.py | 14 ++++++-
+ dspy/clients/cache.py    | 97 ++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 106 insertions(+), 5 deletions(-)
+
+commit 12f0d06ab63407110c96bae4e1d06c357333b466
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:34:07 2026 +0000
+
+    Add per-entry TTL support to the DSPy cache
+
+ dspy/clients/__init__.py | 19 +++++++++++++++++++
+ dspy/clients/cache.py    | 44 +++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 58 insertions(+), 5 deletions(-)

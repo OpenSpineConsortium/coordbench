@@ -1,0 +1,25 @@
+commit 553bc2ce96ba541f23ce7e3855e2a546ca48713f (agent2)
+Merge: 2d905b2 10cd46b
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:50:38 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 2d905b220f2cae9a4d9a9e2b153be6cd4ed479cd
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:50:33 2026 +0000
+
+    Add max_resources to Context
+
+ src/click/core.py             | 65 +++++++++++++++++++++++++++++++++++++++++--
+ src/click/shell_completion.py |  3 ++
+ 2 files changed, 66 insertions(+), 2 deletions(-)
+
+commit 10cd46b9707a4418c07851a05a0f467fa98e3307 (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:49:05 2026 +0000
+
+    Close contexts created during shell completion
+
+ src/click/shell_completion.py | 66 +++++++++++++++++++++++--------------------
+ 1 file changed, 35 insertions(+), 31 deletions(-)

@@ -1,0 +1,186 @@
+diff --git a/src/datasets/features/features.py b/src/datasets/features/features.py
+index 6a0da6401..e959e0405 100644
+--- a/src/datasets/features/features.py
++++ b/src/datasets/features/features.py
+@@ -22,7 +22,7 @@ from collections.abc import Iterable
+ from dataclasses import InitVar, _asdict_inner, dataclass, field, fields
+ from functools import reduce
+ from operator import mul
+-from typing import Any, ClassVar, Dict, List, Optional
++from typing import Any, Callable, ClassVar, Dict, List, Optional
+ from typing import Sequence as Sequence_
+ from typing import Tuple, Union
+ 
+@@ -1178,16 +1178,25 @@ def list_of_np_array_to_pyarrow_listarray(l_arr: List[np.ndarray], type: pa.Data
+         return pa.array([], type=type)
+ 
+ 
+-def require_decoding(feature: FeatureType, ignore_decode_attribute: bool = False) -> bool:
++def require_decoding(
++    feature: FeatureType,
++    ignore_decode_attribute: bool = False,
++    custom_criteria: Optional[Callable[[FeatureType], bool]] = None,
++) -> bool:
+     """Check if a (possibly nested) feature requires decoding.
+ 
+     Args:
+         feature (FeatureType): the feature type to be checked
+         ignore_decode_attribute (:obj:`bool`, default ``False``): Whether to ignore the current value
+             of the `decode` attribute of the decodable feature types.
++        custom_criteria (:obj:`callable`, optional): A function that takes the feature and returns whether it
++            requires decoding. When given, its answer replaces the default rules for the whole feature, nested
++            or not, so the function walks into dicts, lists and sequences itself if it needs to.
+     Returns:
+         :obj:`bool`
+     """
++    if custom_criteria is not None:
++        return bool(custom_criteria(feature))
+     if isinstance(feature, dict):
+         return any(require_decoding(f) for f in feature.values())
+     elif isinstance(feature, (list, tuple)):
+@@ -1233,30 +1242,135 @@ class Features(dict):
+ 
+     def __init__(self, *args, **kwargs):
+         super().__init__(*args, **kwargs)
++        self._custom_decoding_criteria: Optional[Callable[[FeatureType], bool]] = None
+         self._column_requires_decoding: Dict[str, bool] = {
+             col: require_decoding(feature) for col, feature in self.items()
+         }
+ 
+     def __setitem__(self, column_name: str, feature: FeatureType):
+         super().__setitem__(column_name, feature)
+-        self._column_requires_decoding[column_name] = require_decoding(feature)
++        self._column_requires_decoding[column_name] = require_decoding(
++            feature, custom_criteria=self._custom_decoding_criteria
++        )
+ 
+     def __delitem__(self, column_name: str):
+         super().__delitem__(column_name)
+         del self._column_requires_decoding[column_name]
+ 
+-    def update(self, iterable, **kwds):
+-        if hasattr(iterable, "keys"):
+-            for key in iterable.keys():
+-                self[key] = iterable[key]
++    def update(self, iterable=None, **kwds):
++        """
++        Update the features, like :meth:`dict.update`, and keep the decoding bookkeeping in sync.
++
++        Beyond a mapping, an iterable of ``(column_name, feature)`` pairs and keyword arguments, it accepts:
++
++        - a JSON string (or bytes) holding an object, as dumped by :meth:`Features.to_dict`: its values are
++          rebuilt into features by :func:`generate_from_dict`, and a bare string value such as ``"int32"``
++          stands for ``Value("int32")``;
++        - a batch: a list or tuple whose items are each any of the above (a mapping, a JSON string, or a
++          ``(column_name, feature)`` pair), applied in order, so a later item wins over an earlier one.
++
++        The whole input is read before any column is changed, so an input that cannot be read, such as a
++        malformed JSON string in the middle of a batch, leaves the features as they were. Every column is set
++        through ``__setitem__``, which is what keeps ``_column_requires_decoding`` right.
++
++        Args:
++            iterable (optional): a mapping, an iterable of pairs, a JSON string or a batch of these.
++            **kwds: columns to set, applied after ``iterable``.
++
++        Example::
++            >>> features = Features({"a": Value("int32")})
++            >>> features.update('{"b": {"dtype": "string", "id": null, "_type": "Value"}}')
++            >>> features.update([{"c": Value("bool")}, ("d", Value("float32"))], e=Value("int8"))
++        """
++        pairs = [] if iterable is None else list(self._update_pairs(iterable))
++        pairs.extend(kwds.items())
++        for column_name, feature in pairs:
++            self[column_name] = feature
++
++    @classmethod
++    def _update_pairs(cls, source):
++        """Yield the ``(column_name, feature)`` pairs that one input of :meth:`update` stands for."""
++        if isinstance(source, (str, bytes, bytearray)):
++            yield from cls._pairs_from_json(source)
++        elif hasattr(source, "keys"):
++            for column_name in source.keys():
++                yield column_name, source[column_name]
++        elif isinstance(source, (list, tuple)) and cls._is_pair(source):
++            yield source[0], source[1]
++        elif isinstance(source, Iterable):
++            for item in source:
++                if isinstance(item, (list, tuple)) and cls._is_pair(item):
++                    yield item[0], item[1]
++                elif isinstance(item, (str, bytes, bytearray)) or hasattr(item, "keys"):
++                    yield from cls._update_pairs(item)
++                elif isinstance(item, (list, tuple)):
++                    yield from cls._update_pairs(item)
++                else:
++                    raise TypeError(
++                        f"Cannot update Features with {item!r}: expected a mapping, a JSON string or a (column_name, feature) pair."
++                    )
+         else:
+-            for key, value in iterable:
+-                self[key] = value
+-        for key in kwds:
+-            self[key] = kwds[key]
++            raise TypeError(
++                f"Cannot update Features with an object of type {type(source).__name__}: "
++                "expected a mapping, a JSON string, an iterable of (column_name, feature) pairs or a batch of these."
++            )
++
++    @staticmethod
++    def _is_pair(item) -> bool:
++        # A (column_name, feature) pair has a string key and a feature; a batch of two JSON strings has two
++        # strings, and a batch of mappings or of pairs has no string first.
++        return len(item) == 2 and isinstance(item[0], str) and not isinstance(item[1], (str, bytes, bytearray))
++
++    @staticmethod
++    def _pairs_from_json(text):
++        if isinstance(text, (bytes, bytearray)):
++            text = bytes(text).decode("utf-8")
++        obj = json.loads(text)
++        if isinstance(obj, dict):
++            obj = [obj]
++        if not isinstance(obj, list) or not all(isinstance(item, dict) for item in obj):
++            raise TypeError("A JSON string given to Features.update must hold an object or a list of objects.")
++        for item in obj:
++            for column_name, value in item.items():
++                if isinstance(value, str):
++                    value = Value(value)
++                else:
++                    # generate_from_dict pops "_type" from what it is given: leave the parsed object alone
++                    value = generate_from_dict(copy.deepcopy(value))
++                yield column_name, value
+ 
+     def __reduce__(self):
+-        return Features, (dict(self),)
++        if self._custom_decoding_criteria is None:
++            return Features, (dict(self),)
++        # keep the custom criteria through copy.deepcopy (Features.copy) and pickling
++        return Features, (dict(self),), {"custom_decoding_criteria": self._custom_decoding_criteria}
++
++    def __setstate__(self, state):
++        self.set_custom_decoding_criteria(state["custom_decoding_criteria"])
++
++    def set_custom_decoding_criteria(self, custom_criteria: Optional[Callable[[FeatureType], bool]] = None):
++        """Set a custom function that decides which columns require decoding.
++
++        The function is called with the feature of each column, as it is stored in these Features, and returns
++        whether that column requires decoding. Its answer replaces the default rules, for the columns already
++        here and for those added later with ``features[name] = feature`` or :meth:`update`.
++
++        Args:
++            custom_criteria (:obj:`callable`, optional): A function ``feature -> bool``. ``None`` (the default)
++                restores the default behaviour.
++
++        Example::
++
++            >>> features = Features({"image": Image(), "text": Value("string")})
++            >>> features.set_custom_decoding_criteria(lambda feature: isinstance(feature, Value))
++            >>> features.set_custom_decoding_criteria()  # back to the default rules
++        """
++        if custom_criteria is not None and not callable(custom_criteria):
++            raise TypeError(f"custom_criteria must be a callable or None, got {type(custom_criteria).__name__}")
++        self._custom_decoding_criteria = custom_criteria
++        self._column_requires_decoding = {
++            col: require_decoding(feature, custom_criteria=custom_criteria) for col, feature in self.items()
++        }
+ 
+     @property
+     def type(self):

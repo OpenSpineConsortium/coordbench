@@ -1,0 +1,41 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..71d0e772 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -165,12 +165,24 @@ class FileSystemLoader(BaseLoader):
+ 
+         loader = FileSystemLoader(["/override/templates", "/default/templates"])
+ 
++    Environment variables and a leading ``~`` or ``~user`` in a path are
++    expanded once, when the loader is created.
++
++    .. code-block:: python
++
++        loader = FileSystemLoader(["~/templates", "$APP_DIR/templates"])
++
+     :param searchpath: A path, or list of paths, to the directory that
+-        contains the templates.
++        contains the templates. Environment variables (``$VAR`` or
++        ``${VAR}``) and the user home shortcuts ``~`` and ``~user`` are
++        expanded.
+     :param encoding: Use this encoding to read the text from template
+         files.
+     :param followlinks: Follow symbolic links in the path.
+ 
++    .. versionchanged:: 3.1
++        Environment variables and ``~`` are expanded in the paths.
++
+     .. versionchanged:: 2.8
+         Added the ``followlinks`` parameter.
+     """
+@@ -184,7 +196,9 @@ class FileSystemLoader(BaseLoader):
+         if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+             searchpath = [searchpath]
+ 
+-        self.searchpath = [os.fspath(p) for p in searchpath]
++        self.searchpath = [
++            os.path.expanduser(os.path.expandvars(os.fspath(p))) for p in searchpath
++        ]
+         self.encoding = encoding
+         self.followlinks = followlinks
+ 

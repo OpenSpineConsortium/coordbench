@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/pallets_jinja_task/1559/f4_f8", "verdict": "pass"}
+coordbench run: solo-1559-f4_f8-4c8f10: timings: hub 0.1 s, run_create 0.0 s, provision 1.3 s, agents 333 s, close 0.0 s, score 19 s, teardown 2.9 s
+coordbench run: summary: 13 completed, 0 skipped, 0 failed; evals: 13 evaluated, 9 passed, 4 failed, 0 errors (69.2%); cost: unknown

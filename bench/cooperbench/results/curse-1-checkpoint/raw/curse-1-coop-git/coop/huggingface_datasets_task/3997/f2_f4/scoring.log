@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop-git/coop/huggingface_datasets_task/3997/f2_f4", "verdict": "fail"}
+coordbench run: coop-git-3997-f2_f4-d22fab: timings: hub 0.1 s, run_create 0.0 s, git_remote 3.0 s, provision 14 s, agents 225 s (agent1 181 s, agent2 225 s), close 0.0 s, score 29 s, cascade 46 s, teardown 5.3 s
+coordbench run: summary: 16 completed, 0 skipped, 0 failed; evals: 16 evaluated, 11 passed, 5 failed, 0 errors (68.8%); cost: unknown

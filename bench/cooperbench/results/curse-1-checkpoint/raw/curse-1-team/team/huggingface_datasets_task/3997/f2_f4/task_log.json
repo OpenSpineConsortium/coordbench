@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "8acbd57667",
+    "by": "bench-runner",
+    "title": "Implement feature 4",
+    "ts": 1792147653.790633
+  },
+  {
+    "kind": "create",
+    "task_id": "bbf11d715d",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 2",
+    "ts": 1792147653.7906744
+  },
+  {
+    "kind": "claim",
+    "task_id": "8acbd57667",
+    "by": "agent2",
+    "ts": 1792147691.4846385
+  },
+  {
+    "kind": "claim",
+    "task_id": "bbf11d715d",
+    "by": "agent1",
+    "ts": 1792147719.7594147
+  },
+  {
+    "kind": "update",
+    "task_id": "bbf11d715d",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing custom require_decoding criteria in features.py",
+    "ts": 1792147719.8892465
+  },
+  {
+    "kind": "update",
+    "task_id": "bbf11d715d",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 2 implemented in my tree; waiting for agent2's patch to integrate",
+    "ts": 1792147780.4212775
+  },
+  {
+    "kind": "update",
+    "task_id": "8acbd57667",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch; only Features.update (plus private helpers right after it) in src/datasets/features/features.py",
+    "ts": 1792147805.7619693
+  },
+  {
+    "kind": "update",
+    "task_id": "bbf11d715d",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch; patch.txt written",
+    "ts": 1792147840.083863
+  }
+]

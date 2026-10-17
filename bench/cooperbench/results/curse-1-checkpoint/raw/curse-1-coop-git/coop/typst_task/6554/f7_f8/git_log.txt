@@ -1,0 +1,24 @@
+commit 3f9461c814b98ccc4c87747817fdb565486a23f5 (agent2, agent1)
+Merge: 4216b339 d868dd8a
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 16:20:09 2026 +0000
+
+    Merge team/agent2 into agent1: combine pattern and case on first/last
+
+commit 4216b339de72c3176b3d1d4dc678f5a963a17267
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 16:19:43 2026 +0000
+
+    str: add pattern parameter to first and last
+
+ crates/typst/src/foundations/str.rs | 132 ++++++++++++++++++++++++++++++++----
+ 1 file changed, 120 insertions(+), 12 deletions(-)
+
+commit d868dd8ad9cfb3b94687e89f5a89b96217949633
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 16:18:27 2026 +0000
+
+    str: add case parameter to first and last
+
+ crates/typst/src/foundations/str.rs | 54 ++++++++++++++++++++++++++++---------
+ 1 file changed, 42 insertions(+), 12 deletions(-)

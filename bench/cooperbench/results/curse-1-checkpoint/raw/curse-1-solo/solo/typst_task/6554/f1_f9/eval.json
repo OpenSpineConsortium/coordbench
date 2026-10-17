@@ -1,0 +1,21 @@
+{
+  "repo": "typst_task",
+  "task_id": 6554,
+  "features": [
+    1,
+    9
+  ],
+  "setting": "solo",
+  "merge": null,
+  "feature1": {
+    "passed": true,
+    "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: solo.patch\nFeature patch applied successfully.\nApplying test patch: tests1.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst-utils v0.12.0 (/workspace/repo/crates/typst-utils)\n   Compiling typst-macros v0.12.0 (/workspace/repo/crates/typst-macros)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n   Compiling typst-syntax v0.12.0 (/workspace/repo/crates/typst-syntax)\n   Compiling typst-timing v0.12.0 (/workspace/repo/crates/typst-timing)\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 38.49s\nDeriving test filters from the test patch...\nTest patch declares no new test blocks; grading against the full suite.\nRunning the whole suite...\n   Compiling typst-syntax v0.12.0 (/workspace/repo/crates/typst-syntax)\n   Compiling typst-timing v0.12.0 (/workspace/repo/crates/typst-timing)\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.75s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n2354 passed, 0 failed, 0 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+  },
+  "feature2": {
+    "passed": true,
+    "test_output": "HEAD is now at b8034a343 Syntax set macro (#5138)\nHEAD is now at b8034a343 Syntax set macro (#5138)\nReset to base: b8034a343831e8609aec2ec81eb7eeda57aa5d81\nEnsuring clean repository state...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nApplying feature patch: solo.patch\nFeature patch applied successfully.\nApplying test patch: tests2.patch\nTest patch applied successfully.\nBuilding Typst...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-kit v0.12.0 (/workspace/repo/crates/typst-kit)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-cli v0.12.0 (/workspace/repo/crates/typst-cli)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.70s\nDeriving test filters from the test patch...\nTest blocks declared by this patch: str-strip-exhaust str-strip-parameter \nRunning tests...\n   Compiling typst v0.12.0 (/workspace/repo/crates/typst)\n   Compiling typst-pdf v0.12.0 (/workspace/repo/crates/typst-pdf)\n   Compiling typst-render v0.12.0 (/workspace/repo/crates/typst-render)\n   Compiling typst-svg v0.12.0 (/workspace/repo/crates/typst-svg)\n   Compiling typst-tests v0.12.0 (/workspace/repo/tests)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.52s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nRunning tests...\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running src/tests.rs (target/debug/deps/tests-52a2759a859b1a53)\n1 passed, 0 failed, 2355 skipped\nTest execution completed!\nCleaning up repository...\nHEAD is now at b8034a343 Syntax set macro (#5138)\nRepository cleaned.\n"
+  },
+  "both_passed": true,
+  "error": null,
+  "evaluated_at": "2026-10-16T14:59:54.030321"
+}

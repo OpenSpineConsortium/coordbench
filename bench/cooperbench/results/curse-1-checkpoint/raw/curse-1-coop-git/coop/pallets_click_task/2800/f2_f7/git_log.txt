@@ -1,0 +1,49 @@
+commit 64fde56bc2a98d3651fea55a8c1a6a0388e687aa (agent1)
+Merge: b0977f4 699d5b8
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:57:40 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+    
+    # Conflicts:
+    #       src/click/core.py
+
+commit f228e6941773dcd37e235b9366be014f4acdfa6b (agent2)
+Merge: 699d5b8 b0977f4
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:57:28 2026 +0000
+
+    Merge team/agent1 (converge with agent1 merge)
+
+commit 699d5b8fab969b6b66cb0efe5f031356886b0471
+Merge: 45dc2e0 5709b8e
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:57:07 2026 +0000
+
+    Merge team/agent1
+
+commit b0977f45de5f153b792cd74fa051769401f2f033
+Merge: 5709b8e 45dc2e0
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:56:49 2026 +0000
+
+    Merge team/agent2 into agent1
+
+commit 5709b8efa3914366691f85c2fae192c07519f3ec
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:56:09 2026 +0000
+
+    Add on_exit callback to Context and make_context
+
+ src/click/core.py | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 55 insertions(+), 4 deletions(-)
+
+commit 45dc2e05dfa795cd8ce919dcbd78684314ccd560
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 18:55:18 2026 +0000
+
+    Add validate_nesting to Context
+
+ src/click/core.py             | 95 ++++++++++++++++++++++++++++++++++++-------
+ src/click/shell_completion.py | 11 ++++-
+ 2 files changed, 91 insertions(+), 15 deletions(-)

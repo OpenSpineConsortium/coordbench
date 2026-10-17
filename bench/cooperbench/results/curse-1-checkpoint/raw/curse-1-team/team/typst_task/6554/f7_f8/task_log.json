@@ -1,0 +1,46 @@
+[
+  {
+    "kind": "create",
+    "task_id": "a1c703324b",
+    "by": "bench-runner",
+    "title": "Implement feature 8",
+    "ts": 1792169346.1363811
+  },
+  {
+    "kind": "create",
+    "task_id": "986ce06b44",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 7",
+    "ts": 1792169346.1364372
+  },
+  {
+    "kind": "claim",
+    "task_id": "a1c703324b",
+    "by": "agent2",
+    "ts": 1792169422.7087908
+  },
+  {
+    "kind": "update",
+    "task_id": "986ce06b44",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing feature 7, waiting for agent2's region report",
+    "ts": 1792169455.309299
+  },
+  {
+    "kind": "update",
+    "task_id": "a1c703324b",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch; spec in /workspace/shared/FEATURE8.txt",
+    "ts": 1792169713.0961344
+  },
+  {
+    "kind": "update",
+    "task_id": "986ce06b44",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged feature 7 + agent2 patch, tests pass, patch.txt written",
+    "ts": 1792169795.2501225
+  }
+]

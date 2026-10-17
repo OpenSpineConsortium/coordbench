@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-sdlc/coop/pallets_click_task/2068/f7_f10", "verdict": "pass"}
+coordbench run: sdlc-2068-f7_f10-48e1b2: timings: hub 0.1 s, run_create 0.0 s, git_remote 1.9 s, provision 2.6 s, agents 199 s (agent1 199 s, agent2 191 s), close 0.1 s, score 14 s, cascade 18 s, teardown 0.5 s
+coordbench run: summary: 34 completed, 0 skipped, 0 failed; evals: 34 evaluated, 24 passed, 10 failed, 0 errors (70.6%); cost: unknown

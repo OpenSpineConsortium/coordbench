@@ -1,0 +1,30 @@
+diff --git a/src/jinja2/loaders.py b/src/jinja2/loaders.py
+index d7d9bd04..6a095e16 100644
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@ -165,6 +165,14 @@ class FileSystemLoader(BaseLoader):
+ 
+         loader = FileSystemLoader(["/override/templates", "/default/templates"])
+ 
++    Environment variables (``$VAR`` or ``${VAR}``) and a leading ``~``
++    or ``~user`` in each path are expanded once, when the loader is
++    created (new in 3.1).
++
++    .. code-block:: python
++
++        loader = FileSystemLoader("~/${TEMPLATE_DIR}")
++
+     :param searchpath: A path, or list of paths, to the directory that
+         contains the templates.
+     :param encoding: Use this encoding to read the text from template
+@@ -184,7 +192,9 @@ class FileSystemLoader(BaseLoader):
+         if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+             searchpath = [searchpath]
+ 
+-        self.searchpath = [os.fspath(p) for p in searchpath]
++        self.searchpath = [
++            os.path.expanduser(os.path.expandvars(os.fspath(p))) for p in searchpath
++        ]
+         self.encoding = encoding
+         self.followlinks = followlinks
+ 

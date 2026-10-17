@@ -1,0 +1,191 @@
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..69df0e5a6 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -476,6 +476,48 @@ def _getscaleoffset(expr):
+     raise ValueError("illegal expression")
+ 
+ 
++def _scale_palette_lightness(im, lightness_factor):
++    """
++    Scale the brightness of the palette of a "P" image, in place.
++
++    Every color channel of every palette entry is multiplied by
++    ``lightness_factor`` and clamped to 0-255. The alpha channel of an RGBA
++    palette is left alone. Only the palette changes: the pixels keep their
++    indexes, so no color is added and nothing is quantized again.
++    """
++    from . import ImagePalette
++
++    table = bytearray(256)
++    for value in range(1, 256):
++        scaled_value = value * lightness_factor
++        table[value] = 255 if scaled_value >= 255 else int(scaled_value)
++
++    def scale(data, channels):
++        data = bytes(data)
++        scaled = bytearray(data.translate(table))
++        if channels == 4:
++            scaled[3::4] = data[3::4]
++        return bytes(scaled)
++
++    mode = im.im.getpalettemode()
++    scaled = scale(im.im.getpalette(mode, mode), len(mode))
++    if mode == "RGBA":
++        # putpalette() takes RGB, so the alpha channel is set on its own
++        rgb = bytearray(len(scaled) // 4 * 3)
++        for channel in range(3):
++            rgb[channel::3] = scaled[channel::4]
++        im.im.putpalette("RGB", bytes(rgb))
++        im.im.putpalettealphas(scaled[3::4])
++    else:
++        im.im.putpalette("RGB", scaled)
++
++    palette = im.palette
++    if palette is not None and palette.rawmode is None:
++        palette.palette = scale(palette.tobytes(), len(palette.mode))
++    else:
++        im.palette = ImagePalette.ImagePalette(mode, scaled)
++
++
+ # --------------------------------------------------------------------
+ # Implementation wrapper
+ 
+@@ -1048,7 +1090,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        sort_palette=None,
++        lightness_factor=1.0,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1069,14 +1120,37 @@ class Image:
+         :param kmeans: Integer
+         :param palette: Quantize to the palette of given
+                         :py:class:`PIL.Image.Image`.
++        :param lightness_factor: Factor by which to scale the brightness of the
++           palette colors after quantization, before the image is returned.
++           Values above 1.0 make the image brighter, values below 1.0 make it
++           darker, and each color channel is clamped to 0-255. It must be
++           greater than 0, otherwise a :py:exc:`ValueError` is raised, and has
++           no upper bound. Only the palette changes, so no colors are added.
++           Default: 1.0 (no change)
+         :param dither: Dithering method, used when converting from
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+            Default: 1 (legacy setting)
++        :param sort_palette: How to order the palette colors after quantization,
++           so that the order is predictable instead of being left to the
++           quantization algorithm. The pixels are changed to match, so the
++           image looks the same. Available methods are:
++
++           * ``None`` (default): keep the order the quantizer made.
++           * ``"brightness"``: darkest color first, lightest last, by perceived
++             brightness (ITU-R 601 luma, the weights used for "L" conversion).
++           * ``"rgb"``: ascending by red, then green, then blue.
++
++           Colors that tie are put in ascending RGB order. Only the colors the
++           image uses are sorted. This has no effect when ``palette`` is given,
++           because that palette is used as it is.
+         :returns: A new image
+ 
+         """
+ 
++        if not lightness_factor > 0:
++            raise ValueError("lightness_factor must be greater than 0")
++
+         self.load()
+ 
+         if method is None:
+@@ -1092,6 +1166,12 @@ class Image:
+                 "are the only valid methods for quantizing RGBA images"
+             )
+ 
++        if sort_palette not in (None, "brightness", "rgb"):
++            raise ValueError(
++                "sort_palette must be None, 'brightness' or 'rgb', not "
++                + repr(sort_palette)
++            )
++
+         if palette:
+             # use palette from reference image
+             palette.load()
+@@ -1104,6 +1184,8 @@ class Image:
+             im = self.im.convert("P", dither, palette.im)
+             new_im = self._new(im)
+             new_im.palette = palette.palette.copy()
++            if lightness_factor != 1.0:
++                _scale_palette_lightness(new_im, lightness_factor)
+             return new_im
+ 
+         im = self._new(self.im.quantize(colors, method, kmeans))
+@@ -1112,7 +1194,59 @@ class Image:
+ 
+         mode = im.im.getpalettemode()
+         im.palette = ImagePalette.ImagePalette(mode, im.im.getpalette(mode, mode))
++        if sort_palette is not None:
++            im = im._sort_quantized_palette(sort_palette)
++
++        if lightness_factor != 1.0:
++            _scale_palette_lightness(im, lightness_factor)
++
++        return im
++
++    def _sort_quantized_palette(self, sort_palette):
++        """
++        Reorders the palette of an image that quantize() just made, and
++        remaps the pixels so that they still show the same colors.
++
++        :param sort_palette: ``"brightness"`` or ``"rgb"``, see :py:meth:`quantize`.
++        :returns: A new image
++        """
++        from . import ImagePalette
++
++        mode = self.palette.mode
++        channels = len(mode)
++        data = bytes(self.palette.palette)
++        colors = [tuple(data[i : i + channels]) for i in range(0, len(data), channels)]
++
++        # The palette has room for 256 colors, of which the image uses those up
++        # to its highest index. The rest is filler and stays where it is.
++        used = self.getextrema()[1] + 1
++
++        if sort_palette == "brightness":
+ 
++            def key(i):
++                r, g, b = colors[i][:3]
++                return (299 * r + 587 * g + 114 * b, colors[i])
++
++        else:
++
++            def key(i):
++                return colors[i]
++
++        order = sorted(range(used), key=key)
++
++        # order[new] is the old index of the color that moves to index new
++        lut = list(range(256))
++        for new, old in enumerate(order):
++            lut[old] = new
++        im = self.point(lut)
++
++        colors = [colors[old] for old in order] + colors[used:]
++        im.im.putpalette("RGB", b"".join(bytes(color[:3]) for color in colors))
++        if mode == "RGBA":
++            im.im.putpalettealphas(bytes(color[3] for color in colors))
++        im.palette = ImagePalette.ImagePalette(
++            mode, b"".join(bytes(color) for color in colors)
++        )
+         return im
+ 
+     def copy(self):

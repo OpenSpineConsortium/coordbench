@@ -1,0 +1,90 @@
+diff --git a/src/datasets/features/features.py b/src/datasets/features/features.py
+index 6a0da6401..125645222 100644
+--- a/src/datasets/features/features.py
++++ b/src/datasets/features/features.py
+@@ -1178,16 +1178,24 @@ def list_of_np_array_to_pyarrow_listarray(l_arr: List[np.ndarray], type: pa.Data
+         return pa.array([], type=type)
+ 
+ 
+-def require_decoding(feature: FeatureType, ignore_decode_attribute: bool = False) -> bool:
++def require_decoding(
++    feature: FeatureType, ignore_decode_attribute: bool = False, custom_criteria: Optional[callable] = None
++) -> bool:
+     """Check if a (possibly nested) feature requires decoding.
+ 
+     Args:
+         feature (FeatureType): the feature type to be checked
+         ignore_decode_attribute (:obj:`bool`, default ``False``): Whether to ignore the current value
+             of the `decode` attribute of the decodable feature types.
++        custom_criteria (:obj:`callable`, optional): A function that takes the feature type and returns whether it
++            requires decoding. When given, it replaces the default rules for ``feature`` and its result is returned
++            as is, so it also decides for a nested feature (a dict, a list or a :class:`Sequence`) as a whole.
++            ``None`` (default) applies the default rules.
+     Returns:
+         :obj:`bool`
+     """
++    if custom_criteria is not None:
++        return bool(custom_criteria(feature))
+     if isinstance(feature, dict):
+         return any(require_decoding(f) for f in feature.values())
+     elif isinstance(feature, (list, tuple)):
+@@ -1232,14 +1240,17 @@ class Features(dict):
+     """
+ 
+     def __init__(self, *args, **kwargs):
++        self._custom_decoding_criteria: Optional[callable] = None
+         super().__init__(*args, **kwargs)
+         self._column_requires_decoding: Dict[str, bool] = {
+             col: require_decoding(feature) for col, feature in self.items()
+         }
+ 
+     def __setitem__(self, column_name: str, feature: FeatureType):
++        # decide first, so a custom criteria that raises leaves the features as they were
++        requires_decoding = require_decoding(feature, custom_criteria=self._custom_decoding_criteria)
+         super().__setitem__(column_name, feature)
+-        self._column_requires_decoding[column_name] = require_decoding(feature)
++        self._column_requires_decoding[column_name] = requires_decoding
+ 
+     def __delitem__(self, column_name: str):
+         super().__delitem__(column_name)
+@@ -1256,7 +1267,39 @@ class Features(dict):
+             self[key] = kwds[key]
+ 
+     def __reduce__(self):
+-        return Features, (dict(self),)
++        if self._custom_decoding_criteria is None:
++            return Features, (dict(self),)
++        # keep the custom criteria through copy.deepcopy (Features.copy, flatten) and pickling
++        return Features, (dict(self),), {"_custom_decoding_criteria": self._custom_decoding_criteria}
++
++    def __setstate__(self, state):
++        self.set_custom_decoding_criteria(state.get("_custom_decoding_criteria"))
++
++    def set_custom_decoding_criteria(self, custom_criteria: Optional[callable] = None):
++        """Set a custom criteria that decides which columns require decoding.
++
++        By default a column requires decoding when its feature type (or a feature type nested in it) has a
++        ``decode_example`` method and its ``decode`` attribute is on. With a custom criteria, the function is called
++        once per column with the column's whole feature type, a nested one included, and its result tells whether the
++        column requires decoding, so it can rely on the feature's properties or metadata. It applies to the columns
++        present and to every column set afterwards.
++
++        Args:
++            custom_criteria (:obj:`callable`, optional): A function taking a feature type and returning a
++                :obj:`bool`. ``None`` (default) restores the default behaviour.
++
++        Example::
++            >>> features = Features({"text": Value("string"), "image": Image()})
++            >>> features.set_custom_decoding_criteria(lambda feature: isinstance(feature, Value))
++            >>> features.set_custom_decoding_criteria()  # back to the default rules
++        """
++        if custom_criteria is not None and not callable(custom_criteria):
++            raise TypeError(f"custom_criteria must be callable or None, but got {type(custom_criteria).__name__}")
++        column_requires_decoding = {
++            col: require_decoding(feature, custom_criteria=custom_criteria) for col, feature in self.items()
++        }
++        self._custom_decoding_criteria = custom_criteria
++        self._column_requires_decoding = column_requires_decoding
+ 
+     @property
+     def type(self):

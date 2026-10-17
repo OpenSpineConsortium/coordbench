@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-solo/solo/dottxt_ai_outlines_task/1655/f7_f10", "verdict": "pass"}
+coordbench run: solo-1655-f7_f10-b5c26a: timings: hub 0.1 s, run_create 0.0 s, provision 1.7 s, agents 91 s, close 0.0 s, score 505 s, teardown 0.7 s
+coordbench run: summary: 24 completed, 0 skipped, 0 failed; evals: 24 evaluated, 18 passed, 6 failed, 0 errors (75.0%); cost: unknown

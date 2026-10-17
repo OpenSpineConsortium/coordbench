@@ -1,0 +1,44 @@
+commit 85784d740e3275c597c52f9ac25a016291de1e0d (main)
+Merge: 51a095c 1f457ca
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:06:52 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 1f457cade7617758b70387a4cb69cb50bc094691 (claude/6)
+Merge: 344f21f 51a095c
+Author: agent1 <agent1@example.com>
+Date:   Fri Oct 16 18:06:43 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/6
+
+commit 344f21faa2fc14b5e76984a7b14287d0df686de1
+Author: agent1 <agent1@example.com>
+Date:   Fri Oct 16 18:06:31 2026 +0000
+
+    Add path_transform to template loaders
+    
+    An optional function that rewrites a template name before the loader
+    looks it up. It is supported by FileSystemLoader, DictLoader,
+    FunctionLoader, PackageLoader, PrefixLoader and ChoiceLoader; the two
+    composite loaders apply it before they hand the name to a child. A
+    template that is not found is reported under the requested name.
+
+ src/jinja2/loaders.py | 131 +++++++++++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 118 insertions(+), 13 deletions(-)
+
+commit 51a095cf8d57c60414fd4d1bcec52dae9acf0aaf
+Merge: a292075 e2a1943
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Fri Oct 16 18:05:58 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit e2a194391c25a24f995455c087cd868e550e1bca (claude/7)
+Author: agent2 <agent2@coordbench.local>
+Date:   Fri Oct 16 18:05:43 2026 +0000
+
+    Expand environment variables and ~ in FileSystemLoader search paths
+
+ src/jinja2/loaders.py | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)

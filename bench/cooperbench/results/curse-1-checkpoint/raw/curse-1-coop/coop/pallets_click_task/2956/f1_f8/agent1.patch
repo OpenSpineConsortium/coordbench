@@ -1,0 +1,169 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index f57ada6..ea143a2 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -2462,6 +2462,81 @@ class Parameter:
+         return self.type.shell_complete(ctx, self, incomplete)
+ 
+ 
++def _complete_users(incomplete: str) -> list[CompletionItem]:
++    """Names of the system's users; none where the platform has no
++    password database, as Windows.
++    """
++    from .shell_completion import CompletionItem
++
++    try:
++        import pwd
++
++        names = [entry.pw_name for entry in pwd.getpwall()]
++    except (ImportError, KeyError, OSError):
++        return []
++
++    return [
++        CompletionItem(n) for n in dict.fromkeys(names) if n.startswith(incomplete)
++    ]
++
++
++def _complete_git_branches(incomplete: str) -> list[CompletionItem]:
++    """Local and remote branches of the repository the current directory
++    is in; none outside a repository or where git is missing.
++    """
++    import subprocess
++
++    from .shell_completion import CompletionItem
++
++    try:
++        result = subprocess.run(
++            ["git", "branch", "-a", "--format=%(refname:short)"],
++            capture_output=True,
++            text=True,
++            check=True,
++        )
++    except (subprocess.SubprocessError, OSError):
++        return []
++
++    names = (line.strip() for line in result.stdout.splitlines())
++    # A detached HEAD is listed as "(HEAD detached at ...)", not a branch.
++    branches = dict.fromkeys(n for n in names if n and not n.startswith("("))
++    return [CompletionItem(n) for n in branches if n.startswith(incomplete)]
++
++
++def _complete_envvars(incomplete: str) -> list[CompletionItem]:
++    """Names of the environment variables that are set."""
++    from .shell_completion import CompletionItem
++
++    return [CompletionItem(n) for n in sorted(os.environ) if n.startswith(incomplete)]
++
++
++def _complete_dirs(incomplete: str) -> list[CompletionItem]:
++    from .shell_completion import CompletionItem
++
++    return [CompletionItem(incomplete, type="dir")]
++
++
++def _complete_files(incomplete: str) -> list[CompletionItem]:
++    from .shell_completion import CompletionItem
++
++    return [CompletionItem(incomplete, type="file")]
++
++
++# The completion registry of ``Option(auto_complete=True)``: the words of an
++# option's name (it is split at "_") that ask for one kind of value, and the
++# function that completes it. The first entry with a word in the name wins.
++_AUTO_COMPLETERS: tuple[
++    tuple[frozenset[str], t.Callable[[str], list[CompletionItem]]], ...
++] = (
++    (frozenset({"user", "username", "login"}), _complete_users),
++    (frozenset({"branch", "branches"}), _complete_git_branches),
++    (frozenset({"env", "envvar", "environment"}), _complete_envvars),
++    (frozenset({"dir", "directory", "folder"}), _complete_dirs),
++    (frozenset({"file", "filename", "path"}), _complete_files),
++)
++
++
+ class Option(Parameter):
+     """Options are usually optional values on the command line and
+     have some extra features that arguments don't have.
+@@ -2506,8 +2581,17 @@ class Option(Parameter):
+                                context.
+     :param help: the help string.
+     :param hidden: hide this option from help outputs.
++    :param auto_complete: if this is ``True`` the shell completion of this
++        option suggests values picked from the option's name and type and the
++        current environment: system user names for ``--user``, git branches
++        for ``--branch`` inside a repository, file system paths for
++        ``--file`` and the names of environment variables for ``--env``. A
++        ``shell_complete`` function given to the option takes precedence.
+     :param attrs: Other command arguments described in :class:`Parameter`.
+ 
++    .. versionchanged:: 8.3
++        Added the ``auto_complete`` parameter.
++
+     .. versionchanged:: 8.2
+         ``envvar`` used with ``flag_value`` will always use the ``flag_value``,
+         previously it would use the value of the environment variable.
+@@ -2549,6 +2633,7 @@ class Option(Parameter):
+         show_choices: bool = True,
+         show_envvar: bool = False,
+         deprecated: bool | str = False,
++        auto_complete: bool = False,
+         **attrs: t.Any,
+     ) -> None:
+         if help:
+@@ -2636,6 +2721,7 @@ class Option(Parameter):
+         self.show_default = show_default
+         self.show_choices = show_choices
+         self.show_envvar = show_envvar
++        self.auto_complete = auto_complete
+ 
+         if __debug__:
+             if deprecated and prompt:
+@@ -2671,9 +2757,48 @@ class Option(Parameter):
+             flag_value=self.flag_value,
+             count=self.count,
+             hidden=self.hidden,
++            auto_complete=self.auto_complete,
+         )
+         return info_dict
+ 
++    def shell_complete(self, ctx: Context, incomplete: str) -> list[CompletionItem]:
++        """Return the completions for the incomplete value. A
++        ``shell_complete`` function given during init always wins; then,
++        if ``auto_complete`` is enabled, the completion is picked from the
++        option's name and type (:meth:`_smart_complete`); otherwise the
++        :attr:`type` provides it, as for any parameter.
++
++        :param ctx: Invocation context for this command.
++        :param incomplete: Value being completed. May be empty.
++
++        .. versionchanged:: 8.3
++            Added ``auto_complete`` support.
++        """
++        if self.auto_complete and self._custom_shell_complete is None:
++            return self._smart_complete(ctx, incomplete)
++
++        return super().shell_complete(ctx, incomplete)
++
++    def _smart_complete(self, ctx: Context, incomplete: str) -> list[CompletionItem]:
++        """Complete the value from the option's type, its name and what the
++        environment holds. Choices complete as they do without
++        ``auto_complete``; otherwise the first pattern of the registry
++        that the name matches decides, and a name that matches none falls
++        back to the completion of the option's type, so the result is
++        never worse than without ``auto_complete``.
++
++        :param ctx: Invocation context for this command.
++        :param incomplete: Value being completed. May be empty.
++        """
++        if not isinstance(self.type, types.Choice):
++            words = set((self.name or "").lower().split("_"))
++
++            for patterns, complete in _AUTO_COMPLETERS:
++                if words & patterns:
++                    return complete(incomplete)
++
++        return self.type.shell_complete(ctx, self, incomplete)
++
+     def get_error_hint(self, ctx: Context) -> str:
+         result = super().get_error_hint(ctx)
+         if self.show_envvar:

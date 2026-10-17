@@ -1,0 +1,24 @@
+commit fc43e49e078f4a1b36dc363792daa65e357508dd (agent2)
+Merge: 86e3b00 3a7d7b1
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:16:51 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 86e3b00aefa65f8c77eb8c1989cc093745c401d6
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:16:45 2026 +0000
+
+    feat(i18n): add ctrans conditional translation extension with fallback
+
+ src/jinja2/ext.py | 332 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 332 insertions(+)
+
+commit 3a7d7b129e7e2fec9f232f43111b7aa1d1087095 (agent1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 10:13:50 2026 +0000
+
+    Add translation metadata (note/created/modified) to trans tag
+
+ src/jinja2/ext.py | 59 +++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 57 insertions(+), 2 deletions(-)

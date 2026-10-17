@@ -1,0 +1,219 @@
+diff --git a/Tests/test_image.py b/Tests/test_image.py
+index c2e850c36..b4c342e04 100644
+--- a/Tests/test_image.py
++++ b/Tests/test_image.py
+@@ -1180,3 +1180,163 @@ class TestRegistry:
+     def test_encode_registry_fail(self) -> None:
+         with pytest.raises(OSError):
+             Image._getencoder("RGB", "DoesNotExist", ("args",), extra=("extra",))
++
++
++class TestSaveDryRun:
++    @pytest.mark.parametrize("ext", (".png", ".jpg", ".gif", ".bmp", ".tif"))
++    def test_no_file_written(self, tmp_path: Path, ext: str) -> None:
++        out = tmp_path / ("temp" + ext)
++
++        hopper().save(out, dry_run=True)
++
++        assert not out.exists()
++        assert list(tmp_path.iterdir()) == []
++
++        # The same save without the option does write the file
++        hopper().save(out)
++        assert out.exists()
++
++    def test_format_argument(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.unknown"
++
++        hopper().save(out, format="PNG", dry_run=True)
++
++        assert not out.exists()
++
++    @skip_unless_feature("webp")
++    def test_webp(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.webp"
++
++        hopper().save(out, format="WEBP", dry_run=True)
++
++        assert not out.exists()
++
++    def test_existing_file_untouched(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.png"
++        out.write_bytes(b"existing")
++
++        hopper().save(out, dry_run=True)
++
++        assert out.read_bytes() == b"existing"
++
++    def test_file_object_untouched(self) -> None:
++        b = io.BytesIO()
++
++        hopper().save(b, format="PNG", dry_run=True)
++
++        assert b.getvalue() == b""
++        assert b.tell() == 0
++        assert not b.closed
++
++    def test_false_saves(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.png"
++
++        hopper().save(out, dry_run=False)
++
++        assert_image_equal_tofile(hopper(), out)
++
++    def test_directory_not_created_or_checked(self, tmp_path: Path) -> None:
++        out = tmp_path / "missing" / "temp.png"
++
++        hopper().save(out, dry_run=True)
++
++        assert not out.parent.exists()
++        with pytest.raises(FileNotFoundError):
++            hopper().save(out)
++
++    def test_unsupported_mode_raises(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.jpg"
++        im = Image.new("RGBA", (10, 10))
++
++        with pytest.raises(OSError, match="cannot write mode RGBA as JPEG"):
++            im.save(out, dry_run=True)
++
++        assert not out.exists()
++
++    def test_unknown_extension_raises(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.unknown"
++
++        with pytest.raises(ValueError, match="unknown file extension"):
++            hopper().save(out, dry_run=True)
++
++        assert not out.exists()
++
++    def test_unknown_format_raises(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.png"
++
++        with pytest.raises(KeyError):
++            hopper().save(out, format="UNKNOWN", dry_run=True)
++
++        assert not out.exists()
++
++    def test_writer_errors_raise(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.png"
++        im = hopper()
++
++        # A writer failure, as when an encoder cannot take an option's value
++        with pytest.raises(TypeError):
++            im.save(out, dry_run=True, compress_level="high")  # type: ignore[arg-type]
++
++        assert not out.exists()
++        assert not hasattr(im, "encoderinfo")
++
++    def test_save_all(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.gif"
++        frames = [Image.new("P", (10, 10), color) for color in (0, 1)]
++
++        frames[0].save(out, save_all=True, append_images=frames[1:], dry_run=True)
++
++        assert not out.exists()
++
++    def test_append_reads_existing_file(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.tif"
++        hopper().save(out)
++        before = out.read_bytes()
++
++        hopper().save(out, save_all=True, append=True, dry_run=True)
++
++        assert out.read_bytes() == before
++        with Image.open(out) as reloaded:
++            assert reloaded.n_frames == 1
++
++    def test_append_missing_file_raises(self, tmp_path: Path) -> None:
++        out = tmp_path / "temp.tif"
++
++        with pytest.raises(FileNotFoundError):
++            hopper().save(out, save_all=True, append=True, dry_run=True)
++
++        assert not out.exists()
++
++    def test_option_not_passed_to_writer(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        Image.preinit()
++        seen: dict[str, Any] = {}
++
++        def save_handler(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
++            seen.update(im.encoderinfo)
++            seen["is_file"] = hasattr(fp, "name")
++
++        monkeypatch.setitem(Image.SAVE, "PNG", save_handler)
++
++        hopper().save(tmp_path / "temp.png", dry_run=True, optimize=True)
++
++        assert seen == {"optimize": True, "is_file": False}
++
++    def test_buffer_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        Image.preinit()
++        buffers: list[IO[bytes]] = []
++
++        def save_handler(im: Image.Image, fp: IO[bytes], filename: str | bytes) -> None:
++            buffers.append(fp)
++            fp.write(b"data")
++
++        monkeypatch.setitem(Image.SAVE, "PNG", save_handler)
++        b = io.BytesIO()
++
++        hopper().save(b, format="PNG", dry_run=True)
++
++        assert b.getvalue() == b""
++        assert len(buffers) == 1
++        assert buffers[0] is not b
++        assert buffers[0].closed
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 233df592c..e8fba6583 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -2505,6 +2505,15 @@ class Image:
+              red = Image.new("RGB", (1, 1), "#f00")
+              red.encoderinfo = {"xmp": b"test"}
+              black.save("out.mpo", save_all=True, append_images=[red])
++
++           ``dry_run`` is one such option, handled here rather than by the
++           writers: when it is true, the image is processed for saving as usual,
++           including any conversion and compression, but into memory, so that
++           nothing is written to disk, no file is created, and a file object
++           passed as ``fp`` is left untouched. Errors the writer would raise,
++           such as an unsupported mode for the format, are still raised. Whether
++           the file could be opened for writing, for example whether its
++           directory exists, is not checked.
+         :returns: None
+         :exception ValueError: If the output format could not be determined
+            from the file name.  Use the format option to solve this.
+@@ -2512,6 +2521,9 @@ class Image:
+            may have been created, and may contain partial data.
+         """
+ 
++        # not a writer option, so it is kept out of encoderinfo
++        dry_run = params.pop("dry_run", False)
++
+         filename: str | bytes = ""
+         open_fp = False
+         if is_path(fp):
+@@ -2559,7 +2571,19 @@ class Image:
+             save_handler = SAVE[format.upper()]
+ 
+         created = False
+-        if open_fp:
++        if dry_run:
++            # The writer gets a buffer of its own, so that it runs in full
++            # while no file is opened or created and the caller's file object
++            # is not written to.
++            buffer = io.BytesIO()
++            if open_fp and params.get("append", False):
++                # An appending writer reads back what is already in the file.
++                with builtins.open(filename, "rb") as existing:
++                    buffer.write(existing.read())
++                buffer.seek(0)
++            fp = buffer
++            open_fp = True  # the buffer is ours, so it is closed below
++        elif open_fp:
+             created = not os.path.exists(filename)
+             if params.get("append", False):
+                 # Open also for reading ("+"), because TIFF save_all

@@ -1,0 +1,50 @@
+{
+  "events": {
+    "run_started": 1,
+    "task_create": 2,
+    "tool": 27,
+    "tool_done": 27,
+    "task_claim": 2,
+    "receive": 6,
+    "task_update": 3,
+    "message": 5
+  },
+  "tool_surface": "mcp",
+  "tasks_total": 2,
+  "tasks_done": 2,
+  "unowned_at_end": 0,
+  "time_to_first_claim_seconds": 84.696,
+  "claims_per_agent": {
+    "agent2": 1,
+    "agent1": 1
+  },
+  "updates_per_agent": {
+    "agent1": 2,
+    "agent2": 1
+  },
+  "messages_sent": 5,
+  "messages_by_agent": {
+    "agent1": 3,
+    "agent2": 2
+  },
+  "message_chars": 3727,
+  "message_words": 520,
+  "tool_calls": {
+    "task_list": 8,
+    "task_claim": 2,
+    "receive_messages": 5,
+    "list_agents": 1,
+    "peek_messages": 2,
+    "task_update": 3,
+    "send_message": 5,
+    "wait_for_message": 1
+  },
+  "lead_agent": "agent1",
+  "team_features": {
+    "task_list": true,
+    "scratchpad": true,
+    "mcp": true,
+    "auto_refresh": true,
+    "protocol": true
+  }
+}

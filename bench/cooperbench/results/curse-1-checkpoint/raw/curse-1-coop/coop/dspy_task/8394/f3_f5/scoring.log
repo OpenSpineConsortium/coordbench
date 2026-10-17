@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/dspy_task/8394/f3_f5", "verdict": "fail"}
+coordbench run: coop-8394-f3_f5-0b0547: timings: hub 0.1 s, run_create 0.0 s, provision 3.9 s, agents 629 s (agent1 627 s, agent2 629 s), close 0.0 s, score 53 s, cascade 103 s, teardown 1.8 s
+coordbench run: summary: 15 completed, 0 skipped, 0 failed; evals: 15 evaluated, 12 passed, 3 failed, 0 errors (80.0%); cost: unknown

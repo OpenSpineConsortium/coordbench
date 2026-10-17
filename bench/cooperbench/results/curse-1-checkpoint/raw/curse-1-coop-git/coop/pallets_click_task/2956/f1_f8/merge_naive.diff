@@ -1,0 +1,307 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index f57ada6..d72d0a3 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -12,6 +12,7 @@ from collections import Counter
+ from contextlib import AbstractContextManager
+ from contextlib import contextmanager
+ from contextlib import ExitStack
++from datetime import datetime
+ from functools import update_wrapper
+ from gettext import gettext as _
+ from gettext import ngettext
+@@ -437,6 +438,12 @@ class Context:
+         self._close_callbacks: list[t.Callable[[], t.Any]] = []
+         self._depth = 0
+         self._parameter_source: dict[str, ParameterSource] = {}
++        #: Whether the history of option values is recorded, taken from
++        #: the command's ``track_changes`` attribute.
++        self._track_changes: bool = bool(getattr(command, "track_changes", False))
++        #: Parameter names mapped to the history of their values, oldest
++        #: first. Only filled while ``_track_changes`` is true.
++        self._option_history: dict[str, list[dict[str, t.Any]]] = {}
+         self._exit_stack = ExitStack()
+ 
+     @property
+@@ -839,6 +846,72 @@ class Context:
+         """
+         return self._parameter_source.get(name)
+ 
++    def _record_option_change(
++        self, name: str, value: t.Any, source: ParameterSource | None
++    ) -> None:
++        """Append a value of a parameter to its history, when tracking
++        is enabled. An entry after the first also keeps the value it
++        replaced as ``previous_value``.
++
++        :param name: The name of the parameter.
++        :param value: The value the parameter now has.
++        :param source: Where the value came from.
++        """
++        if not self._track_changes:
++            return
++
++        history = self._option_history.setdefault(name, [])
++        entry: dict[str, t.Any] = {
++            "value": value,
++            "source": source,
++            "timestamp": datetime.now().timestamp(),
++        }
++
++        if history:
++            entry["previous_value"] = history[-1]["value"]
++
++        history.append(entry)
++
++    def _resolve_option_name(self, name: str) -> str:
++        """Turn an option flag such as ``--count`` or ``-c`` into the
++        name of the parameter that declares it. Anything that is not a
++        known flag is returned as it was given.
++        """
++        if name in self._option_history or not name.startswith("-"):
++            return name
++
++        for param in self.command.get_params(self):
++            if isinstance(param, Option) and name in (
++                *param.opts,
++                *param.secondary_opts,
++            ):
++                return param.name or name
++
++        return name
++
++    def get_option_history(self, name: str) -> list[dict[str, t.Any]] | None:
++        """Get the history of the values an option has had, which lets
++        you see where the current value came from. Tracking is enabled
++        with ``track_changes=True`` on the command.
++
++        Each entry is a dict with the ``value``, the ``source`` as a
++        :class:`~click.core.ParameterSource`, and the ``timestamp`` in
++        seconds since the epoch, as :func:`time.time` gives it. An entry
++        that replaced an earlier value also has it as ``previous_value``.
++
++        :param name: The name of the parameter, such as ``count``, or
++            one of the option's flags, such as ``--count`` or ``-c``.
++        :return: The entries, oldest first, which is an empty list if
++            the option is unknown or has no history, or ``None`` if the
++            command does not track changes.
++
++        .. versionadded:: 8.2.2
++        """
++        if not self._track_changes:
++            return None
++
++        return list(self._option_history.get(self._resolve_option_name(name), ()))
++
+ 
+ class Command:
+     """Commands are the basic building block of command line interfaces in
+@@ -867,6 +940,12 @@ class Command:
+                         indicating that the command is deprecated and highlights
+                         its deprecation in --help. The message can be customized
+                         by using a string as the value.
++    :param track_changes: record the history of each parameter's value, which
++                          :meth:`Context.get_option_history` returns. This is
++                          disabled by default.
++
++    .. versionchanged:: 8.2.2
++        Added the ``track_changes`` parameter.
+ 
+     .. versionchanged:: 8.2
+         This is the base class for all commands, not ``BaseCommand``.
+@@ -916,6 +995,7 @@ class Command:
+         no_args_is_help: bool = False,
+         hidden: bool = False,
+         deprecated: bool | str = False,
++        track_changes: bool = False,
+     ) -> None:
+         #: the name the command thinks it has.  Upon registering a command
+         #: on a :class:`Group` the group will default the command name
+@@ -945,6 +1025,9 @@ class Command:
+         self.no_args_is_help = no_args_is_help
+         self.hidden = hidden
+         self.deprecated = deprecated
++        #: whether contexts of this command record the history of each
++        #: parameter's value, see :meth:`Context.get_option_history`.
++        self.track_changes = track_changes
+ 
+     def to_info_dict(self, ctx: Context) -> dict[str, t.Any]:
+         return {
+@@ -2420,6 +2503,8 @@ class Parameter:
+ 
+                 value = None
+ 
++            ctx._record_option_change(self.name, value, source)  # type: ignore
++
+         if self.expose_value:
+             ctx.params[self.name] = value  # type: ignore
+ 
+@@ -2506,6 +2591,11 @@ class Option(Parameter):
+                                context.
+     :param help: the help string.
+     :param hidden: hide this option from help outputs.
++    :param auto_complete: Suggest values from the option's name and the
++        environment when completing it, for example system user names
++        for ``--user`` or git branches for ``--branch``. A callback
++        given as ``shell_complete`` takes precedence. See
++        :meth:`_smart_complete`.
+     :param attrs: Other command arguments described in :class:`Parameter`.
+ 
+     .. versionchanged:: 8.2
+@@ -2549,6 +2639,7 @@ class Option(Parameter):
+         show_choices: bool = True,
+         show_envvar: bool = False,
+         deprecated: bool | str = False,
++        auto_complete: bool = False,
+         **attrs: t.Any,
+     ) -> None:
+         if help:
+@@ -2636,6 +2727,7 @@ class Option(Parameter):
+         self.show_default = show_default
+         self.show_choices = show_choices
+         self.show_envvar = show_envvar
++        self.auto_complete = auto_complete
+ 
+         if __debug__:
+             if deprecated and prompt:
+@@ -2671,9 +2763,140 @@ class Option(Parameter):
+             flag_value=self.flag_value,
+             count=self.count,
+             hidden=self.hidden,
++            auto_complete=self.auto_complete,
+         )
+         return info_dict
+ 
++    # Words in an option's name that select a completion strategy, in
++    # the order they are tried. A word matches a name that is made of it,
++    # such as "user" in "--user" or "branch" in "--git-branch", or that
++    # starts with it, such as "username" or "filename".
++    _SMART_COMPLETERS: t.ClassVar[tuple[tuple[tuple[str, ...], str], ...]] = (
++        (("user",), "_complete_usernames"),
++        (("branch",), "_complete_git_branches"),
++        (("file", "path"), "_complete_files"),
++        (("dir",), "_complete_directories"),
++        (("env",), "_complete_env_vars"),
++    )
++
++    def _smart_completer(self) -> cabc.Callable[[str], list[CompletionItem]] | None:
++        """Find the strategy that fits this option's name, or ``None``."""
++        decls = [self.name or "", *self.opts]
++        words = " ".join(decls).lower().replace("-", " ").replace("_", " ").split()
++
++        for keywords, method_name in self._SMART_COMPLETERS:
++            if any(word.startswith(keywords) for word in words):
++                return t.cast(
++                    "cabc.Callable[[str], list[CompletionItem]]",
++                    getattr(self, method_name),
++                )
++
++        return None
++
++    def _smart_complete(self, ctx: Context, incomplete: str) -> list[CompletionItem]:
++        """Complete the option's value from its name and the environment
++        when ``auto_complete`` is enabled.
++
++        The name picks the strategy: user names for ``user``, git
++        branches for ``branch``, paths for ``file`` and ``path``,
++        directories for ``dir`` and environment variable names for
++        ``env``. A name that fits none falls back to the completion of
++        the option's type, which is what happens without
++        ``auto_complete``. Returns an empty list when ``auto_complete``
++        is off.
++
++        :param ctx: Invocation context for this command.
++        :param incomplete: Value being completed. May be empty.
++        """
++        if not self.auto_complete:
++            return []
++
++        completer = self._smart_completer()
++
++        if completer is None:
++            return self.type.shell_complete(ctx, self, incomplete)
++
++        return completer(incomplete)
++
++    def _complete_usernames(self, incomplete: str) -> list[CompletionItem]:
++        from click.shell_completion import CompletionItem
++
++        try:
++            import pwd
++
++            names = {entry.pw_name for entry in pwd.getpwall()}
++        except (ImportError, KeyError):
++            # No password database, as on Windows: offer the current user.
++            import getpass
++
++            try:
++                names = {getpass.getuser()}
++            except (OSError, KeyError, ImportError):
++                return []
++
++        return [CompletionItem(n) for n in sorted(names) if n.startswith(incomplete)]
++
++    def _complete_git_branches(self, incomplete: str) -> list[CompletionItem]:
++        import subprocess
++
++        from click.shell_completion import CompletionItem
++
++        try:
++            result = subprocess.run(
++                ["git", "branch", "-a", "--format=%(refname:short)"],
++                capture_output=True,
++                text=True,
++                check=True,
++                timeout=5,
++            )
++        except (OSError, subprocess.SubprocessError):
++            # Git is missing, or the working directory is not a repository.
++            return []
++
++        names: dict[str, None] = {}
++
++        for line in result.stdout.splitlines():
++            name = line.strip()
++
++            # A detached HEAD is listed as "(HEAD detached at ...)".
++            if name and not name.startswith("(") and name.startswith(incomplete):
++                names[name] = None
++
++        return [CompletionItem(name) for name in names]
++
++    def _complete_files(self, incomplete: str) -> list[CompletionItem]:
++        from click.shell_completion import CompletionItem
++
++        return [CompletionItem(incomplete, type="file")]
++
++    def _complete_directories(self, incomplete: str) -> list[CompletionItem]:
++        from click.shell_completion import CompletionItem
++
++        return [CompletionItem(incomplete, type="dir")]
++
++    def _complete_env_vars(self, incomplete: str) -> list[CompletionItem]:
++        from click.shell_completion import CompletionItem
++
++        return [
++            CompletionItem(name)
++            for name in sorted(os.environ)
++            if name.startswith(incomplete)
++        ]
++
++    def shell_complete(self, ctx: Context, incomplete: str) -> list[CompletionItem]:
++        """Return a list of completions for the incomplete value. A
++        ``shell_complete`` function given during init is used first,
++        then :meth:`_smart_complete` if ``auto_complete`` is enabled,
++        then the :attr:`type` completion.
++
++        :param ctx: Invocation context for this command.
++        :param incomplete: Value being completed. May be empty.
++        """
++        if self.auto_complete and self._custom_shell_complete is None:
++            return self._smart_complete(ctx, incomplete)
++
++        return super().shell_complete(ctx, incomplete)
++
+     def get_error_hint(self, ctx: Context) -> str:
+         result = super().get_error_hint(ctx)
+         if self.show_envvar:

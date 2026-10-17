@@ -1,0 +1,230 @@
+diff --git a/Tests/test_image_quantize.py b/Tests/test_image_quantize.py
+index bd9db362c..584d54b00 100644
+--- a/Tests/test_image_quantize.py
++++ b/Tests/test_image_quantize.py
+@@ -77,6 +77,111 @@ def test_quantize_dither_diff():
+     assert dither.tobytes() != nodither.tobytes()
+ 
+ 
++def test_quantize_lightness_factor_default():
++    image = hopper()
++    default = image.quantize(16)
++    unchanged = image.quantize(16, lightness_factor=1.0)
++
++    assert unchanged.getpalette() == default.getpalette()
++    assert unchanged.tobytes() == default.tobytes()
++
++
++@pytest.mark.parametrize("factor", (0.5, 0.9, 1.1, 1.5, 2.0))
++def test_quantize_lightness_factor(factor):
++    image = hopper()
++    original = image.quantize(16)
++    adjusted = image.quantize(16, lightness_factor=factor)
++
++    assert_image(adjusted, "P", adjusted.size)
++
++    # Only the palette changes, so the pixels still use the same indexes
++    assert adjusted.tobytes() == original.tobytes()
++    assert adjusted.getpalette() == [
++        min(255, int(value * factor)) for value in original.getpalette()
++    ]
++    assert adjusted.palette.palette == bytes(adjusted.getpalette())
++
++    # The converted image follows the palette
++    index = adjusted.getpixel((10, 10))
++    expected = tuple(adjusted.getpalette()[index * 3 : index * 3 + 3])
++    assert adjusted.convert("RGB").getpixel((10, 10)) == expected
++
++
++def test_quantize_lightness_factor_brighter_and_darker():
++    image = hopper()
++    original = image.quantize(16).getpalette()
++    brighter = image.quantize(16, lightness_factor=1.2).getpalette()
++    darker = image.quantize(16, lightness_factor=0.8).getpalette()
++
++    assert sum(brighter) > sum(original) > sum(darker)
++    assert all(b >= o >= d for b, o, d in zip(brighter, original, darker))
++
++
++def test_quantize_lightness_factor_clamps():
++    image = hopper()
++    original = image.quantize(16).getpalette()
++
++    # There is no upper bound, but channels never go above 255
++    bright = image.quantize(16, lightness_factor=1000).getpalette()
++    assert max(bright) == 255
++    assert bright == [255 if value else 0 for value in original]
++
++    # A tiny positive factor takes every channel down to 0
++    dark = image.quantize(16, lightness_factor=0.0001).getpalette()
++    assert set(dark) == {0}
++
++
++@pytest.mark.parametrize("factor", (0, 0.0, -1, -0.5, float("nan")))
++def test_quantize_lightness_factor_invalid(factor):
++    image = hopper()
++    with pytest.raises(ValueError):
++        image.quantize(lightness_factor=factor)
++
++    # The check does not depend on how the image is quantized
++    with pytest.raises(ValueError):
++        image.quantize(palette=hopper("P"), lightness_factor=factor)
++
++
++def test_quantize_lightness_factor_palette():
++    image = hopper()
++    with Image.open("Tests/images/caption_6_33_22.png") as palette:
++        palette = palette.convert("P")
++    original_palette = palette.getpalette()
++
++    original = image.quantize(palette=palette)
++    adjusted = image.quantize(palette=palette, lightness_factor=1.3)
++
++    assert adjusted.tobytes() == original.tobytes()
++    assert adjusted.getpalette() == [
++        min(255, int(value * 1.3)) for value in original.getpalette()
++    ]
++    assert len(adjusted.palette.palette) == len(original.palette.palette)
++
++    # The reference palette image is left alone
++    assert palette.getpalette() == original_palette
++
++
++def test_quantize_lightness_factor_rgba():
++    image = hopper("RGBA")
++    image.putalpha(Image.linear_gradient("L").resize(image.size))
++
++    original = image.quantize()
++    adjusted = image.quantize(lightness_factor=1.5)
++    assert adjusted.palette.mode == "RGBA"
++
++    original_colors = original.palette.palette
++    adjusted_colors = adjusted.palette.palette
++    assert adjusted.tobytes() == original.tobytes()
++    assert adjusted_colors[3::4] == original_colors[3::4]
++    for channel in range(3):
++        assert adjusted_colors[channel::4] == bytes(
++            min(255, int(value * 1.5)) for value in original_colors[channel::4]
++        )
++    assert adjusted.convert("RGBA").getpixel((10, 10))[3] == (
++        original.convert("RGBA").getpixel((10, 10))[3]
++    )
++
++
+ def test_transparent_colors_equal():
+     im = Image.new("RGBA", (1, 2), (0, 0, 0, 0))
+     px = im.load()
+diff --git a/src/PIL/Image.py b/src/PIL/Image.py
+index 0fca3fa5c..a40e772c4 100644
+--- a/src/PIL/Image.py
++++ b/src/PIL/Image.py
+@@ -476,6 +476,48 @@ def _getscaleoffset(expr):
+     raise ValueError("illegal expression")
+ 
+ 
++def _scale_palette_lightness(im, lightness_factor):
++    """
++    Scale the brightness of the palette of a "P" image, in place.
++
++    Every color channel of every palette entry is multiplied by
++    ``lightness_factor`` and clamped to 0-255. The alpha channel of an RGBA
++    palette is left alone. Only the palette changes: the pixels keep their
++    indexes, so no color is added and nothing is quantized again.
++    """
++    from . import ImagePalette
++
++    table = bytearray(256)
++    for value in range(1, 256):
++        scaled_value = value * lightness_factor
++        table[value] = 255 if scaled_value >= 255 else int(scaled_value)
++
++    def scale(data, channels):
++        data = bytes(data)
++        scaled = bytearray(data.translate(table))
++        if channels == 4:
++            scaled[3::4] = data[3::4]
++        return bytes(scaled)
++
++    mode = im.im.getpalettemode()
++    scaled = scale(im.im.getpalette(mode, mode), len(mode))
++    if mode == "RGBA":
++        # putpalette() takes RGB, so the alpha channel is set on its own
++        rgb = bytearray(len(scaled) // 4 * 3)
++        for channel in range(3):
++            rgb[channel::3] = scaled[channel::4]
++        im.im.putpalette("RGB", bytes(rgb))
++        im.im.putpalettealphas(scaled[3::4])
++    else:
++        im.im.putpalette("RGB", scaled)
++
++    palette = im.palette
++    if palette is not None and palette.rawmode is None:
++        palette.palette = scale(palette.tobytes(), len(palette.mode))
++    else:
++        im.palette = ImagePalette.ImagePalette(mode, scaled)
++
++
+ # --------------------------------------------------------------------
+ # Implementation wrapper
+ 
+@@ -1048,7 +1090,16 @@ class Image:
+                 new_im.info["transparency"] = trns
+         return new_im
+ 
+-    def quantize(self, colors=256, method=None, kmeans=0, palette=None, dither=1):
++    def quantize(
++        self,
++        colors=256,
++        method=None,
++        kmeans=0,
++        palette=None,
++        dither=1,
++        sort_palette=None,
++        lightness_factor=1.0,
++    ):
+         """
+         Convert the image to 'P' mode with the specified number
+         of colors.
+@@ -1069,6 +1120,13 @@ class Image:
+         :param kmeans: Integer
+         :param palette: Quantize to the palette of given
+                         :py:class:`PIL.Image.Image`.
++        :param lightness_factor: Factor by which to scale the brightness of the
++           palette colors after quantization, before the image is returned.
++           Values above 1.0 make the image brighter, values below 1.0 make it
++           darker, and each color channel is clamped to 0-255. It must be
++           greater than 0, otherwise a :py:exc:`ValueError` is raised, and has
++           no upper bound. Only the palette changes, so no colors are added.
++           Default: 1.0 (no change)
+         :param dither: Dithering method, used when converting from
+            mode "RGB" to "P" or from "RGB" or "L" to "1".
+            Available methods are :data:`NONE` or :data:`FLOYDSTEINBERG` (default).
+@@ -1077,6 +1135,9 @@ class Image:
+ 
+         """
+ 
++        if not lightness_factor > 0:
++            raise ValueError("lightness_factor must be greater than 0")
++
+         self.load()
+ 
+         if method is None:
+@@ -1104,6 +1165,8 @@ class Image:
+             im = self.im.convert("P", dither, palette.im)
+             new_im = self._new(im)
+             new_im.palette = palette.palette.copy()
++            if lightness_factor != 1.0:
++                _scale_palette_lightness(new_im, lightness_factor)
+             return new_im
+ 
+         im = self._new(self.im.quantize(colors, method, kmeans))
+@@ -1113,6 +1176,9 @@ class Image:
+         mode = im.im.getpalettemode()
+         im.palette = ImagePalette.ImagePalette(mode, im.im.getpalette(mode, mode))
+ 
++        if lightness_factor != 1.0:
++            _scale_palette_lightness(im, lightness_factor)
++
+         return im
+ 
+     def copy(self):

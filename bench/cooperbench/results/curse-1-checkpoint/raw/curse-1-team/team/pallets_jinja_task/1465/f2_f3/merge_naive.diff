@@ -1,0 +1,58 @@
+diff --cc src/jinja2/filters.py
+index 8f344d6e,f59df000..00000000
+--- a/src/jinja2/filters.py
++++ b/src/jinja2/filters.py
+@@@ -1165,6 -1165,7 +1165,10 @@@ def sync_do_groupby
+      value: "t.Iterable[V]",
+      attribute: t.Union[str, int],
+      default: t.Optional[t.Any] = None,
+++<<<<<<< HEAD
+++=======
++     reverse: bool = False,
+++>>>>>>> agent1
+      separator: str = ".",
+  ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+      """Group a sequence of objects by an attribute using Python's
+@@@ -1206,6 -1207,16 +1210,19 @@@
+            <li>{{ city }}: {{ items|map(attribute="name")|join(", ") }}</li>
+          {% endfor %}</ul>
+  
+++<<<<<<< HEAD
+++=======
++     Groups are sorted in ascending order by default. Pass
++     ``reverse=True`` to sort them in descending order instead, for
++     example to show the most recent or highest values first.
++ 
++     .. sourcecode:: jinja
++ 
++         <ul>{% for age, items in users|groupby("age", reverse=true) %}
++           <li>{{ age }}: {{ items|map(attribute="name")|join(", ") }}</li>
++         {% endfor %}</ul>
++ 
+++>>>>>>> agent1
+      The ``separator`` parameter changes the string that splits the
+      attribute into nested parts, ``"."`` by default. This allows
+      Django-style lookups such as ``"address__city"``.
+@@@ -1217,7 -1228,7 +1234,11 @@@
+          {% endfor %}</ul>
+  
+      .. versionchanged:: 3.1
+++<<<<<<< HEAD
+ +        Added the ``separator`` parameter.
+++=======
++         Added the ``reverse`` and ``separator`` parameters.
+++>>>>>>> agent1
+  
+      .. versionchanged:: 3.0
+          Added the ``default`` parameter.
+@@@ -1238,6 -1249,7 +1259,10 @@@ async def do_groupby
+      value: "t.Union[t.AsyncIterable[V], t.Iterable[V]]",
+      attribute: t.Union[str, int],
+      default: t.Optional[t.Any] = None,
+++<<<<<<< HEAD
+++=======
++     reverse: bool = False,
+++>>>>>>> agent1
+      separator: str = ".",
+  ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+      expr = make_attrgetter(environment, attribute, default=default, separator=separator)

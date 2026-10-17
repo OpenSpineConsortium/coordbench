@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "fc78a1a75d",
+    "by": "bench-runner",
+    "title": "Implement feature 9",
+    "ts": 1792172836.4756024
+  },
+  {
+    "kind": "create",
+    "task_id": "a575499e18",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 6",
+    "ts": 1792172836.4756942
+  },
+  {
+    "kind": "claim",
+    "task_id": "fc78a1a75d",
+    "by": "agent2",
+    "ts": 1792172879.075235
+  },
+  {
+    "kind": "claim",
+    "task_id": "a575499e18",
+    "by": "agent1",
+    "ts": 1792172906.029461
+  },
+  {
+    "kind": "update",
+    "task_id": "a575499e18",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing feature 6 myself, then integrate agent2's patch",
+    "ts": 1792172906.1382647
+  },
+  {
+    "kind": "update",
+    "task_id": "fc78a1a75d",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "editing src/jinja2/ext.py only",
+    "ts": 1792172907.3244336
+  },
+  {
+    "kind": "update",
+    "task_id": "fc78a1a75d",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792172950.3655157
+  },
+  {
+    "kind": "update",
+    "task_id": "a575499e18",
+    "by": "agent1",
+    "status": "done",
+    "note": "feature 6 implemented, agent2's feature 9 patch applied, 830 tests pass, patch.txt written",
+    "ts": 1792172990.4109786
+  }
+]

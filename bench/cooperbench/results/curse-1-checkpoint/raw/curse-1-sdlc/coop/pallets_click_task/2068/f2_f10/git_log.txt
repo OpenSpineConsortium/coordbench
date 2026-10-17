@@ -1,0 +1,48 @@
+commit 60a099f9e3be68341b7120ba40d084ca840ef5ec (claude/2)
+Merge: dcb3b91 baffcf1
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 05:59:29 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/2
+    
+    # Conflicts:
+    #       src/click/_termui_impl.py
+    #       src/click/termui.py
+
+commit d4bee3402636714f1f01026b445851348068c296 (main)
+Merge: baffcf1 60a099f
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 05:59:29 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit dcb3b9163f4cc530231dfba8bfb607f32b266126
+Author: agent1 <agent1@example.com>
+Date:   Thu Oct 15 05:58:40 2026 +0000
+
+    Add an optional timeout to click.edit()
+    
+    The editor process is terminated and a ClickException is raised when it
+    runs longer than timeout seconds. A timeout that is not a positive
+    integer raises ValueError. The default None waits indefinitely, as before.
+
+ src/click/_termui_impl.py | 41 ++++++++++++++++++++++++++++++++++++++++-
+ src/click/termui.py       | 21 ++++++++++++++++++++-
+ 2 files changed, 60 insertions(+), 2 deletions(-)
+
+commit baffcf149e438b537fe3d92ba07977b4ab6443fb
+Merge: d791537 f540e81
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Thu Oct 15 05:57:56 2026 +0000
+
+    Merge claude/10: closes #10
+
+commit f540e81eb4e0b44a504f305692ac92a256e9ec3d (claude/10)
+Author: agent2 <agent@cooperbench.local>
+Date:   Thu Oct 15 05:57:47 2026 +0000
+
+    Add working_dir parameter to click.edit()
+
+ src/click/_termui_impl.py |  9 ++++++++-
+ src/click/termui.py       | 18 +++++++++++++++++-
+ 2 files changed, 25 insertions(+), 2 deletions(-)

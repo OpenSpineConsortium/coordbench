@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "create",
+    "task_id": "212aa80ecf",
+    "by": "bench-runner",
+    "title": "Implement feature 7",
+    "ts": 1792044050.0078442
+  },
+  {
+    "kind": "create",
+    "task_id": "de484fa8c9",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 5",
+    "ts": 1792044050.007913
+  },
+  {
+    "kind": "claim",
+    "task_id": "212aa80ecf",
+    "by": "agent2",
+    "ts": 1792044075.1331117
+  },
+  {
+    "kind": "claim",
+    "task_id": "de484fa8c9",
+    "by": "agent1",
+    "ts": 1792044151.7021422
+  },
+  {
+    "kind": "update",
+    "task_id": "de484fa8c9",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "feature 5 implemented in my tree, waiting for agent2 patch to integrate",
+    "ts": 1792044151.8712077
+  },
+  {
+    "kind": "update",
+    "task_id": "212aa80ecf",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792044183.9395406
+  },
+  {
+    "kind": "update",
+    "task_id": "de484fa8c9",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged agent2 patch (escape_shell) with lock_files; tests pass",
+    "ts": 1792044248.917689
+  }
+]

@@ -1,0 +1,25 @@
+commit ce73ab6ab2cfc7ab44ad8458424a1771923e9759 (agent2, agent1)
+Merge: 3f53ea12 2eff8fb1
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 12:19:58 2026 +0000
+
+    Merge team/agent1: combine strip and repeat on str.first and str.last
+
+commit 2eff8fb1807c2c6ebb0be840c735cbeb25db4a67
+Author: agent1 <agent@cooperbench.local>
+Date:   Fri Oct 16 12:18:33 2026 +0000
+
+    Add repeat parameter to str.first and str.last
+
+ crates/typst/src/foundations/str.rs | 72 ++++++++++++++++++++++++++++++-------
+ tests/suite/foundations/str.typ     | 29 +++++++++++++++
+ 2 files changed, 89 insertions(+), 12 deletions(-)
+
+commit 3f53ea12903f3696f5fffcf5427ecf4bd6369576
+Author: agent2 <agent@cooperbench.local>
+Date:   Fri Oct 16 12:18:16 2026 +0000
+
+    Add strip parameter to str.first and str.last
+
+ crates/typst/src/foundations/str.rs | 36 ++++++++++++++++++++++++++++++------
+ 1 file changed, 30 insertions(+), 6 deletions(-)
