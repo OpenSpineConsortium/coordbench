@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-17T23:57:40Z",
+  "scoped": [
+    {
+      "name": "Fable",
+      "resetsAt": "2026-10-20T20:00:00Z",
+      "utilization": 0.54
+    }
+  ],
+  "slot": "1",
+  "source": "cswap",
+  "version": 1,
+  "windows": {
+    "five_hour": {
+      "utilization": 0.0
+    },
+    "seven_day": {
+      "resetsAt": "2026-10-20T20:00:00Z",
+      "utilization": 0.27
+    }
+  }
+}
