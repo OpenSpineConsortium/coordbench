@@ -1,0 +1,39 @@
+commit 29d5116a36ce3969e603405e1fe33c909ba76969 (main)
+Merge: a09b73e 4bd92e5
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:19:11 2026 +0000
+
+    Merge claude/8: closes #8
+
+commit 4bd92e5c7a12889eb61bfdec6bdb1de03810a9fc (claude/8)
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:18:40 2026 +0000
+
+    Add the ctrans conditional translation tag
+    
+    ConditionalI18nExtension renders a trans-style block through gettext or
+    ngettext when a runtime condition holds and a mandatory fallback block
+    otherwise, with the same variables, pluralize and trimmed handling as
+    the trans tag.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/jinja2/ext.py | 319 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 319 insertions(+)
+
+commit a09b73e44ba65129734b62a40226193fa573b1a8
+Merge: 896a621 b5c06a5
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:13:55 2026 +0000
+
+    Merge claude/1: closes #1
+
+commit b5c06a5fb5227de218e874edba1d39017f508f3f (claude/1)
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:13:44 2026 +0000
+
+    Allow a context string as the first token of a trans block
+
+ src/jinja2/ext.py | 38 ++++++++++++++++++++++++--------------
+ 1 file changed, 24 insertions(+), 14 deletions(-)

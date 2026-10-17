@@ -1,0 +1,6 @@
+{"kind": "create", "task_id": "ed6981d2ee", "by": "bench-runner", "title": "Implement feature 5", "ts": 1792247361.7748203}
+{"kind": "create", "task_id": "7b85bd8071", "by": "bench-runner", "title": "Lead-only: integrate and submit feature 4", "ts": 1792247361.774868}
+{"kind": "claim", "task_id": "ed6981d2ee", "by": "agent2", "ts": 1792247389.608314}
+{"kind": "claim", "task_id": "7b85bd8071", "by": "agent1", "ts": 1792247439.1409042}
+{"kind": "update", "task_id": "7b85bd8071", "by": "agent1", "status": "in_progress", "note": "feature 4 implemented in my tree, waiting for agent2 patch", "ts": 1792247439.2770452}
+{"kind": "update", "task_id": "ed6981d2ee", "by": "agent2", "status": "done", "note": "patch at /workspace/shared/agent2.patch", "ts": 1792247461.3771296}

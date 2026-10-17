@@ -1,0 +1,140 @@
+diff --git a/dirty_equals/__init__.py b/dirty_equals/__init__.py
+index ba8214e..f108cf1 100644
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@ -18,7 +18,7 @@ from ._numeric import (
+     IsPositiveFloat,
+     IsPositiveInt,
+ )
+-from ._other import FunctionCheck, IsJson, IsUUID
++from ._other import FunctionCheck, IsEmail, IsJson, IsMac, IsUUID
+ from ._sequence import Contains, HasLen, IsList, IsListOrTuple, IsTuple
+ from ._strings import IsAnyStr, IsBytes, IsStr
+ 
+@@ -67,7 +67,9 @@ __all__ = (
+     'IsInstance',
+     # other
+     'FunctionCheck',
++    'IsEmail',
+     'IsJson',
++    'IsMac',
+     'IsUUID',
+     # strings
+     'IsStr',
+diff --git a/dirty_equals/_other.py b/dirty_equals/_other.py
+index b2b8379..4b2d096 100644
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@ -1,4 +1,6 @@
+ import json
++import re
++from typing import Any, Callable, Optional, TypeVar, overload
+ from typing import Any, Callable, TypeVar, overload
+ from uuid import UUID
+ 
+@@ -51,6 +53,60 @@ class IsUUID(DirtyEquals[UUID]):
+             return True
+ 
+ 
++class IsMac(DirtyEquals[str]):
++    """
++    A class that checks if a value is a valid MAC address, optionally checking how it is formatted.
++    """
++
++    _hex_pairs = r'[0-9a-f]{2}'
++    _patterns = {
++        'colon': re.compile(rf'{_hex_pairs}(?::{_hex_pairs}){{5}}', re.IGNORECASE),
++        'hyphen': re.compile(rf'{_hex_pairs}(?:-{_hex_pairs}){{5}}', re.IGNORECASE),
++        'dot': re.compile(r'[0-9a-f]{4}(?:\.[0-9a-f]{4}){2}', re.IGNORECASE),
++        'compact': re.compile(r'[0-9a-f]{12}', re.IGNORECASE),
++    }
++
++    def __init__(self, format: Literal[None, 'colon', 'hyphen', 'dot', 'compact'] = None):
++        """
++        Args:
++            format: The format the MAC address must have, one of `'colon'` (`00:1B:44:11:3A:B7`),
++                `'hyphen'` (`00-1B-44-11-3A-B7`), `'dot'` (`001B.4411.3AB7`) or `'compact'` (`001B44113AB7`).
++                If omitted, all of these formats are accepted.
++
++        Hexadecimal digits are matched case-insensitively and only strings are accepted.
++
++        ```py title="IsMac"
++        from dirty_equals import IsMac
++
++        assert '00:1B:44:11:3A:B7' == IsMac
++        assert '00:1b:44:11:3a:b7' == IsMac
++        assert '00-1B-44-11-3A-B7' == IsMac
++        assert '001B.4411.3AB7' == IsMac
++        assert '001b44113ab7' == IsMac
++        assert '00:1B:44:11:3A:B7' == IsMac('colon')
++        assert '00-1B-44-11-3A-B7' != IsMac('colon')
++        assert '001b44113ab7' == IsMac('compact')
++        assert '00:1B:44:11:3A' != IsMac
++        assert '00:1B:44:11:3A:BG' != IsMac
++        assert 123 != IsMac
++        ```
++        """
++        if format is not None and format not in self._patterns:
++            raise ValueError(f'invalid MAC address format {format!r}, expected one of {", ".join(self._patterns)}')
++        self.format = format
++        super().__init__(format or plain_repr('*'))
++
++    def equals(self, other: Any) -> bool:
++        if not isinstance(other, str):
++            return False
++
++        if self.format is None:
++            patterns = self._patterns.values()
++        else:
++            patterns = [self._patterns[self.format]]
++        return any(pattern.fullmatch(other) for pattern in patterns)
++
++
+ AnyJson = object
+ JsonType = TypeVar('JsonType', AnyJson, Any)
+ 
+@@ -145,3 +201,44 @@ class FunctionCheck(DirtyEquals[Any]):
+ 
+     def equals(self, other: Any) -> bool:
+         return self.func(other)
++
++
++class IsEmail(DirtyEquals[str]):
++    """
++    A class that checks if a value is a valid email address, optionally checking the domain.
++    """
++
++    _email_regex = re.compile(
++        r'[a-zA-Z0-9._%+-]+@(?P<domain>[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,})'
++    )
++
++    def __init__(self, domain: Optional[str] = None):
++        """
++        Args:
++            domain: The domain the email address must belong to, compared exactly (case-sensitive),
++                if omitted, any domain is accepted.
++
++        ```py title="IsEmail"
++        from dirty_equals import IsEmail
++
++        assert 'user@example.com' == IsEmail
++        assert 'user@example.com' == IsEmail()
++        assert 'user@example.com' == IsEmail(domain='example.com')
++        assert 'user@example.org' != IsEmail(domain='example.com')
++        assert 'user@EXAMPLE.com' != IsEmail(domain='example.com')
++        assert 'not an email' != IsEmail
++        assert 123 != IsEmail
++        ```
++        """
++        self.domain = domain
++        super().__init__(plain_repr('*') if domain is None else domain)
++
++    def equals(self, other: Any) -> bool:
++        if not isinstance(other, str):
++            return False
++
++        match = self._email_regex.fullmatch(other)
++        if match is None:
++            return False
++
++        return self.domain is None or match.group('domain') == self.domain

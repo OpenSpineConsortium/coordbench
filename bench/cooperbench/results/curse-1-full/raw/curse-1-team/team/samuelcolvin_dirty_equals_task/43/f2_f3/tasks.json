@@ -1,0 +1,29 @@
+[
+  {
+    "id": "29afbbed1d",
+    "title": "Implement feature 3",
+    "owner": "agent2",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792247857.4974318,
+    "last_note": "patch at /workspace/shared/agent2.patch",
+    "metadata": {
+      "feature_id": 3,
+      "assigned_to": "agent2"
+    }
+  },
+  {
+    "id": "7b8f5dae14",
+    "title": "Lead-only: integrate and submit feature 2",
+    "owner": "agent1",
+    "status": "done",
+    "created_by": "bench-runner",
+    "created_at": 1792247857.497505,
+    "last_note": "merged IsMac + agent2's IsEmail, 488 tests pass, patch.txt written",
+    "metadata": {
+      "feature_id": 2,
+      "assigned_to": "agent1",
+      "lead_task": true
+    }
+  }
+]

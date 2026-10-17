@@ -1,0 +1,36 @@
+{
+  "agents": {
+    "agent1": {
+      "calls": 21,
+      "first_context": 75240,
+      "efforts": [
+        "xhigh"
+      ],
+      "refusals": 0,
+      "refusal_examples": [],
+      "disk_full": 0,
+      "transcript_copied": true,
+      "transcript_whole": true,
+      "attempts": 1,
+      "headless_transcripts": 0
+    },
+    "agent2": {
+      "calls": 30,
+      "first_context": 75240,
+      "efforts": [
+        "xhigh"
+      ],
+      "refusals": 1,
+      "refusal_examples": [
+        "permission reject: hook"
+      ],
+      "disk_full": 0,
+      "transcript_copied": true,
+      "transcript_whole": true,
+      "attempts": 1,
+      "headless_transcripts": 0
+    }
+  },
+  "disk_full_log_lines": 0,
+  "harness_error": null
+}

@@ -1,0 +1,31 @@
+commit 0a6594e1f803bce9ca8e71d939bb7f84f746a4e8 (agent2, agent1)
+Merge: a59e0284 e139b1f7
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:50:22 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+    
+    # Conflicts:
+    #       dspy/clients/cache.py
+
+commit a59e0284ea31b3c9e813dc6ada3e7d80a12b08f7
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:50:03 2026 +0000
+
+    Add cache statistics API: global dspy.cache.stats()/reset_stats() and per-call Prediction.get_cache_usage()
+
+ dspy/clients/cache.py         | 40 ++++++++++++++++++++++++++++++++++++
+ dspy/primitives/prediction.py |  9 ++++++++
+ dspy/primitives/program.py    |  8 +++++---
+ dspy/utils/usage_tracker.py   | 48 +++++++++++++++++++++++++++++++++++++++++--
+ 4 files changed, 100 insertions(+), 5 deletions(-)
+
+commit e139b1f7eb3a248166104922cc193f134355e04e
+Author: agent1 <agent1@example.com>
+Date:   Sat Oct 17 14:48:31 2026 +0000
+
+    Add per-entry TTL support to the DSPy cache layers
+
+ dspy/clients/__init__.py | 16 ++++++++++++++++
+ dspy/clients/cache.py    | 46 +++++++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 57 insertions(+), 5 deletions(-)

@@ -1,0 +1,88 @@
+diff --git a/src/jinja2/filters.py b/src/jinja2/filters.py
+index 80ea6504..261f801c 100644
+--- a/src/jinja2/filters.py
++++ b/src/jinja2/filters.py
+@@ -1163,6 +1163,8 @@ def sync_do_groupby(
+     value: "t.Iterable[V]",
+     attribute: t.Union[str, int],
+     default: t.Optional[t.Any] = None,
++    reverse: bool = False,
++    key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+ ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+     """Group a sequence of objects by an attribute using Python's
+     :func:`itertools.groupby`. The attribute can use dot notation for
+@@ -1194,6 +1196,20 @@ def sync_do_groupby(
+           <li>{{ group.grouper }}: {{ group.list|join(", ") }}
+         {% endfor %}</ul>
+ 
++    ``key_transform`` is an optional callable that is applied to each
++    group key before it is yielded as ``grouper``. Only the displayed
++    key changes, the items are still grouped and sorted by the original
++    attribute value. This is useful to format keys such as dates.
++
++    .. sourcecode:: jinja
++
++        {% for month, posts in posts|groupby("date", key_transform=fmt) %}
++          <li>{{ month }}: {{ posts|map(attribute="title")|join(", ") }}</li>
++        {% endfor %}
++
++    .. versionadded:: 3.1
++        The ``key_transform`` parameter.
++
+     You can specify a ``default`` value to use if an object in the list
+     does not have the given attribute.
+ 
+@@ -1203,6 +1219,18 @@ def sync_do_groupby(
+           <li>{{ city }}: {{ items|map(attribute="name")|join(", ") }}</li>
+         {% endfor %}</ul>
+ 
++    Groups are sorted in ascending order by default. Pass
++    ``reverse=True`` to sort them in descending order instead.
++
++    .. sourcecode:: jinja
++
++        <ul>{% for year, items in posts|groupby("year", reverse=true) %}
++          <li>{{ year }}: {{ items|map(attribute="title")|join(", ") }}</li>
++        {% endfor %}</ul>
++
++    .. versionchanged:: 3.1
++        Added the ``reverse`` parameter.
++
+     .. versionchanged:: 3.0
+         Added the ``default`` parameter.
+ 
+@@ -1211,8 +1239,11 @@ def sync_do_groupby(
+     """
+     expr = make_attrgetter(environment, attribute, default=default)
+     return [
+-        _GroupTuple(key, list(values))
+-        for key, values in groupby(sorted(value, key=expr), expr)
++        _GroupTuple(
++            key_transform(key) if key_transform is not None else key,
++            list(values),
++        )
++        for key, values in groupby(sorted(value, key=expr, reverse=reverse), expr)
+     ]
+ 
+ 
+@@ -1222,11 +1253,18 @@ async def do_groupby(
+     value: "t.Union[t.AsyncIterable[V], t.Iterable[V]]",
+     attribute: t.Union[str, int],
+     default: t.Optional[t.Any] = None,
++    reverse: bool = False,
++    key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+ ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+     expr = make_attrgetter(environment, attribute, default=default)
+     return [
+-        _GroupTuple(key, await auto_to_list(values))
+-        for key, values in groupby(sorted(await auto_to_list(value), key=expr), expr)
++        _GroupTuple(
++            key_transform(key) if key_transform is not None else key,
++            await auto_to_list(values),
++        )
++        for key, values in groupby(
++            sorted(await auto_to_list(value), key=expr, reverse=reverse), expr
++        )
+     ]
+ 
+ 

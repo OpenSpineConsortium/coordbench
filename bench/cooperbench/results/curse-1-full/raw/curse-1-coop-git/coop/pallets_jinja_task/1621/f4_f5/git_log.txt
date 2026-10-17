@@ -1,0 +1,31 @@
+commit 7633ab18485dccb8567f36e1c271c4e28880df94 (agent2)
+Merge: 27ea624 1bef65b
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:28:59 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 1a6848ffad21e20129b20d3106b49388090c8f13 (agent1)
+Merge: 1bef65b 27ea624
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:28:47 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 1bef65b3e0193f8bdce9eb3ea4b11ada5aeef877
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:28:29 2026 +0000
+
+    feat(FileSystemLoader): add search path priority configuration
+
+ src/jinja2/loaders.py | 51 ++++++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 48 insertions(+), 3 deletions(-)
+
+commit 27ea6244e59f850b5f39f8242fb80449e70e8c0f
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:28:18 2026 +0000
+
+    Add path cache to FileSystemLoader
+
+ src/jinja2/loaders.py | 51 +++++++++++++++++++++++++++++++++++++++------------
+ 1 file changed, 39 insertions(+), 12 deletions(-)

@@ -1,0 +1,24 @@
+commit b9486eb206d6870b3744f3201d283907ae994692 (agent2, agent1)
+Merge: c53b780 6c85d95
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:20:10 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit c53b780ff3b08e79b92ae02c471cbd87579c2d1f
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:20:10 2026 +0000
+
+    feat(i18n): add ctrans conditional translation extension
+
+ src/jinja2/ext.py | 297 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 297 insertions(+)
+
+commit 6c85d9581460f4e96452ec9d871f86bb7a4c0aeb
+Author: agent1 <agent1@example.com>
+Date:   Sat Oct 17 14:16:20 2026 +0000
+
+    Support a context string as first token of trans block (pgettext/npgettext)
+
+ src/jinja2/ext.py | 38 ++++++++++++++++++++++++--------------
+ 1 file changed, 24 insertions(+), 14 deletions(-)

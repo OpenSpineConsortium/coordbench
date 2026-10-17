@@ -1,0 +1,179 @@
+diff --git a/src/click/core.py b/src/click/core.py
+index 666ad68..3f5ef1d 100644
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@ -228,6 +228,14 @@ class Context:
+         value is not set, it defaults to the value from the parent
+         context. ``Command.show_default`` overrides this default for the
+         specific command.
++    :param validate_nesting: if this is enabled, the context keeps track of
++        the child contexts made with :meth:`_make_sub_context` and raises a
++        :exc:`RuntimeError` if it is closed while any of them is still
++        open. Child contexts made this way inherit the setting. The default
++        is ``False``.
++
++    .. versionchanged:: 8.2
++        Added the ``validate_nesting`` parameter and attribute.
+ 
+     .. versionchanged:: 8.2
+         The ``protected_args`` attribute is deprecated and will be removed in
+@@ -280,6 +288,7 @@ class Context:
+         token_normalize_func: t.Callable[[str], str] | None = None,
+         color: bool | None = None,
+         show_default: bool | None = None,
++        validate_nesting: bool = False,
+     ) -> None:
+         #: the parent context or `None` if none exists.
+         self.parent = parent
+@@ -432,6 +441,15 @@ class Context:
+         self._parameter_source: dict[str, ParameterSource] = {}
+         self._exit_stack = ExitStack()
+ 
++        #: Whether closing this context checks that every child context
++        #: made with :meth:`_make_sub_context` has been closed first.
++        #:
++        #: .. versionadded:: 8.2
++        self.validate_nesting: bool = validate_nesting
++        # The child contexts that are still open. Only filled while
++        # ``validate_nesting`` is enabled.
++        self._child_contexts: list[Context] = []
++
+     @property
+     def protected_args(self) -> list[str]:
+         import warnings
+@@ -477,9 +495,14 @@ class Context:
+         tb: TracebackType | None,
+     ) -> None:
+         self._depth -= 1
+-        if self._depth == 0:
+-            self.close()
+-        pop_context()
++
++        try:
++            if self._depth == 0:
++                self.close()
++        finally:
++            # Always leave the context stack, also when closing fails, for
++            # example because a child context is still open.
++            pop_context()
+ 
+     @contextmanager
+     def scope(self, cleanup: bool = True) -> cabc.Iterator[Context]:
+@@ -606,10 +629,47 @@ class Context:
+         """Invoke all close callbacks registered with
+         :meth:`call_on_close`, and exit all context managers entered
+         with :meth:`with_resource`.
++
++        If :attr:`validate_nesting` is enabled and a child context made
++        with :meth:`_make_sub_context` is still open, nothing is closed and
++        a :exc:`RuntimeError` is raised, so the child contexts can be closed
++        and this one closed again.
++
++        .. versionchanged:: 8.2
++            Raises :exc:`RuntimeError` for open child contexts if
++            :attr:`validate_nesting` is enabled.
+         """
+-        self._exit_stack.close()
+-        # In case the context is reused, create a new exit stack.
+-        self._exit_stack = ExitStack()
++        self._check_children_closed()
++
++        try:
++            self._exit_stack.close()
++            # In case the context is reused, create a new exit stack.
++            self._exit_stack = ExitStack()
++        finally:
++            self._forget_in_parent()
++
++    def _check_children_closed(self) -> None:
++        """Raise :exc:`RuntimeError` naming the child contexts that are
++        still open, if :attr:`validate_nesting` is enabled.
++        """
++        if not self.validate_nesting or not self._child_contexts:
++            return
++
++        open_children = ", ".join(
++            repr(child.info_name) for child in self._child_contexts
++        )
++        raise RuntimeError(
++            f"Cannot close context {self.info_name!r} while its child"
++            f" contexts are still open: {open_children}. Close the child"
++            " contexts before closing the parent."
++        )
++
++    def _forget_in_parent(self) -> None:
++        """Stop the parent context from tracking this one as open."""
++        parent = self.parent
++
++        if parent is not None and self in parent._child_contexts:
++            parent._child_contexts.remove(self)
+ 
+     @property
+     def command_path(self) -> str:
+@@ -728,7 +788,17 @@ class Context:
+ 
+         :meta private:
+         """
+-        return type(self)(command, info_name=command.name, parent=self)
++        sub_ctx = type(self)(
++            command,
++            info_name=command.name,
++            parent=self,
++            validate_nesting=self.validate_nesting,
++        )
++
++        if self.validate_nesting:
++            self._child_contexts.append(sub_ctx)
++
++        return sub_ctx
+ 
+     @t.overload
+     def invoke(
+@@ -1539,6 +1609,10 @@ class Group(Command):
+             with sub_ctx.scope(cleanup=False):
+                 commands[name] = command.to_info_dict(sub_ctx)
+ 
++            # The sub context only exists to describe the command, so it
++            # must not count as an open child of ``ctx``.
++            sub_ctx._forget_in_parent()
++
+         info_dict.update(commands=commands, chain=self.chain)
+         return info_dict
+ 
+diff --git a/src/click/shell_completion.py b/src/click/shell_completion.py
+index 6fd9e54..642ffcf 100644
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@ -544,6 +544,9 @@ def _resolve_context(
+     :param args: List of complete args before the incomplete value.
+     """
+     ctx_args["resilient_parsing"] = True
++    # Completion builds contexts that are never closed in the usual way, so
++    # nesting validation must not complain about them.
++    ctx_args["validate_nesting"] = False
+     ctx = cli.make_context(prog_name, args.copy(), **ctx_args)
+     args = ctx._protected_args + ctx.args
+ 
+@@ -557,7 +560,13 @@ def _resolve_context(
+                 if cmd is None:
+                     return ctx
+ 
+-                ctx = cmd.make_context(name, args, parent=ctx, resilient_parsing=True)
++                ctx = cmd.make_context(
++                    name,
++                    args,
++                    parent=ctx,
++                    resilient_parsing=True,
++                    validate_nesting=False,
++                )
+                 args = ctx._protected_args + ctx.args
+             else:
+                 sub_ctx = ctx
+@@ -575,6 +584,7 @@ def _resolve_context(
+                         allow_extra_args=True,
+                         allow_interspersed_args=False,
+                         resilient_parsing=True,
++                        validate_nesting=False,
+                     )
+                     args = sub_ctx.args
+ 

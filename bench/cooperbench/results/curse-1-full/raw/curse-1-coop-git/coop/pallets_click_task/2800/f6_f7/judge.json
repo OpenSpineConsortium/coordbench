@@ -1,0 +1,363 @@
+{
+  "format": "coordbench-judge/1",
+  "pair": {
+    "repo": "pallets_click_task",
+    "task_id": 2800,
+    "features": [
+      6,
+      7
+    ],
+    "arm": "coop-git",
+    "setting": "coop",
+    "model": "claude-sonnet-5-5",
+    "driver": "session",
+    "run_name": "curse-1-coop-git",
+    "run_id": "coop-git-2800-f6_f7-55d71d"
+  },
+  "calls": {},
+  "skipped": {},
+  "errors": {},
+  "heuristics": {
+    "unanswered_questions": [],
+    "ignored_questions": [],
+    "near_duplicates": [],
+    "speech_acts_keyword": {
+      "2": "Question",
+      "15": "Plan",
+      "21": "Ack",
+      "30": null,
+      "40": null
+    },
+    "resource_division_candidates": [],
+    "negotiation_candidates": [],
+    "contradictions": [],
+    "overlapping_hunks": [
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            132,
+            137
+          ],
+          [
+            132,
+            137
+          ]
+        ],
+        "same_heading": "def iter_params_for_processing("
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            228,
+            233
+          ],
+          [
+            228,
+            233
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            280,
+            285
+          ],
+          [
+            280,
+            285
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            432,
+            437
+          ],
+          [
+            432,
+            437
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            477,
+            485
+          ],
+          [
+            477,
+            485
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            519,
+            524
+          ],
+          [
+            519,
+            524
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            606,
+            616
+          ],
+          [
+            606,
+            616
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            726,
+            734
+          ],
+          [
+            726,
+            734
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            770,
+            784
+          ],
+          [
+            770,
+            784
+          ]
+        ],
+        "same_heading": "class Context:"
+      },
+      {
+        "file": "src/click/core.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            1539,
+            1544
+          ],
+          [
+            1539,
+            1544
+          ]
+        ],
+        "same_heading": "class Group(Command):"
+      },
+      {
+        "file": "src/click/shell_completion.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            271,
+            278
+          ],
+          [
+            271,
+            278
+          ]
+        ],
+        "same_heading": "class ShellComplete:"
+      },
+      {
+        "file": "src/click/shell_completion.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            544,
+            549
+          ],
+          [
+            544,
+            549
+          ]
+        ],
+        "same_heading": "def _resolve_context("
+      },
+      {
+        "file": "src/click/shell_completion.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            557,
+            563
+          ],
+          [
+            557,
+            563
+          ]
+        ],
+        "same_heading": "def _resolve_context("
+      },
+      {
+        "file": "src/click/shell_completion.py",
+        "agents": [
+          "agent1",
+          "agent2"
+        ],
+        "ranges": [
+          [
+            575,
+            580
+          ],
+          [
+            575,
+            580
+          ]
+        ],
+        "same_heading": "def _resolve_context("
+      }
+    ],
+    "insertion_markers": [],
+    "missing_final_status": [
+      "agent1",
+      "agent2"
+    ],
+    "git_disasters": [
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent1",
+        "kind": "force push",
+        "command": "git push team agent1 --force 2>&1"
+      },
+      {
+        "agent": "agent2",
+        "kind": "force push",
+        "command": "git push team agent2 --force 2>&1"
+      }
+    ],
+    "git_broken": [],
+    "git_impatience": [
+      {
+        "agent": "agent2",
+        "command": "docker exec -w /workspace/repo coordbench-coop-git-2800-f6_f7-55d71d-agent2 bash -lc 'git fetch team 2>&1",
+        "at": 1792245522.565,
+        "partner_first_push_at": 1792245525.482
+      }
+    ],
+    "git_destructive": []
+  },
+  "heuristics_meta": {
+    "computed_at": "2026-10-17T14:00:49+00:00",
+    "conversation_source": "events.jsonl",
+    "message_count": 5,
+    "not_computed": {
+      "clean_merge_failed": "no clean naive merge (not scored, or the merge conflicted)"
+    },
+    "definitions": {
+      "unanswered_questions": "C1a candidates: a message with '?' whose addressees send nothing later",
+      "ignored_questions": "C1b candidates: [question, reply] where the reply shares no content word with it",
+      "near_duplicates": "C4a/C4b candidates: [id, id, difflib ratio >= 0.9, both status-like], same sender",
+      "speech_acts_keyword": "the keyword baseline of the speech acts, beside the judge's",
+      "resource_division_candidates": "[message, reply, file]: a file and a line range answered with not/won't/avoid",
+      "negotiation_candidates": "[message, reply]: options (1) and (2) with a question, answered by a choice",
+      "contradictions": "C3a and Broken commitment candidates: a done/added/implemented claim naming an identifier the sender's patch lacks or a file it never touches",
+      "overlapping_hunks": "Work overlap signal: hunks of two patches on one file with meeting base line ranges",
+      "insertion_markers": "App D: added comment lines marking where another agent inserts code",
+      "missing_final_status": "App D: agents whose last message precedes their last edit, or who sent none after it",
+      "git_disasters": "coordbench's label for git-failures.json's git_disasters: force pushes and hard resets",
+      "git_broken": "coordbench's label for broken: a push followed by a failing test run",
+      "git_impatience": "coordbench's label for impatience: fetches before the partner's first push",
+      "git_destructive": "coordbench's label for destructive: a commit deleting 100 or more lines of a file the partner changed (from git log --stat, approximate when the bar is scaled)"
+    },
+    "final_status_times": {
+      "agent1": {
+        "last_edit_at": 1792245560.388,
+        "last_message_at": 1792245534.1628444
+      },
+      "agent2": {
+        "last_edit_at": 1792245589.33,
+        "last_message_at": 1792245524.3854656
+      }
+    },
+    "git_blog_names": {
+      "impatience": "The Real-Time Interaction Problem",
+      "destructive": "Uncooperative Behaviors",
+      "broken": "The Commitment Problem",
+      "git_disasters": "Misuse of Cooperation Tools",
+      "blame": "Hallucination in Communication",
+      "sagas": "Hallucination in Communication"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+diff --cc src/jinja2/loaders.py
+index c4578c52,fa06e6ea..00000000
+--- a/src/jinja2/loaders.py
++++ b/src/jinja2/loaders.py
+@@@ -187,12 -199,16 +199,25 @@@ class FileSystemLoader(BaseLoader)
+      :param encoding: Use this encoding to read the text from template
+          files.
+      :param followlinks: Follow symbolic links in the path.
+++<<<<<<< HEAD
+ +    :param path_transform: A function that takes a template name and
+ +        returns the name to look up. Applied before the template is
+ +        searched for.
+ +
+ +    .. versionchanged:: 3.1
+ +        Added the ``path_transform`` parameter.
+++=======
++     :param fallback_searchpath: A path, or list of paths, to directories
++         that are searched in order, after all of ``searchpath``, when a
++         template is not found in the primary paths.
++     :param path_transform: A function that takes a template name and
++         returns the name to look up. Applied before the template is
++         searched for, in the primary and the fallback paths alike.
++ 
++     .. versionchanged:: 3.1
++         Added the ``fallback_searchpath`` and ``path_transform``
++         parameters.
+++>>>>>>> agent1
+  
+      .. versionchanged:: 2.8
+          Added the ``followlinks`` parameter.
+@@@ -203,6 -219,9 +228,12 @@@
+          searchpath: t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]],
+          encoding: str = "utf-8",
+          followlinks: bool = False,
+++<<<<<<< HEAD
+++=======
++         fallback_searchpath: t.Optional[
++             t.Union[str, os.PathLike, t.Sequence[t.Union[str, os.PathLike]]]
++         ] = None,
+++>>>>>>> agent1
+          path_transform: t.Optional[t.Callable[[str], str]] = None,
+      ) -> None:
+          if not isinstance(searchpath, abc.Iterable) or isinstance(searchpath, str):
+@@@ -224,7 -252,9 +264,13 @@@
+              # Report the name that was asked for, not the transformed one.
+              raise TemplateNotFound(template) from None
+  
+++<<<<<<< HEAD
+ +        for searchpath in self.searchpath:
+++=======
++         # Primary paths are searched first, fallback paths only after
++         # the template was not found in any of them.
++         for searchpath in self.searchpath + self.fallback_searchpath:
+++>>>>>>> agent1
+              filename = os.path.join(searchpath, *pieces)
+              f = open_if_exists(filename)
+              if f is None:

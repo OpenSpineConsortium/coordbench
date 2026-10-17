@@ -1,0 +1,94 @@
+diff --git a/src/jinja2/filters.py b/src/jinja2/filters.py
+index 80ea6504..9a67c75f 100644
+--- a/src/jinja2/filters.py
++++ b/src/jinja2/filters.py
+@@ -1157,12 +1157,26 @@ class _GroupTuple(t.NamedTuple):
+         return tuple.__str__(self)
+ 
+ 
++def _transform_group_key(
++    key: t.Any, key_transform: t.Optional[t.Callable[[t.Any], t.Any]]
++) -> t.Any:
++    """Apply ``key_transform`` to a group key for display, or return the
++    key unchanged when there is no transform.
++    """
++    if key_transform is None:
++        return key
++
++    return key_transform(key)
++
++
+ @pass_environment
+ def sync_do_groupby(
+     environment: "Environment",
+     value: "t.Iterable[V]",
+     attribute: t.Union[str, int],
+     default: t.Optional[t.Any] = None,
++    reverse: bool = False,
++    key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+ ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+     """Group a sequence of objects by an attribute using Python's
+     :func:`itertools.groupby`. The attribute can use dot notation for
+@@ -1203,6 +1217,31 @@ def sync_do_groupby(
+           <li>{{ city }}: {{ items|map(attribute="name")|join(", ") }}</li>
+         {% endfor %}</ul>
+ 
++    Groups are sorted by their key in ascending order. Pass
++    ``reverse=True`` to sort them in descending order instead, such as
++    to show the newest or highest values first.
++
++    .. sourcecode:: jinja
++
++        <ul>{% for year, items in posts|groupby("year", reverse=True) %}
++          <li>{{ year }}: {{ items|length }} posts</li>
++        {% endfor %}</ul>
++
++    ``key_transform`` is a callable that formats the key of each group
++    for display. It is applied to the ``grouper`` of each group after
++    the items have been grouped and sorted, so it changes only the key
++    that is yielded, never which items end up together or the order of
++    the groups.
++
++    .. sourcecode:: jinja
++
++        <ul>{% for month, items in posts|groupby("date", key_transform=month_label) %}
++          <li>{{ month }}: {{ items|length }} posts</li>
++        {% endfor %}</ul>
++
++    .. versionchanged:: 3.1
++        Added the ``reverse`` and ``key_transform`` parameters.
++
+     .. versionchanged:: 3.0
+         Added the ``default`` parameter.
+ 
+@@ -1211,8 +1250,8 @@ def sync_do_groupby(
+     """
+     expr = make_attrgetter(environment, attribute, default=default)
+     return [
+-        _GroupTuple(key, list(values))
+-        for key, values in groupby(sorted(value, key=expr), expr)
++        _GroupTuple(_transform_group_key(key, key_transform), list(values))
++        for key, values in groupby(sorted(value, key=expr, reverse=reverse), expr)
+     ]
+ 
+ 
+@@ -1222,11 +1261,17 @@ async def do_groupby(
+     value: "t.Union[t.AsyncIterable[V], t.Iterable[V]]",
+     attribute: t.Union[str, int],
+     default: t.Optional[t.Any] = None,
++    reverse: bool = False,
++    key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+ ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+     expr = make_attrgetter(environment, attribute, default=default)
+     return [
+-        _GroupTuple(key, await auto_to_list(values))
+-        for key, values in groupby(sorted(await auto_to_list(value), key=expr), expr)
++        _GroupTuple(
++            _transform_group_key(key, key_transform), await auto_to_list(values)
++        )
++        for key, values in groupby(
++            sorted(await auto_to_list(value), key=expr, reverse=reverse), expr
++        )
+     ]
+ 
+ 

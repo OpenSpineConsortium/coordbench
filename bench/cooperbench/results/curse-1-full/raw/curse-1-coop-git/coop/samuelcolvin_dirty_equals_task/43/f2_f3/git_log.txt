@@ -1,0 +1,33 @@
+commit 17cbc142498e6d02923088e078854a7fcbebcff2 (agent2)
+Merge: 7eeafa8 59051c5
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:37:21 2026 +0000
+
+    Merge team/agent1 (IsMac) into agent2
+
+commit 975f3ed2ef5a4c5b4128f5d5f215b460de2d8050 (agent1)
+Merge: 59051c5 7eeafa8
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:37:10 2026 +0000
+
+    Merge team/agent2 (IsEmail)
+
+commit 7eeafa85ce3339fbba59935495aa4a1307f3f2c9
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:36:39 2026 +0000
+
+    Add IsEmail validator
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 49 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 50 insertions(+), 2 deletions(-)
+
+commit 59051c5a2585eea7ac2d5fc0c06b54c0473998ec
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:36:31 2026 +0000
+
+    Add IsMac validator
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 51 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 53 insertions(+), 1 deletion(-)

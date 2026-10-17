@@ -1,0 +1,75 @@
+diff --cc dirty_equals/__init__.py
+index 0a1be71,ba28e21..0000000
+--- a/dirty_equals/__init__.py
++++ b/dirty_equals/__init__.py
+@@@ -70,7 -71,6 +71,10 @@@ __all__ = 
+      'IsJson',
+      'IsUUID',
+      'IsMac',
+++<<<<<<< HEAD
+ +    'IsEmail',
+++=======
+++>>>>>>> agent1
+      # strings
+      'IsStr',
+      'IsBytes',
+diff --cc dirty_equals/_other.py
+index 7a88b41,b8ec015..0000000
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@@ -102,52 -102,6 +102,55 @@@ class IsMac(DirtyEquals[str])
+              return bool(self._patterns[self.format].fullmatch(other))
+  
+  
+++<<<<<<< HEAD
+ +_EMAIL_REGEX = re.compile(
+ +    r'[a-zA-Z0-9._%+-]+'  # local part
+ +    r'@'
+ +    r'(?P<domain>(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,})'  # dotted domain with a TLD
+ +)
+ +
+ +
+ +class IsEmail(DirtyEquals[str]):
+ +    """
+ +    A class that checks if a value is a valid email address, optionally checking the domain.
+ +    """
+ +
+ +    def __init__(self, domain: Optional[str] = None):
+ +        """
+ +        Args:
+ +            domain: The domain the email address must belong to, compared exactly and case-sensitively,
+ +                if omitted, any domain is accepted.
+ +
+ +        ```py title="IsEmail"
+ +        from dirty_equals import IsEmail
+ +
+ +        assert 'user@example.com' == IsEmail
+ +        assert 'user@example.com' == IsEmail()
+ +        assert 'first.last+tag@sub.example.com' == IsEmail
+ +        assert 'user@example.com' == IsEmail(domain='example.com')
+ +        assert 'user@example.com' != IsEmail(domain='example.org')
+ +        assert 'user@EXAMPLE.com' != IsEmail(domain='example.com')
+ +        assert 'not an email' != IsEmail
+ +        assert 'user@' != IsEmail
+ +        assert 123 != IsEmail
+ +        ```
+ +        """
+ +        self.domain = domain
+ +        super().__init__(plain_repr('*') if domain is None else domain)
+ +
+ +    def equals(self, other: Any) -> bool:
+ +        if not isinstance(other, str):
+ +            return False
+ +
+ +        match = _EMAIL_REGEX.fullmatch(other)
+ +        if match is None:
+ +            return False
+ +
+ +        return self.domain is None or match.group('domain') == self.domain
+ +
+ +
+++=======
+++>>>>>>> agent1
+  AnyJson = object
+  JsonType = TypeVar('JsonType', AnyJson, Any)
+  

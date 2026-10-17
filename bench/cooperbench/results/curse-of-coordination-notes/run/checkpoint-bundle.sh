@@ -1,5 +1,6 @@
 #!/bin/bash
-# How ../../curse-1-checkpoint/raw was made at the checkpoint of 2026-10-16:
+# How ../../curse-1-checkpoint/raw was made at the checkpoint of 2026-10-16,
+# and ../../curse-1-full/raw once the full run was done on 2026-10-17:
 # every finished run of the full run, through subset.py and bundle.py, from
 # a copy of the queue that marks the full run's items alone (the step's
 # 40 left to ../../curse-1-step-8/), with the pilot's config.json for each

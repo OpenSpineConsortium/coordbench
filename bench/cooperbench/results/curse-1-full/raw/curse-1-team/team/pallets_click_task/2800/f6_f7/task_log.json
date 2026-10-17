@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "create",
+    "task_id": "da8d1c2b75",
+    "by": "bench-runner",
+    "title": "Implement feature 7",
+    "ts": 1792244905.924751
+  },
+  {
+    "kind": "create",
+    "task_id": "7464e328c1",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 6",
+    "ts": 1792244905.9247987
+  },
+  {
+    "kind": "claim",
+    "task_id": "da8d1c2b75",
+    "by": "agent2",
+    "ts": 1792244934.5159225
+  },
+  {
+    "kind": "claim",
+    "task_id": "7464e328c1",
+    "by": "agent1",
+    "ts": 1792244992.4938762
+  },
+  {
+    "kind": "update",
+    "task_id": "7464e328c1",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing feature 6 myself",
+    "ts": 1792244992.6137953
+  },
+  {
+    "kind": "update",
+    "task_id": "da8d1c2b75",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792245122.019288
+  },
+  {
+    "kind": "update",
+    "task_id": "7464e328c1",
+    "by": "agent1",
+    "status": "done",
+    "note": "feature 6 implemented; agent2 patch applied and merged tree tested",
+    "ts": 1792245217.058546
+  }
+]

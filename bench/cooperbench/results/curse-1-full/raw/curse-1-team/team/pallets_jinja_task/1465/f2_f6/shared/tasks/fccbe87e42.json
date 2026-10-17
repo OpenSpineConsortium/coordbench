@@ -1,0 +1,1 @@
+{"id": "fccbe87e42", "title": "Lead-only: integrate and submit feature 2", "owner": "agent1", "status": "in_progress", "created_by": "bench-runner", "created_at": 1792245758.4982533, "last_note": "feature 2 implemented in tree; waiting for agent2 patch to merge", "metadata": {"feature_id": 2, "assigned_to": "agent1", "lead_task": true}}

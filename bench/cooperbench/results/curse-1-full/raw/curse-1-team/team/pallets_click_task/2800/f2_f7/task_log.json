@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "create",
+    "task_id": "c7241124d9",
+    "by": "bench-runner",
+    "title": "Implement feature 7",
+    "ts": 1792244900.7756228
+  },
+  {
+    "kind": "create",
+    "task_id": "2a448c539e",
+    "by": "bench-runner",
+    "title": "Lead-only: integrate and submit feature 2",
+    "ts": 1792244900.7757015
+  },
+  {
+    "kind": "claim",
+    "task_id": "c7241124d9",
+    "by": "agent2",
+    "ts": 1792244942.704792
+  },
+  {
+    "kind": "claim",
+    "task_id": "2a448c539e",
+    "by": "agent1",
+    "ts": 1792244946.3156638
+  },
+  {
+    "kind": "update",
+    "task_id": "2a448c539e",
+    "by": "agent1",
+    "status": "in_progress",
+    "note": "implementing on_exit",
+    "ts": 1792244946.41547
+  },
+  {
+    "kind": "update",
+    "task_id": "c7241124d9",
+    "by": "agent2",
+    "status": "in_progress",
+    "note": "started feature 7 (validate_nesting)",
+    "ts": 1792245026.7322352
+  },
+  {
+    "kind": "update",
+    "task_id": "c7241124d9",
+    "by": "agent2",
+    "status": "done",
+    "note": "patch at /workspace/shared/agent2.patch",
+    "ts": 1792245246.9336655
+  },
+  {
+    "kind": "update",
+    "task_id": "2a448c539e",
+    "by": "agent1",
+    "status": "done",
+    "note": "merged on_exit (f2) + validate_nesting (f7); full suite passes; patch.txt written",
+    "ts": 1792245306.546852
+  }
+]

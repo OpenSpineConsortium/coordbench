@@ -1,0 +1,27 @@
+diff --cc dirty_equals/_other.py
+index 07081f1,e5bd08a..0000000
+--- a/dirty_equals/_other.py
++++ b/dirty_equals/_other.py
+@@@ -1,6 -1,6 +1,10 @@@
+  import json
+  import re
+++<<<<<<< HEAD
+ +from typing import Any, Callable, TypeVar, overload
+++=======
++ from typing import Any, Callable, Optional, TypeVar, overload
+++>>>>>>> agent1
+  from uuid import UUID
+  
+  from ._base import DirtyEquals
+@@@ -128,7 -128,7 +132,11 @@@ class IsEmail(DirtyEquals[str])
+  
+      _email_regex = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}')
+  
+++<<<<<<< HEAD
+ +    def __init__(self, domain: 'str | None' = None):
+++=======
++     def __init__(self, domain: Optional[str] = None):
+++>>>>>>> agent1
+          """
+          Args:
+              domain: The domain the email address must belong to, compared case-sensitively,

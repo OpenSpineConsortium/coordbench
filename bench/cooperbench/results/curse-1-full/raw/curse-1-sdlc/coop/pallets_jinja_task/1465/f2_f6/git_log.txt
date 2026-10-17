@@ -1,0 +1,55 @@
+commit fd9612835c6761b14ac7bce59b916d2f66dbd9a8 (main)
+Merge: fced535 aebfda0
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:04:35 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit aebfda09726a83476f3292292abcbf1bf56c99fc (claude/6)
+Merge: 8f55ef4 fced535
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:04:30 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/6
+    
+    # Conflicts:
+    #       src/jinja2/filters.py
+
+commit 8f55ef4cc89ef23b194c1cbb600d045e916fe868
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:03:55 2026 +0000
+
+    Add key_transform parameter to groupby filter
+    
+    The callable is applied to each group key after sorting and grouping by the
+    original attribute value, so only the displayed grouper changes and the
+    grouping logic stays as it was. Defaults to None for compatibility.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/jinja2/filters.py | 31 +++++++++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+commit fced53565d93c3d5f039accd1c65e3ac9c83f7c0
+Merge: 20eb7f5 edf50cc
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:03:39 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit edf50cc26c11424cbc8ab8a541c13b66da40d28f (claude/2)
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:03:33 2026 +0000
+
+    Add reverse parameter to groupby filter for descending sort order
+    
+    reverse=True is passed to sorted() so the groups come out from highest to
+    lowest. The default is False, so existing templates are unchanged. Both the
+    sync and the async variant take it.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/jinja2/filters.py | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)

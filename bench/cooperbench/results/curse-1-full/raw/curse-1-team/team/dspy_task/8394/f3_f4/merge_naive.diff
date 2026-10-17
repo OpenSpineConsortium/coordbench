@@ -1,0 +1,97 @@
+diff --cc dspy/clients/cache.py
+index 31a32b5e7,2ea575e07..000000000
+--- a/dspy/clients/cache.py
++++ b/dspy/clients/cache.py
+@@@ -25,6 -25,9 +25,12 @@@ _CACHE_EVENT_COUNTERS = 
+      "miss": ("misses",),
+  }
+  
+++<<<<<<< HEAD
+++=======
++ # Marks "not found" in `Cache.get`, since None and other falsy values can be cached.
++ _MISSING = object()
++ 
+++>>>>>>> agent1
+  
+  class Cache:
+      """DSPy Cache
+@@@ -71,6 -80,26 +83,29 @@@
+          self._lock = threading.RLock()
+          # Global cache statistics: hits, mem_hits, disk_hits and misses. Keys are only added once they are counted.
+          self._stats = Counter()
+++<<<<<<< HEAD
+++=======
++ 
++     def _new_memory_cache(self, ttl: Optional[int]):
++         """Make an empty in-memory cache: one whose entries expire after `ttl` seconds, or an LRU one if `ttl` is None."""
++         if ttl is not None:
++             return TTLCache(maxsize=self.memory_max_entries, ttl=ttl)
++         return LRUCache(maxsize=self.memory_max_entries)
++ 
++     def set_ttl(self, ttl: Optional[int]) -> None:
++         """Change the time-to-live (in seconds) that applies to entries put from now on; None means they never expire.
++ 
++         Entries already in memory are carried over (a TTL cache starts their clock again), and entries already on disk
++         keep the expiry they were written with.
++         """
++         with self._lock:
++             self.ttl = ttl
++             if self.enable_memory_cache:
++                 old_entries = dict(self.memory_cache)
++                 self.memory_cache = self._new_memory_cache(ttl)
++                 for key, value in old_entries.items():
++                     self.memory_cache[key] = value
+++>>>>>>> agent1
+  
+      def __contains__(self, key: str) -> bool:
+          """Check if a key is in the cache."""
+@@@ -116,18 -145,36 +151,49 @@@
+              logger.debug(f"Failed to generate cache key for request: {request}")
+              return None
+  
++         response = _MISSING
+          if self.enable_memory_cache and key in self.memory_cache:
+              with self._lock:
+++<<<<<<< HEAD
+ +                response = self.memory_cache[key]
+ +            self._record_cache_event("mem_hit")
+ +        elif self.enable_disk_cache and key in self.disk_cache:
+ +            # Found on disk but not in memory cache, add to memory cache
+ +            response = self.disk_cache[key]
+ +            if self.enable_memory_cache:
+ +                with self._lock:
+ +                    self.memory_cache[key] = response
+ +            self._record_cache_event("disk_hit")
+ +        else:
+++=======
++                 try:
++                     response = self.memory_cache[key]
++                 except KeyError:
++                     # With a TTL the entry can expire between the check above and this read.
++                     pass
++             if response is not _MISSING:
++                 self._record_cache_event("mem_hit")
++         if response is _MISSING and self.enable_disk_cache and key in self.disk_cache:
++             # Found on disk but not in memory cache, add to memory cache
++             try:
++                 response = self.disk_cache[key]
++             except KeyError:
++                 # Likewise, the entry can expire on disk between the check and the read.
++                 pass
++             else:
++                 if self.enable_memory_cache:
++                     with self._lock:
++                         self.memory_cache[key] = response
++                 self._record_cache_event("disk_hit")
++ 
++         if response is _MISSING:
++             if self.enable_disk_cache and self.ttl is not None:
++                 # Lazy purge: a miss is a good moment to drop the expired entries still held on disk.
++                 try:
++                     self.disk_cache.expire()
++                 except Exception as e:
++                     logger.debug(f"Failed to purge expired entries from disk cache: {e}")
+++>>>>>>> agent1
+              self._record_cache_event("miss")
+              return None
+  

@@ -1,0 +1,36 @@
+{
+  "agents": {
+    "agent1": {
+      "calls": 24,
+      "first_context": 75230,
+      "efforts": [
+        "xhigh"
+      ],
+      "refusals": 1,
+      "refusal_examples": [
+        "Blocked: sleep 30 followed by: /root/cooperbench/logs/curse-1-coop/coop/dspy_task/8394/f3_f4/bin/agent1/coop-recv. To wait for a condition, use Monitor with an "
+      ],
+      "disk_full": 0,
+      "transcript_copied": true,
+      "transcript_whole": true,
+      "attempts": 1,
+      "headless_transcripts": 0
+    },
+    "agent2": {
+      "calls": 25,
+      "first_context": 75230,
+      "efforts": [
+        "xhigh"
+      ],
+      "refusals": 0,
+      "refusal_examples": [],
+      "disk_full": 0,
+      "transcript_copied": true,
+      "transcript_whole": true,
+      "attempts": 1,
+      "headless_transcripts": 0
+    }
+  },
+  "disk_full_log_lines": 0,
+  "harness_error": null
+}

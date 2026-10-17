@@ -1,0 +1,370 @@
+diff --git a/dspy/clients/__init__.py b/dspy/clients/__init__.py
+index 52be745ab..198679afc 100644
+--- a/dspy/clients/__init__.py
++++ b/dspy/clients/__init__.py
+@@ -33,6 +33,7 @@ def configure_cache(
+     disk_size_limit_bytes: Optional[int] = DISK_CACHE_LIMIT,
+     memory_max_entries: Optional[int] = 1000000,
+     enable_litellm_cache: bool = False,
++    ttl: Optional[int] = None,
+ ):
+     """Configure the cache for DSPy.
+ 
+@@ -43,6 +44,8 @@ def configure_cache(
+         disk_size_limit_bytes: The size limit of the on-disk cache.
+         memory_max_entries: The maximum number of entries in the in-memory cache.
+         enable_litellm_cache: Whether to enable LiteLLM cache.
++        ttl: Time-to-live of a cache entry in seconds, for both the in-memory and the on-disk cache. `None` (the
++            default) means entries never expire.
+     """
+     if enable_disk_cache and enable_litellm_cache:
+         raise ValueError(
+@@ -72,9 +75,22 @@ def configure_cache(
+         disk_cache_dir,
+         disk_size_limit_bytes,
+         memory_max_entries,
++        ttl=ttl,
+     )
+ 
+ 
++def set_ttl(seconds: Optional[int]):
++    """Set the time-to-live of the entries DSPy's cache writes from now on.
++
++    Args:
++        seconds: Number of seconds after which a cache entry expires, in both the in-memory and the on-disk cache.
++            `None` turns expiry off, so entries live as long as they would by default.
++    """
++    import dspy
++
++    dspy.cache.set_ttl(seconds)
++
++
+ litellm.telemetry = False
+ litellm.cache = None  # By default we disable litellm cache and use DSPy on-disk cache.
+ 
+@@ -84,6 +100,7 @@ DSPY_CACHE = Cache(
+     disk_cache_dir=DISK_CACHE_DIR,
+     disk_size_limit_bytes=DISK_CACHE_LIMIT,
+     memory_max_entries=1000000,
++    ttl=None,
+ )
+ 
+ # Turn off by default to avoid LiteLLM logging during every LM call.
+@@ -112,4 +129,5 @@ __all__ = [
+     "enable_litellm_logging",
+     "disable_litellm_logging",
+     "configure_cache",
++    "set_ttl",
+ ]
+diff --git a/dspy/clients/cache.py b/dspy/clients/cache.py
+index bfa7dbde8..c7f9d9410 100644
+--- a/dspy/clients/cache.py
++++ b/dspy/clients/cache.py
+@@ -2,6 +2,7 @@ import copy
+ import inspect
+ import logging
+ import threading
++from collections import Counter
+ from functools import wraps
+ from hashlib import sha256
+ from typing import Any, Dict, Optional
+@@ -9,18 +10,26 @@ from typing import Any, Dict, Optional
+ import cloudpickle
+ import pydantic
+ import ujson
+-from cachetools import LRUCache
++from cachetools import LRUCache, TTLCache
+ from diskcache import FanoutCache
+ 
++from dspy.dsp.utils.settings import settings
++
+ logger = logging.getLogger(__name__)
+ 
++# Counters kept by `Cache.stats()`. `hits` is always `mem_hits + disk_hits`.
++_STAT_KEYS = ("hits", "mem_hits", "disk_hits", "misses")
++
+ 
+ class Cache:
+     """DSPy Cache
+ 
+     `Cache` provides 2 levels of caching (in the given order):
+-        1. In-memory cache - implemented with cachetools.LRUCache
++        1. In-memory cache - implemented with cachetools.LRUCache, or cachetools.TTLCache when a `ttl` is set
+         2. On-disk cache - implemented with diskcache.FanoutCache
++
++    By default entries live forever (until evicted for space). When `ttl` is given, an entry expires `ttl` seconds
++    after it was written, in both layers.
+     """
+ 
+     def __init__(
+@@ -30,7 +39,7 @@ class Cache:
+         disk_cache_dir: str,
+         disk_size_limit_bytes: Optional[int] = 1024 * 1024 * 10,
+         memory_max_entries: Optional[int] = 1000000,
+-
++        ttl: Optional[int] = None,
+     ):
+         """
+         Args:
+@@ -39,12 +48,16 @@ class Cache:
+             disk_cache_dir: The directory where the disk cache is stored.
+             disk_size_limit_bytes: The maximum size of the disk cache (in bytes).
+             memory_max_entries: The maximum size of the in-memory cache (in number of items).
++            ttl: Time-to-live of an entry in seconds, in both the memory and the disk cache. `None` (the default)
++                means entries never expire.
+         """
+ 
+         self.enable_disk_cache = enable_disk_cache
+         self.enable_memory_cache = enable_memory_cache
++        self.memory_max_entries = memory_max_entries
++        self.ttl = ttl
+         if self.enable_memory_cache:
+-            self.memory_cache = LRUCache(maxsize=memory_max_entries)
++            self.memory_cache = self._new_memory_cache(memory_max_entries, ttl)
+         else:
+             self.memory_cache = {}
+         if self.enable_disk_cache:
+@@ -58,11 +71,54 @@ class Cache:
+             self.disk_cache = {}
+ 
+         self._lock = threading.RLock()
++        self._stats = Counter({key: 0 for key in _STAT_KEYS})
++
++    @staticmethod
++    def _new_memory_cache(maxsize: Optional[int], ttl: Optional[int]):
++        """Make an empty in-memory cache: expiring when a ttl is given, plain LRU otherwise."""
++        if ttl is not None:
++            return TTLCache(maxsize=maxsize, ttl=ttl)
++        return LRUCache(maxsize=maxsize)
+ 
+     def __contains__(self, key: str) -> bool:
+         """Check if a key is in the cache."""
+         return key in self.memory_cache or key in self.disk_cache
+ 
++    def stats(self) -> Dict[str, int]:
++        """Return a snapshot of the cache statistics accumulated since creation or the last `reset_stats()`.
++
++        The keys are `hits`, `mem_hits`, `disk_hits` and `misses`, where `hits == mem_hits + disk_hits`.
++        """
++        with self._lock:
++            return {key: self._stats[key] for key in _STAT_KEYS}
++
++    def reset_stats(self) -> None:
++        """Reset all cache statistics counters to zero."""
++        with self._lock:
++            for key in _STAT_KEYS:
++                self._stats[key] = 0
++
++    def _record(self, event: str) -> None:
++        """Count one lookup outcome: `mem_hit`, `disk_hit` or `miss`.
++
++        The global counters are updated under the cache's lock. If a `CacheUsageTracker` is active in the current
++        context (`track_usage=True`), the event is also added to it, so a prediction can report the cache events of
++        its own call.
++        """
++        with self._lock:
++            if event == "mem_hit":
++                self._stats["mem_hits"] += 1
++                self._stats["hits"] += 1
++            elif event == "disk_hit":
++                self._stats["disk_hits"] += 1
++                self._stats["hits"] += 1
++            else:
++                self._stats["misses"] += 1
++
++        cache_usage_tracker = settings.get("cache_usage_tracker")
++        if cache_usage_tracker is not None:
++            cache_usage_tracker.add_event(event)
++
+     def cache_key(self, request: Dict[str, Any], ignored_args_for_cache_key: Optional[list[str]] = None) -> str:
+         """
+         Obtain a unique cache key for the given request dictionary by hashing its JSON
+@@ -106,13 +162,17 @@ class Cache:
+         if self.enable_memory_cache and key in self.memory_cache:
+             with self._lock:
+                 response = self.memory_cache[key]
++            self._record("mem_hit")
+         elif self.enable_disk_cache and key in self.disk_cache:
+             # Found on disk but not in memory cache, add to memory cache
+             response = self.disk_cache[key]
+             if self.enable_memory_cache:
+                 with self._lock:
+                     self.memory_cache[key] = response
++            self._record("disk_hit")
+         else:
++            self._record("miss")
++            self._purge_expired_disk_entries()
+             return None
+ 
+         response = copy.deepcopy(response)
+@@ -140,11 +200,41 @@ class Cache:
+ 
+         if self.enable_disk_cache:
+             try:
+-                self.disk_cache[key] = value
++                if self.ttl is not None:
++                    self.disk_cache.set(key, value, expire=self.ttl)
++                else:
++                    self.disk_cache[key] = value
+             except Exception as e:
+                 # Disk cache writing can fail for different reasons, e.g. disk full or the `value` is not picklable.
+                 logger.debug(f"Failed to put value in disk cache: {value}, {e}")
+ 
++    def _purge_expired_disk_entries(self) -> None:
++        """Drop expired entries from the disk cache so the on-disk store stays trim; only when a ttl is set."""
++        if self.ttl is None or not self.enable_disk_cache:
++            return
++
++        try:
++            self.disk_cache.expire()
++        except Exception as e:
++            logger.debug(f"Failed to purge expired entries from disk cache: {e}")
++
++    def set_ttl(self, seconds: Optional[int]) -> None:
++        """Change the time-to-live of entries written from now on; `None` turns expiry off.
++
++        The entries already in memory are kept, and start their new lifetime now. Entries already on disk keep the
++        expiry they were written with.
++        """
++        with self._lock:
++            self.ttl = seconds
++            if not self.enable_memory_cache:
++                return
++
++            maxsize = getattr(self.memory_cache, "maxsize", self.memory_max_entries)
++            new_memory_cache = self._new_memory_cache(maxsize, seconds)
++            for key, value in list(self.memory_cache.items()):
++                new_memory_cache[key] = value
++            self.memory_cache = new_memory_cache
++
+     def reset_memory_cache(self) -> None:
+         if not self.enable_memory_cache:
+             return
+diff --git a/dspy/primitives/prediction.py b/dspy/primitives/prediction.py
+index 670b816b2..dc33c56be 100644
+--- a/dspy/primitives/prediction.py
++++ b/dspy/primitives/prediction.py
+@@ -10,6 +10,7 @@ class Prediction(Example):
+ 
+         self._completions = None
+         self._lm_usage = None
++        self._cache_usage = None
+ 
+     def get_lm_usage(self):
+         return self._lm_usage
+@@ -17,6 +18,16 @@ class Prediction(Example):
+     def set_lm_usage(self, value):
+         self._lm_usage = value
+ 
++    def get_cache_usage(self):
++        """Return the cache events (`hits`, `mem_hits`, `disk_hits`, `misses`) of the call that made this prediction.
++
++        Like `get_lm_usage()`, this is only available when the call ran with `track_usage=True`; otherwise it is None.
++        """
++        return self._cache_usage
++
++    def set_cache_usage(self, value):
++        self._cache_usage = value
++
+     @classmethod
+     def from_completions(cls, list_or_dict, signature=None):
+         obj = cls()
+diff --git a/dspy/primitives/program.py b/dspy/primitives/program.py
+index 39457c368..0184408c3 100644
+--- a/dspy/primitives/program.py
++++ b/dspy/primitives/program.py
+@@ -9,7 +9,7 @@ from dspy.predict.parallel import Parallel
+ from dspy.primitives.module import BaseModule
+ from dspy.utils.callback import with_callbacks
+ from dspy.utils.inspect_history import pretty_print_history
+-from dspy.utils.usage_tracker import track_usage
++from dspy.utils.usage_tracker import track_cache_usage, track_usage
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -56,9 +56,10 @@ class Module(BaseModule, metaclass=ProgramMeta):
+ 
+         with settings.context(caller_modules=caller_modules):
+             if settings.track_usage and thread_local_overrides.get().get("usage_tracker") is None:
+-                with track_usage() as usage_tracker:
++                with track_usage() as usage_tracker, track_cache_usage() as cache_usage_tracker:
+                     output = self.forward(*args, **kwargs)
+                 output.set_lm_usage(usage_tracker.get_total_tokens())
++                output.set_cache_usage(cache_usage_tracker.get_cache_usage())
+                 return output
+ 
+             return self.forward(*args, **kwargs)
+@@ -71,9 +72,10 @@ class Module(BaseModule, metaclass=ProgramMeta):
+ 
+         with settings.context(caller_modules=caller_modules):
+             if settings.track_usage and thread_local_overrides.get().get("usage_tracker") is None:
+-                with track_usage() as usage_tracker:
++                with track_usage() as usage_tracker, track_cache_usage() as cache_usage_tracker:
+                     output = await self.aforward(*args, **kwargs)
+                     output.set_lm_usage(usage_tracker.get_total_tokens())
++                    output.set_cache_usage(cache_usage_tracker.get_cache_usage())
+                     return output
+ 
+             return await self.aforward(*args, **kwargs)
+diff --git a/dspy/utils/usage_tracker.py b/dspy/utils/usage_tracker.py
+index 5199f3ade..4a656a7af 100644
+--- a/dspy/utils/usage_tracker.py
++++ b/dspy/utils/usage_tracker.py
+@@ -1,5 +1,6 @@
+ """Usage tracking utilities for DSPy."""
+ 
++import threading
+ from collections import defaultdict
+ from contextlib import contextmanager
+ from typing import Any
+@@ -67,3 +68,50 @@ def track_usage():
+ 
+     with settings.context(usage_tracker=tracker):
+         yield tracker
++
++
++class CacheUsageTracker:
++    """Tracks the cache events (memory hits, disk hits and misses) that happen within a context.
++
++    This mirrors `UsageTracker`, but for `dspy.cache` instead of the LM: `Cache.get()` adds one event per lookup to
++    the tracker that is active in the current context, so that a prediction can report what its own call hit.
++    """
++
++    def __init__(self):
++        self.cache_usage = {"hits": 0, "mem_hits": 0, "disk_hits": 0, "misses": 0}
++        # The tracker is shared by the threads that a parallel module spawns inside its context.
++        self._lock = threading.Lock()
++
++    def add_event(self, event: str):
++        """Count one cache event: `mem_hit`, `disk_hit` or `miss`."""
++        with self._lock:
++            if event == "mem_hit":
++                self.cache_usage["mem_hits"] += 1
++                self.cache_usage["hits"] += 1
++            elif event == "disk_hit":
++                self.cache_usage["disk_hits"] += 1
++                self.cache_usage["hits"] += 1
++            elif event == "miss":
++                self.cache_usage["misses"] += 1
++            else:
++                raise ValueError(f"Unknown cache event: {event!r}")
++
++    def get_cache_usage(self) -> dict[str, int]:
++        """Return a snapshot of the cache events counted so far."""
++        with self._lock:
++            return dict(self.cache_usage)
++
++    def __deepcopy__(self, memo):
++        # A lock cannot be deep copied, so copy the counts into a new tracker.
++        new_tracker = CacheUsageTracker()
++        new_tracker.cache_usage = self.get_cache_usage()
++        return new_tracker
++
++
++@contextmanager
++def track_cache_usage():
++    """Context manager for tracking the cache events of a call."""
++    tracker = CacheUsageTracker()
++
++    with settings.context(cache_usage_tracker=tracker):
++        yield tracker

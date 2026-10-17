@@ -1,0 +1,123 @@
+diff --cc src/click/core.py
+index 360a38a,6ed43e2..0000000
+--- a/src/click/core.py
++++ b/src/click/core.py
+@@@ -234,9 -234,16 +234,22 @@@ class Context
+          still open. Children inherit the setting. Shell completion turns it
+          off, since it never closes the contexts it makes. Disabled by
+          default.
+++<<<<<<< HEAD
+ +
+ +    .. versionchanged:: 8.2
+ +        Added the ``validate_nesting`` parameter.
+++=======
++     :param on_exit: an optional callable that is invoked with this context
++         when the context is closed, before the callbacks registered with
++         :meth:`call_on_close` run and the resources entered with
++         :meth:`with_resource` are released. It is useful for logging,
++         collecting metrics or custom cleanup. An exception raised by the
++         callable is ignored so that it never prevents the rest of the
++         cleanup.
++ 
++     .. versionchanged:: 8.2
++         Added the ``validate_nesting`` and ``on_exit`` parameters.
+++>>>>>>> agent1
+  
+      .. versionchanged:: 8.2
+          The ``protected_args`` attribute is deprecated and will be removed in
+@@@ -290,6 -297,7 +303,10 @@@
+          color: bool | None = None,
+          show_default: bool | None = None,
+          validate_nesting: bool = False,
+++<<<<<<< HEAD
+++=======
++         on_exit: t.Callable[[Context], t.Any] | None = None,
+++>>>>>>> agent1
+      ) -> None:
+          #: the parent context or `None` if none exists.
+          self.parent = parent
+@@@ -626,9 -644,15 +653,21 @@@
+          return self._exit_stack.callback(f)
+  
+      def close(self) -> None:
+++<<<<<<< HEAD
+ +        """Invoke all close callbacks registered with
+ +        :meth:`call_on_close`, and exit all context managers entered
+ +        with :meth:`with_resource`.
+++=======
++         """Invoke the ``on_exit`` callback if one was given, then all close
++         callbacks registered with :meth:`call_on_close`, and exit all
++         context managers entered with :meth:`with_resource`.
++ 
++         The ``on_exit`` callback receives this context. An exception it
++         raises is ignored, so that it can not stop the other callbacks
++         and resources from being cleaned up. It runs once each time the
++         context is used, even though :meth:`exit` and the end of a
++         ``with`` block both close it.
+++>>>>>>> agent1
+  
+          If :attr:`validate_nesting` is enabled and a child context made by
+          :meth:`_make_sub_context` is still open, raise a
+@@@ -638,17 -662,36 +677,45 @@@
+          .. versionchanged:: 8.2
+              Raises :exc:`RuntimeError` for open child contexts when
+              ``validate_nesting`` is enabled.
+++<<<<<<< HEAD
+++=======
++ 
++         .. versionchanged:: 8.2
++             Invoke the ``on_exit`` callback.
+++>>>>>>> agent1
+          """
+          if self.validate_nesting and self._child_contexts:
+              raise RuntimeError(self._open_children_message())
+  
+          try:
+++<<<<<<< HEAD
+++=======
++             self._run_on_exit()
+++>>>>>>> agent1
+              self._exit_stack.close()
+          finally:
+              # In case the context is reused, create a new exit stack.
+              self._exit_stack = ExitStack()
+              self._forget_in_parent()
+  
+++<<<<<<< HEAD
+++=======
++     def _run_on_exit(self) -> None:
++         """Call ``on_exit`` with this context, once per use of the context.
++         An exception is ignored, since a hook for logging or metrics must
++         not stop the cleanup that follows it.
++         """
++         if self.on_exit is None or not self._on_exit_pending:
++             return
++ 
++         self._on_exit_pending = False
++ 
++         try:
++             self.on_exit(self)
++         except Exception:
++             pass
++ 
+++>>>>>>> agent1
+      def _label(self) -> str:
+          """A short name for this context in an error message."""
+          return repr(self.info_name or self.command.name or type(self.command).__name__)
+diff --cc src/click/shell_completion.py
+index 949c823,b31a598..0000000
+--- a/src/click/shell_completion.py
++++ b/src/click/shell_completion.py
+@@@ -547,6 -547,9 +547,12 @@@ def _resolve_context
+      # Completion never closes the contexts it makes, so nesting validation
+      # would only report a leak that is not one.
+      ctx_args["validate_nesting"] = False
+++<<<<<<< HEAD
+++=======
++     # Completion runs no command and closes no context, so an exit hook
++     # from the caller's arguments has nothing to report.
++     ctx_args.pop("on_exit", None)
+++>>>>>>> agent1
+      ctx = cli.make_context(prog_name, args.copy(), **ctx_args)
+      args = ctx._protected_args + ctx.args
+  

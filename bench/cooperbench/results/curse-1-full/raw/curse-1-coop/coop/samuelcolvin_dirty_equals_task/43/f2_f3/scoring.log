@@ -1,0 +1,3 @@
+{"run_dir": "/root/cooperbench/logs/curse-1-coop/coop/samuelcolvin_dirty_equals_task/43/f2_f3", "verdict": "fail"}
+coordbench run: coop-43-f2_f3-951e85: timings: hub 0.2 s, run_create 0.0 s, provision 2.1 s, agents 160 s (agent1 135 s, agent2 160 s), close 0.0 s, score 13 s, cascade 31 s, teardown 0.4 s
+coordbench run: summary: 42 completed, 0 skipped, 0 failed; evals: 42 evaluated, 29 passed, 13 failed, 0 errors (69.0%); cost: unknown

@@ -1,0 +1,74 @@
+commit 0995bdedd094fdd6d6b6e5dc39c36c21fc03653a (main)
+Merge: 52fd4b2 60df5e1
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:01:03 2026 +0000
+
+    Merge claude/6: closes #6
+
+commit 60df5e1c2f4617923e1becad64c0eaddbad3b310 (claude/6)
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:00:56 2026 +0000
+
+    Keep a context's open children out of its snapshot and restore
+    
+    The tracked child contexts of validate_nesting are live state like the
+    exit stack: copying them would copy every child and its parent chain, and
+    restoring a stale set would bring back a closed child.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/click/core.py | 22 ++++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+commit 6f1b8b6d195ebadf41fb80f4c0174b68afd5918f
+Merge: 0f8b6e9 52fd4b2
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:00:21 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/6
+
+commit 0f8b6e9553cba24075f0d587018b279839cb4d8b
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:00:07 2026 +0000
+
+    Add Context.save_state and restore_state, and use them in shell completion
+    
+    save_state takes a snapshot of every attribute of a context, deep copying
+    params, obj, _meta, default_map and _parameter_source so nested changes
+    do not reach it. restore_state sets the attributes back as copies, leaves
+    the with depth and the exit stack alone so no resource is orphaned, and
+    refills _meta in place since it is shared with the parent. Shell
+    completion snapshots the resolved context and restores it afterwards.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/click/core.py             | 106 ++++++++++++++++++++++++++++++++++++++++++
+ src/click/shell_completion.py |  13 +++++-
+ 2 files changed, 117 insertions(+), 2 deletions(-)
+
+commit 52fd4b2e88b9e23e20c7ba78bdf68cdebfe6c682
+Merge: d8763b9 970cfdd
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 13:58:38 2026 +0000
+
+    Merge claude/7: closes #7
+
+commit 970cfddbd250dc155c377ac82ede256f0d4f7f70 (claude/7)
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 13:58:15 2026 +0000
+
+    Add validate_nesting to Context to catch child contexts left open
+    
+    With validate_nesting=True a Context tracks the child contexts made by
+    _make_sub_context, which inherit the setting, and close() raises a
+    RuntimeError naming the children still open. Shell completion turns the
+    setting off on every context it makes.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01FvhMo2oE4oyXAvcTeYKuC8
+
+ src/click/core.py             | 86 +++++++++++++++++++++++++++++++++++++------
+ src/click/shell_completion.py | 13 ++++++-
+ 2 files changed, 87 insertions(+), 12 deletions(-)

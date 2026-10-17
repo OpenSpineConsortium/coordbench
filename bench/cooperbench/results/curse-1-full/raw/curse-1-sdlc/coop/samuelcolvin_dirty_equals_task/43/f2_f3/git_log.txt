@@ -1,0 +1,44 @@
+commit 82746af86549f6979dfee4e1b22e8f77d9c2026a (main)
+Merge: 28c3d06 70e4a92
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:41:53 2026 +0000
+
+    Merge claude/2: closes #2
+
+commit 70e4a92452fd22c877d19f9265098939953fc5be (claude/2)
+Merge: 93d5bac 28c3d06
+Author: agent1 <agent1@coordbench.local>
+Date:   Sat Oct 17 14:41:48 2026 +0000
+
+    Merge remote-tracking branch 'team/main' into claude/2
+    
+    # Conflicts:
+    #       dirty_equals/__init__.py
+    #       dirty_equals/_other.py
+
+commit 93d5bac2b463972099fe494d6da03f8123e9876a
+Author: agent1 <agent1@coordbench.local>
+Date:   Sat Oct 17 14:41:02 2026 +0000
+
+    Add IsMac validator for MAC addresses in colon, hyphen, dot and compact formats
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 53 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 55 insertions(+), 1 deletion(-)
+
+commit 28c3d06643ee5af06f295d453aacca44aaf7df12
+Merge: 593bccc 37f5c85
+Author: coordbench merge gate <gate@coordbench.local>
+Date:   Sat Oct 17 14:40:51 2026 +0000
+
+    Merge claude/3: closes #3
+
+commit 37f5c859c77c67afb151d32e03317460738c0034 (claude/3)
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 14:40:42 2026 +0000
+
+    Add IsEmail validator with optional case-sensitive domain filtering
+
+ dirty_equals/__init__.py |  3 ++-
+ dirty_equals/_other.py   | 43 ++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 44 insertions(+), 2 deletions(-)

@@ -1,0 +1,33 @@
+commit c9816ca61c2e7900f07efc5ad6e46e36b4aa3dfc (agent2)
+Merge: 416f2de 0ebed52
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 13:59:00 2026 +0000
+
+    Merge remote-tracking branch 'team/agent1' into agent2
+
+commit 519bf9e94f227ea6329221a7e91631cd09a59fd0 (agent1)
+Merge: 0ebed52 416f2de
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 13:58:54 2026 +0000
+
+    Merge remote-tracking branch 'team/agent2' into agent1
+
+commit 0ebed52eeca02186e5f299ac0f0bba15fb9428fb
+Author: agent1 <agent@cooperbench.local>
+Date:   Sat Oct 17 13:58:48 2026 +0000
+
+    Add Context.save_state() and restore_state(); snapshot completion context
+
+ src/click/core.py             | 139 ++++++++++++++++++++++++++++++++++++++++++
+ src/click/shell_completion.py |  11 +++-
+ 2 files changed, 148 insertions(+), 2 deletions(-)
+
+commit 416f2de1ef795b42be8e4e81aed0a88b0d066db2
+Author: agent2 <agent@cooperbench.local>
+Date:   Sat Oct 17 13:58:35 2026 +0000
+
+    Add validate_nesting to Context to catch child contexts left open
+
+ src/click/core.py             | 106 +++++++++++++++++++++++++++++++++++++-----
+ src/click/shell_completion.py |  12 ++++-
+ 2 files changed, 105 insertions(+), 13 deletions(-)

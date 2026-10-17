@@ -1,0 +1,1 @@
+{"seq": 0, "t": 0.0, "kind": "run_started", "agent": null, "epoch": 1792247801.5554342, "iso": "2026-10-17T14:36:41.555434+00:00", "arm": "solo", "agents": [{"id": "agent1", "role": "solo", "features": [2, 3]}], "tool_surface": "mcp"}

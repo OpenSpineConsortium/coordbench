@@ -1,0 +1,105 @@
+diff --cc src/jinja2/filters.py
+index 96555441,e1f543f5..00000000
+--- a/src/jinja2/filters.py
++++ b/src/jinja2/filters.py
+@@@ -1175,6 -1175,7 +1175,10 @@@ def sync_do_groupby
+      value: "t.Iterable[V]",
+      attribute: t.Union[str, int],
+      default: t.Optional[t.Any] = None,
+++<<<<<<< HEAD
+++=======
++     reverse: bool = False,
+++>>>>>>> agent1
+      key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+  ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+      """Group a sequence of objects by an attribute using Python's
+@@@ -1216,21 -1217,36 +1220,52 @@@
+            <li>{{ city }}: {{ items|map(attribute="name")|join(", ") }}</li>
+          {% endfor %}</ul>
+  
+++<<<<<<< HEAD
+++=======
++     By default the groups are sorted in ascending order of the
++     attribute. Pass ``reverse=True`` to sort the groups in descending
++     order instead, for example to list the newest or highest values
++     first.
++ 
++     .. sourcecode:: jinja
++ 
++         <ul>{% for year, items in posts|groupby("year", reverse=true) %}
++           <li>{{ year }}: {{ items|map(attribute="title")|join(", ") }}</li>
++         {% endfor %}</ul>
++ 
+++>>>>>>> agent1
+      You can pass a callable as ``key_transform`` to change how each
+      group's key is displayed, for example to format a date. The
+      callable is applied only to the key that is yielded, after the
+      items have been sorted and grouped by the original attribute value,
+++<<<<<<< HEAD
+ +    so it never changes which items end up together.
+ +
+ +    .. sourcecode:: jinja
+ +
+ +        <ul>{% for month, items in events|groupby("date", key_transform=month_year) %}
+ +          <li>{{ month }}: {{ items|map(attribute="name")|join(", ") }}</li>
+ +        {% endfor %}</ul>
+++=======
++     so it never changes which items end up together. It combines with
++     ``reverse``, which only controls the order of the groups.
++ 
++     .. sourcecode:: jinja
++ 
++         {% for month, items in events|groupby("date", key_transform=fmt) %}
++           <li>{{ month }}: {{ items|map(attribute="name")|join(", ") }}</li>
++         {% endfor %}
+++>>>>>>> agent1
+  
+      .. versionchanged:: 3.1
+          Added the ``key_transform`` parameter.
+  
+++<<<<<<< HEAD
+++=======
++     .. versionchanged:: 3.1
++         Added the ``reverse`` parameter.
++ 
+++>>>>>>> agent1
+      .. versionchanged:: 3.0
+          Added the ``default`` parameter.
+  
+@@@ -1240,7 -1256,7 +1275,11 @@@
+      expr = make_attrgetter(environment, attribute, default=default)
+      return [
+          _GroupTuple(_transform_group_key(key, key_transform), list(values))
+++<<<<<<< HEAD
+ +        for key, values in groupby(sorted(value, key=expr), expr)
+++=======
++         for key, values in groupby(sorted(value, key=expr, reverse=reverse), expr)
+++>>>>>>> agent1
+      ]
+  
+  
+@@@ -1250,6 -1266,7 +1289,10 @@@ async def do_groupby
+      value: "t.Union[t.AsyncIterable[V], t.Iterable[V]]",
+      attribute: t.Union[str, int],
+      default: t.Optional[t.Any] = None,
+++<<<<<<< HEAD
+++=======
++     reverse: bool = False,
+++>>>>>>> agent1
+      key_transform: t.Optional[t.Callable[[t.Any], t.Any]] = None,
+  ) -> "t.List[t.Tuple[t.Any, t.List[V]]]":
+      expr = make_attrgetter(environment, attribute, default=default)
+@@@ -1257,7 -1274,9 +1300,13 @@@
+          _GroupTuple(
+              _transform_group_key(key, key_transform), await auto_to_list(values)
+          )
+++<<<<<<< HEAD
+ +        for key, values in groupby(sorted(await auto_to_list(value), key=expr), expr)
+++=======
++         for key, values in groupby(
++             sorted(await auto_to_list(value), key=expr, reverse=reverse), expr
++         )
+++>>>>>>> agent1
+      ]
+  
+  
