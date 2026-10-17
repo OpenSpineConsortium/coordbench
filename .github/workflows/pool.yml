@@ -1,0 +1,50 @@
+name: Pool
+
+# The readings a real Bench run's jobs left, one per pair, of how much of
+# each slot's five-hour and seven-day windows was used, go to the branch
+# pool, one file per slot (bench/cooperbench/actions/pool.py, a copy of
+# OpenSpineConsortium/symphony-template's tools/pool.py). The next dispatch
+# whose accounts box says auto leaves out a slot the pool holds at its
+# limit, and the control panel's Tokens page shows them. A workflow of its
+# own, since Bench only reads; only a dispatch's run is read, since a pull
+# request's run could carry readings of anyone's making.
+
+on:
+  workflow_run:
+    workflows: [Bench]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  publish:
+    if: github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: pool-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pool-reading-*
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/readings
+      - name: Write the readings to the branch pool
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          shopt -s nullglob
+          readings=("$RUNNER_TEMP"/readings/*/slot-*.json)
+          if [ "${#readings[@]}" -eq 0 ]; then
+            echo "the run left no reading"
+            exit 0
+          fi
+          python3 bench/cooperbench/actions/pool.py publish "${readings[@]}"
