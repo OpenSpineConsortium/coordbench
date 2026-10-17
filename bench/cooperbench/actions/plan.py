@@ -19,6 +19,14 @@ of the same tag takes up where the last one stopped and the caps never
 hold the same items back twice; each pair keeps its account across
 dispatches, since the account is chosen by the pair's place in the list.
 
+The accounts input "auto" takes the slots of SYMPHONY_CLAUDE_ACCOUNTS (all
+eight when it is empty) whose secret is set, leaving out each one the
+branch pool says is at its limit until it resets: a five-hour, seven-day
+or per-model window at or past 90 percent, as symphony-template's
+tools/pool.py reads it (pool.py here is that file's copy). The slots kept
+stay in the variable's order, so a pair keeps its account across
+dispatches for as long as the same slots are free.
+
 A fake run's tag is fake-<tag> (a pull request's smoke-<...> already
 says so), and a real run refuses such a tag: a fake pair's artifact looks
 finished, and a real dispatch under the same tag would skip the pair and
@@ -183,6 +191,31 @@ def mode_tag(mode, tag):
     return tag
 
 
+def auto_accounts(pool_text, present, found, now=None):
+    """The slots auto takes, in the pool's order, and a note on each slot
+    left out: one whose secret is unset, and one a window holds, with
+    when it is free again. Refuses when no slot is left."""
+    import pool
+    slots = [slot for slot in parse_list(pool_text) if slot in SLOTS] or list(SLOTS)
+    now = now or pool.datetime.now(pool.timezone.utc)
+    kept, notes, frees = [], [], []
+    for slot in slots:
+        if present is not None and slot not in present:
+            continue
+        windows, scoped = pool.current(found.get(slot, []), now)
+        until = pool.held_until(windows, scoped, pool.THRESHOLD, now)
+        if until:
+            notes.append(f"auto left out slot {slot}, at its limit until {pool.iso(until)}")
+            frees.append(until)
+        else:
+            kept.append(slot)
+    if not kept:
+        when = f"; the first is free at {pool.iso(min(frees))}" if frees else ""
+        raise ValueError("auto found no slot to run on: every slot of SYMPHONY_CLAUDE_ACCOUNTS is unset or at its "
+                         f"limit{when}")
+    return kept, notes
+
+
 def chosen_accounts(mode, accounts_text, present):
     """The slots a real run uses, each one whose secret the workflow saw
     set when it says which it saw; the mode's name otherwise."""
@@ -245,17 +278,21 @@ def registration_notes(mode, pairs_text, arms):
 
 
 def plan(dataset_dir, mode, pairs_text, arms_text, accounts_text, tag, finished=(), present=None,
-         timeout_text="", arms_dir=ARMS_DIR):
+         timeout_text="", arms_dir=ARMS_DIR, pool_text="", readings=None, now=None):
     pairs = chosen_pairs(dataset_dir, pairs_text)
     tag = mode_tag(mode, tag)
     arms = chosen_arms(arms_text, arms_dir)
-    accounts = chosen_accounts(mode, accounts_text, present)
+    auto_notes = []
+    if mode == "real" and accounts_text.strip().lower() == "auto":
+        accounts, auto_notes = auto_accounts(pool_text, present, readings or {}, now)
+    else:
+        accounts = chosen_accounts(mode, accounts_text, present)
     timeout = chosen_timeout(mode, timeout_text)
     items, done, dropped = [], 0, 0
     if mode != "survey":
         items, done, dropped = plan_items(pairs, arms, accounts, tag, QUEUE_LIMIT if mode == "real" else 0,
                                           set(finished))
-    notes = registration_notes(mode, pairs_text, arms)
+    notes = registration_notes(mode, pairs_text, arms) + auto_notes
     if done:
         notes.append(f"{done} items finished by an earlier dispatch of the tag and left out")
     if dropped:
@@ -306,6 +343,20 @@ def listed_finished(mode, tag):
     return {name[:-len(artifacts.DONE_SUFFIX)] for name in names if name.endswith(artifacts.DONE_SUFFIX)}, note
 
 
+def pool_readings(mode, accounts_text, folder):
+    """The pool's readings by slot, for auto alone: from the folder given,
+    else from origin's branch pool, which a repository with no reading
+    yet does not have, so every slot then counts as free."""
+    if mode != "real" or accounts_text.strip().lower() != "auto":
+        return None
+    import tempfile
+    import pool
+    if folder:
+        return pool.load(folder)
+    with tempfile.TemporaryDirectory(prefix="pool-") as scratch:
+        return pool.load(pool.branch_readings(scratch))
+
+
 def secrets_present(environ=None):
     """The slots whose secret the workflow saw set, from HAS_SECRET_<slot>
     ('true' or 'false', each set by the workflow from the secret's name),
@@ -322,7 +373,9 @@ def main(argv=None):
     parser.add_argument("--mode", choices=("survey", "fake", "real"), required=True)
     parser.add_argument("--pairs", default="flash")
     parser.add_argument("--arms", default=",".join(ARMS))
-    parser.add_argument("--accounts", default="")
+    parser.add_argument("--accounts", default="", help="the slots, or auto for the free ones of --pool")
+    parser.add_argument("--pool", default="", help="auto's slots, the variable SYMPHONY_CLAUDE_ACCOUNTS")
+    parser.add_argument("--readings", help="a folder of the pool's readings; auto reads origin's branch pool without it")
     parser.add_argument("--tag", required=True)
     parser.add_argument("--timeout-min", default="", help="minutes an agent may take; the mode's default when empty")
     parser.add_argument("--finished", help="a file naming the artifacts an earlier dispatch finished, one per line")
@@ -338,7 +391,8 @@ def main(argv=None):
         if args.list_finished:
             finished, note = listed_finished(args.mode, args.tag)
         result = plan(args.dataset_dir, args.mode, args.pairs, args.arms, args.accounts, args.tag,
-                      finished, secrets_present(), args.timeout_min, args.arms_dir)
+                      finished, secrets_present(), args.timeout_min, args.arms_dir, args.pool,
+                      pool_readings(args.mode, args.accounts, args.readings))
     except (ValueError, OSError) as problem:
         parser.error(str(problem))
     if note:

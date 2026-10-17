@@ -156,6 +156,27 @@ class Planner(unittest.TestCase):
         self.assertIsNone(plan.secrets_present({}))
         self.assertEqual(plan.secrets_present({"HAS_SECRET_1": "true", "HAS_SECRET_2": "false"}), {"1"})
 
+    def test_auto_takes_the_pools_slots_that_are_set_and_not_at_their_limit(self):
+        import pool
+        now = pool.datetime(2026, 10, 17, 22, 0, tzinfo=pool.timezone.utc)
+        resets = int((now + pool.timedelta(hours=2)).timestamp())
+        held = pool.reading("2", "run", {"five_hour": pool.window(0.95, resets)}, now=now)
+        found = {"2": [held]}
+        result = plan.plan(self.dataset, "real", "flash", "solo", "auto", "t", present={"1", "2", "3"},
+                           pool_text="3,2,1,4", readings=found, now=now)
+        self.assertEqual(result["accounts"], ["3", "1"])
+        self.assertTrue(any("slot 2" in note for note in result["notes"]))
+        everywhere = plan.plan(self.dataset, "real", "flash", "solo", "AUTO", "t", present={"5"}, readings={}, now=now)
+        self.assertEqual(everywhere["accounts"], ["5"])
+        with self.assertRaises(ValueError) as refused:
+            plan.plan(self.dataset, "real", "flash", "solo", "auto", "t", present={"2"}, pool_text="2",
+                      readings=found, now=now)
+        self.assertIn("free at", str(refused.exception))
+
+    def test_auto_in_a_fake_run_is_the_mode_as_any_account_is(self):
+        self.assertEqual(plan.plan(self.dataset, "fake", "flash", "solo", "auto", "t")["accounts"], ["fake"])
+        self.assertIsNone(plan.pool_readings("fake", "auto", None))
+
     def test_a_listing_that_fails_or_is_cut_plans_every_item_and_says_so(self):
         environ = {"GITHUB_REPOSITORY": "o/r", "GITHUB_TOKEN": "t", "GITHUB_API_URL": "https://api.example"}
 

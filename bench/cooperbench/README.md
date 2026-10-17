@@ -274,6 +274,21 @@ job scrubs the pair's directory once more and reads every file back,
 archives included, publishing nothing that still holds it or could not
 be read.
 
+The accounts box takes `auto` as well: the slots of
+SYMPHONY_CLAUDE_ACCOUNTS whose secret is set, less any the branch pool
+holds at 90 percent or more of a five-hour, seven-day or per-model window
+until it resets, in the variable's order, and the plan's notes name each
+slot left out and when it is free. The pool's readings come from the
+agents' own streams (each real job keeps the last rate-limit event, which
+holds no token or text, and the workflow Pool writes them to the branch
+after the run) and from cswap on the owner's machine, through
+symphony-template's `python3 scripts/tokens.py usage --also coordbench`.
+bench/cooperbench/actions/pool.py is a copy of that repository's
+tools/pool.py, kept by hand until the protocol library carries it. A pair
+keeps its account across dispatches as long as the same slots are free;
+a slot that fills mid-run still takes its queued pairs, which stop on its
+limit and are taken up by the next dispatch of the tag.
+
 A dispatch names a tag; its artifacts are `<tag>__<arm>__<repo>__<task>__f1_f6`,
 kept 90 days, with a marker `<name>__done` beside each finished one
 (scored, no agent failed: in Error for a cause outside the benchmark, a

@@ -59,7 +59,7 @@ on:
         description: the arms, each a directory under coordbench/arms (solo coop coop-nocomm coop-git team sdlc sdlc-watch)
         default: solo,coop,coop-git,team,sdlc
       accounts:
-        description: real mode, the account slots to use, from 1 to 8 (default the variable SYMPHONY_CLAUDE_ACCOUNTS)
+        description: real mode, the account slots to use, from 1 to 8, or auto for those of SYMPHONY_CLAUDE_ACCOUNTS not at their limit (default the variable)
         default: ""
       model:
         default: claude-sonnet-5-5
@@ -115,6 +115,8 @@ jobs:
           PAIRS: ${{ github.event_name == 'pull_request' && 'pallets_click_task/2068/f1_f6' || inputs.pairs }}
           ARMS: ${{ github.event_name == 'pull_request' && 'solo,coop-git,sdlc' || inputs.arms }}
           ACCOUNTS: ${{ inputs.accounts || vars.SYMPHONY_CLAUDE_ACCOUNTS }}
+          # auto's slots, read against the branch pool (plan.py).
+          POOL: ${{ vars.SYMPHONY_CLAUDE_ACCOUNTS }}
           TIMEOUT_MIN: ${{ inputs.timeout_min }}
           # A pull request's tag carries the run id, so every push runs
           # the pair again rather than finding the last push's artifact.
@@ -133,7 +135,7 @@ jobs:
         run: |
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           python3 bench/cooperbench/actions/plan.py --dataset-dir "$RUNNER_TEMP/cooperbench/dataset" \
-            --mode "$MODE" --pairs "$PAIRS" --arms "$ARMS" --accounts "$ACCOUNTS" --tag "$TAG" \
+            --mode "$MODE" --pairs "$PAIRS" --arms "$ARMS" --accounts "$ACCOUNTS" --pool "$POOL" --tag "$TAG" \
             --timeout-min "$TIMEOUT_MIN" --list-finished
 
       - name: Refuse a real run until the environment bench has a required reviewer
@@ -297,6 +299,30 @@ jobs:
           path: ${{ steps.pair.outputs.marker }}
           retention-days: 90
           overwrite: true
+      - name: Read the account's windows from the agents' streams, for the pool
+        # The last rate-limit event of the streams, newest last, is how much
+        # of the slot's five-hour and seven-day windows the pair left; it
+        # holds no token and no text (pool.py).
+        if: ${{ always() && steps.pair.outputs.skip != 'true' }}
+        continue-on-error: true
+        env:
+          RUN_DIR: ${{ steps.pair.outputs.run_dir }}
+          SLOT: ${{ matrix.account }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pool-readings"
+          find "$RUN_DIR" -name '*_stream.jsonl' -type f -printf '%T@ %p\n' 2>/dev/null | sort -n | cut -d' ' -f2- |
+            while IFS= read -r stream; do
+              python3 bench/cooperbench/actions/pool.py observe --slot "$SLOT" --source run \
+                --execution-file "$stream" --out "$RUNNER_TEMP/pool-readings"
+            done
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.pair.outputs.skip != 'true' }}
+        continue-on-error: true
+        with:
+          name: pool-reading-${{ github.run_attempt }}-${{ matrix.order }}
+          path: ${{ runner.temp }}/pool-readings/
+          if-no-files-found: ignore
+          retention-days: 1
 
   report:
     needs: [plan, approve, survey, run, run-real]
