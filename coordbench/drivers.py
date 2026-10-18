@@ -95,6 +95,7 @@ CONTAINER_PLUGINS = "/opt/coordbench-plugins"
 CONTAINER_ARMS = "/opt/coordbench-arms"
 CONTAINER_PROMPT = "/tmp/coord-prompt.txt"
 CONTAINER_MCP_CONFIG = "/tmp/coord-mcp.json"
+CONTAINER_AGENT_FILE = "/tmp/coord-agent.json"
 # The adapter keeps Claude Code's state under /tmp, so the session
 # transcript is always in one known place after the run.
 CONTAINER_CLAUDE_CONFIG_DIR = "/tmp/claude-cfg"
@@ -297,6 +298,9 @@ class AgentJob:
     # Claude Code tools the agent may not use (--disallowedTools), as
     # WebFetch and WebSearch for the paper's "local operations" only.
     disallowed_tools: list = field(default_factory=list)
+    # The agent the session runs as (--agent-file; agent_file.py): its
+    # name, the sha256 of its file and the `claude --agents` JSON.
+    agent_definition: dict | None = None
 
 
 # The usage fields of an agent's record, in the order result.json lists them.
@@ -653,6 +657,8 @@ def claude_flags(job):
     if job.disallowed_tools:
         # One comma-joined word, as the adapter passes its qwen profile's.
         flags += ["--disallowedTools", ",".join(job.disallowed_tools)]
+    if job.agent_definition:
+        flags += ["--agents", CONTAINER_AGENT_FILE, "--agent", job.agent_definition["name"]]
     return flags
 
 
@@ -816,6 +822,9 @@ class ClaudeCliDriver:
         if job.mcp_servers:
             put_container_file(job.container, CONTAINER_MCP_CONFIG,
                                json.dumps({"mcpServers": job.mcp_servers}, indent=2))
+        if job.agent_definition:
+            put_container_file(job.container, CONTAINER_AGENT_FILE,
+                               json.dumps(job.agent_definition["agents"], indent=2))
         run = CliRun(job)
         run.thread.start()
         return run
