@@ -234,6 +234,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import agent_file  # noqa: E402
 import cli  # noqa: E402
 import drivers  # noqa: E402
 import runconfig  # noqa: E402
@@ -2330,6 +2331,7 @@ def new_plan(settings, driver, repo, task_id, features):
         "model": settings["model"], "agent_models": dict(settings.get("agent_models") or {}),
         "image": image_name(repo, task_id), "image_facts": None,
         "options": dict(settings["options"]), "disallowed_tools": list(settings.get("disallowed_tools") or []),
+        "agent_definition": settings.get("agent_definition"),
         "timeout_s": settings["timeout_s"], "max_turns": settings["max_turns"], "keep": settings["keep"],
         "cooperbench_dir": str(settings["cooperbench_dir"]), "dataset_dir": str(dataset_dir),
         "provenance": runconfig.provenance(settings["cooperbench_dir"], dataset_dir),
@@ -2853,7 +2855,8 @@ def agent_job(plan, agent):
         plugin_urls=plugin_urls(plan),
         mcp_servers=plan["mcp_servers"], model=agent_model(plan, agent), timeout_s=plan["timeout_s"],
         max_turns=plan["max_turns"], log_path=agent["log_path"], workspace=agent.get("workspace", ""),
-        disallowed_tools=list(plan.get("disallowed_tools") or []))
+        disallowed_tools=list(plan.get("disallowed_tools") or []),
+        agent_definition=plan.get("agent_definition"))
 
 
 def start_agents(plan, driver, handles=None):
@@ -3387,6 +3390,10 @@ def result_record(plan, outcomes, metrics, ended):
         "metrics": metrics, "timings": plan.get("timings") or [],
         "utc_offset_seconds": plan.get("utc_offset_seconds", utc_offset_seconds()),
     })
+    if plan.get("agent_definition"):
+        # Only a run with --agent-file carries the key, so CooperBench's
+        # layout is unchanged for every other run.
+        record["agent_file"] = {key: plan["agent_definition"][key] for key in ("name", "sha256")}
     if plan["error"]:
         record["error"] = plan["error"]
     return record
@@ -3734,6 +3741,21 @@ def parse_tools(text):
     return [word for word in text.replace(" ", "").split(",") if word]
 
 
+def agent_definition_of(args, default_driver):
+    """The agent every agent of the run runs as (--agent-file), read once,
+    or None; only the claude-cli driver starts claude with flags of its
+    own, so another driver with an agent file is refused, never ignored."""
+    path = getattr(args, "agent_file", None)
+    if not path:
+        return None
+    if (args.driver or default_driver) != "claude-cli":
+        raise SystemExit("--agent-file runs on the claude-cli driver only (--driver claude-cli)")
+    try:
+        return agent_file.definition(path)
+    except agent_file.AgentFileError as error:
+        raise SystemExit(f"--agent-file: {error}")
+
+
 def settings_from(args, default_driver):
     """The command line as settings. The directories are made absolute
     here, once: a relative workspace path in `docker run -v` is read as a
@@ -3750,6 +3772,7 @@ def settings_from(args, default_driver):
         "max_turns": args.max_turns, "keep": args.keep, "force": args.force, "options": dict(args.option),
         "arm_dirs": [Path(directory).resolve() for directory in args.arm_dir],
         "agent_models": dict(args.agent_model), "disallowed_tools": args.disallowed_tools or [],
+        "agent_definition": agent_definition_of(args, default_driver),
         "concurrency": getattr(args, "concurrency", 1), "scoring_timeout_s": SCORING_TIMEOUT_SECONDS,
     }
 
@@ -4144,6 +4167,9 @@ def add_pair_arguments(parser, subset):
     parser.add_argument("--disallowed-tools", type=parse_tools, metavar="TOOL,TOOL",
                         help="Claude Code tools the agents may not use, as WebFetch,WebSearch for the paper's "
                              "local operations only")
+    parser.add_argument("--agent-file", metavar="FILE",
+                        help="a Claude Code subagent file (Symphony's .claude/agents/ format) every agent runs "
+                             "as, on the claude-cli driver; the run's model and disallowed tools hold over it")
     parser.add_argument("--option", action="append", type=parse_option, default=[], metavar="KEY=VALUE",
                         help="a run option for the arm, the value read as JSON when it parses; "
                              "git_remote or shared_dir asks for that need, which the runner then "

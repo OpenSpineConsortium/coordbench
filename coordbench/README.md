@@ -536,6 +536,15 @@ summary.json counts the infrastructure ones as `infrastructure_errors`.
 as the paper did, and `--dataset-dir` points the specs and the scorer at
 another dataset (a 59bbf65 worktree for the paper's) while CooperBench's
 own code scores.
+`--agent-file FILE` runs every agent of the pair as a Claude Code
+subagent file, the format Symphony keeps its agents in
+(symphony-template's .claude/agents/ and docs/agents/AGENTS.md, where
+`python3 tools/agents.py import` brings one in from anywhere), so a
+team's own developer agent can be measured under any arm: on the
+claude-cli driver only, as `claude --agents FILE --agent NAME`, with the
+arm's prompt still the task and the run's model and disallowed tools
+holding over the file's; result.json then names the agent and the
+sha256 of its file under `agent_file` (coordbench/agent_file.py).
 
 The logs take CooperBench's layout, so `cooperbench eval` and
 bench/cooperbench/report.py read them as they read the authors' runs.
