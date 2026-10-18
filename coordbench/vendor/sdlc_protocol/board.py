@@ -126,8 +126,9 @@ class Pull:
     pull request was opened, is when its work began where GitHub says
     nothing of its branch (open_work); fork, whether its branch stands in
     another repository, or in none, a fork since deleted, whose branch a
-    branch of the same name here is not (from_fork), so it is never a
-    claim's (claim_of)."""
+    branch of the same name here is not (from_fork), and stranger, whether
+    someone who may not write to the repository opened it (from_stranger),
+    so that either is never a claim's (claim_of)."""
 
     number: int
     title: str = ""
@@ -140,6 +141,7 @@ class Pull:
     standing: str | None = None
     created_at: str = ""
     fork: bool = False
+    stranger: bool = False
 
     @property
     def state(self):
@@ -173,6 +175,7 @@ class Pull:
             standing=data.get("standing"),
             created_at=str(data.get("created_at") or ""),
             fork=from_fork(data),
+            stranger=from_stranger(data),
         )
 
     def to_dict(self):
@@ -191,6 +194,8 @@ class Pull:
             data["created_at"] = self.created_at
         if self.fork:
             data["fork"] = True
+        if self.stranger:
+            data["stranger"] = True
         return data
 
 
@@ -211,6 +216,16 @@ def from_fork(data):
     if not isinstance(head_name, str):
         return bool(data.get("fork"))
     return head_name.lower() != base_name.lower()
+
+
+def from_stranger(data):
+    """Whether someone who may not write to the repository opened a pull
+    request, by the board's own key stranger, which the adapter writes on a
+    pull request from a branch here named as a claim's
+    (adapters.github.mark_strangers) and Pull.to_dict writes back: who may
+    write is an answer GitHub gives the adapter, not one the pull request's
+    own fields always hold (claims.opened_by_writer)."""
+    return bool(data.get("stranger"))
 
 
 def mapping(value):
@@ -261,27 +276,56 @@ class ClaimIssue:
 class Release:
     """What the release rule reads about one claim: when the latest release
     comment on its issue was made (claims.latest_release), "" when none
-    stands, and the head of its branch, the commit and when it was
-    committed. An adapter fills it for every claim a release can be due on
-    or can have freed (adapters.github.releases): one gone more than a day
-    without a commit, whose issue is open and not labelled in-review, and
-    whose pull request, if it has one, is a draft its author has not called
-    finished, or one its author called finished that a person has released.
-    The coordinator releases those that no release comment has released yet
+    stands; the head of its branch and when its last commit came
+    (last_commit), which is when GitHub received the push that set the
+    head, as the repository's activity records it (pushed_at), so no
+    worker's clock decides it (F8), or what the adapter dates the head by
+    in that push's place (adapters.github.head_since): an entry of the
+    branch that came after the run began, whatever heads it names, the
+    newest entry the reads listed where it is later than the committer
+    date, or, in the run the branch's own push started, the run's start,
+    each in pushed_at too, since each dates the last commit as a push
+    would, or, where none of those holds, when the head was committed, as
+    its committer date says (committed_at), one of the two read and the
+    other ""; and whether a
+    release already kept that head, a branch released/<issue>-<short sha>
+    standing at it (kept), so the branch was pushed again with nothing a
+    release has not kept. An adapter fills it for every claim a release can
+    be due on or can have freed (adapters.github.releases): one gone more
+    than a day without a commit, or whose head a release kept, whose issue
+    is open and not labelled in-review, and whose pull request, if it has
+    one, is a draft its author has not called finished, or one its author
+    called finished that a person has released. The coordinator releases
+    those that no release comment has released yet
     (coordinator.releases_due), and the board counts a release once the
     label claimed is off too (released_keys)."""
 
     released_at: str = ""
     sha: str = ""
     committed_at: str = ""
+    pushed_at: str = ""
+    kept: bool = False
+
+    @property
+    def last_commit(self):
+        """When the branch's last commit came: GitHub's time of the push
+        that set the head, or what the adapter dates the head by in its
+        place, an entry after the run began, the newest entry listed or
+        the start of the run the branch's push started (pushed_at), else
+        the head's committer date, "" when neither is known."""
+        return self.pushed_at or self.committed_at
 
     @classmethod
     def from_dict(cls, data):
         return cls(released_at=data.get("released_at") or "", sha=data.get("sha") or "",
-                   committed_at=data.get("committed_at") or "")
+                   committed_at=data.get("committed_at") or "", pushed_at=data.get("pushed_at") or "",
+                   kept=data.get("kept") is True)
 
     def to_dict(self):
-        return {"released_at": self.released_at, "sha": self.sha, "committed_at": self.committed_at}
+        """Its JSON shape; pushed_at and kept only when set, so a snapshot
+        read before F8 is written back as it was."""
+        return {"released_at": self.released_at, "sha": self.sha, "committed_at": self.committed_at} \
+            | ({"pushed_at": self.pushed_at} if self.pushed_at else {}) | ({"kept": True} if self.kept else {})
 
 
 @dataclass
@@ -296,7 +340,12 @@ class Snapshot:
     by its branch: when GitHub says the push that made the branch came, as
     the adapter reads it for the overlaps' landing order (began_at), with
     GitHub's answer for each branch it refused to date, which the run's log
-    names (adapters.github.began_refused_lines)."""
+    names (adapters.github.began_refused_lines); and why each claim
+    branch whose head no read dated by its push was dated otherwise, by
+    its committer date, by the newest entry listed or by the start of the
+    run its push started, GitHub's refusal or an activity that lists no
+    push of the head, with what was read in its place
+    (adapters.github.pushed_refused_lines)."""
 
     sha: str = ""
     default_branch: str = "main"
@@ -309,6 +358,7 @@ class Snapshot:
     releases: dict = field(default_factory=dict)
     began: dict = field(default_factory=dict)
     began_refused: dict = field(default_factory=dict)
+    pushed_refused: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data):
@@ -326,6 +376,7 @@ class Snapshot:
             releases={str(k): Release.from_dict(v or {}) for k, v in (data.get("releases") or {}).items()},
             began={str(k): str(v) for k, v in (data.get("began") or {}).items() if v},
             began_refused={str(k): str(v) for k, v in (data.get("began_refused") or {}).items()},
+            pushed_refused={str(k): str(v) for k, v in (data.get("pushed_refused") or {}).items()},
         )
 
     def to_dict(self):
@@ -340,7 +391,8 @@ class Snapshot:
             "merged": [m.to_dict() for m in self.merged],
             "releases": {k: v.to_dict() for k, v in self.releases.items()},
             "began": dict(self.began),
-        } | ({"began_refused": dict(self.began_refused)} if self.began_refused else {})
+        } | ({"began_refused": dict(self.began_refused)} if self.began_refused else {}) \
+            | ({"pushed_refused": dict(self.pushed_refused)} if self.pushed_refused else {})
 
     @classmethod
     def from_json(cls, text):
@@ -435,7 +487,11 @@ def released_keys(snapshot, idle_after=IDLE_AFTER):
     write, by issue key: a claim branch whose issue is open and no longer
     labelled claimed, whose latest release comment came after the branch
     had gone without a commit for more than idle_after, and which nothing
-    has been committed to since (claims.was_released). It takes both acts
+    has been committed to since (claims.was_released), or whose head a
+    release already kept, whenever its comment came (release_counts); the
+    last commit is when GitHub received the push that set the head, or
+    what the adapter dates the head by in its place, else its committer
+    date (Release.last_commit, F8). It takes both acts
     of a release, the comment and the label claimed taken off, so a stray
     comment frees nothing; a commit after the release, its holder's or a
     new claim's, ends it; and putting the label claimed back undoes it. A
@@ -462,22 +518,39 @@ def is_released(snap, key, idle_after=IDLE_AFTER):
         return False
     if any(of_claim(p, key) and not p.draft for p in snap.pulls):
         return False
-    return was_released(release.released_at, release.committed_at, idle_after)
+    return release_counts(release, idle_after)
+
+
+def release_counts(release, idle_after=IDLE_AFTER):
+    """Whether the latest release comment that counts released the claim
+    as its branch stands: it came after the branch had gone more than
+    idle_after without a commit, with none since (was_released), or the
+    head is one a release already kept (Release.kept), since a branch
+    pushed again at it brings nothing new, and its time, when GitHub
+    received that push, says nothing of the work, which the release that
+    kept the head already judged idle."""
+    if not release.released_at:
+        return False
+    return release.kept or was_released(release.released_at, release.last_commit, idle_after)
 
 
 def claim_of(pull):
     """The key of the claim whose pull request this is: the key its branch
-    names (key_of), or None for a branch that is no claim and for a pull
-    request from a fork, whatever its branch is called. A claim branch
-    lives in this repository, and a fork's branch of the same name is
-    another branch, so such a pull request, marked ready or said finished,
-    finishes no claim, the board lists it and tells it what it tells any
-    other, and a release's rename, which closes the claim's own pull
-    request, leaves it open (F17: until its fix a ready pull request from a
-    fork's claude/<issue> kept that claim from ever being released, and
-    the board took it for the claim's own on the page and in the
-    Overlaps)."""
-    return None if pull.fork else key_of(pull.branch)
+    names (key_of), or None for a branch that is no claim, for a pull
+    request from a fork, whatever its branch is called, and for one that
+    someone who may not write to the repository opened, from the claim's
+    own branch here. A claim branch lives in this repository, and a fork's
+    branch of the same name is another branch; and a claim's pull request
+    is opened by someone who may write, or by an App the repository
+    installed, while GitHub's documentation says anyone who may read the
+    repository may open one from any of its branches. So such a pull
+    request, marked ready or said finished, finishes no claim, and the
+    board lists it and tells it what it tells any other (F17: until its fix
+    a ready pull request from a fork's claude/<issue> kept that claim from
+    ever being released, and the board took it for the claim's own on the
+    page and in the Overlaps; F19, the same for a stranger's pull request
+    from the claim's own branch)."""
+    return None if pull.fork or pull.stranger else key_of(pull.branch)
 
 
 def of_claim(pull, key):
@@ -487,9 +560,12 @@ def of_claim(pull, key):
 
 def closed_by_release(pull, released):
     """Whether the rename of a released claim's branch closes the pull
-    request: the claim's own, from a branch released_branches names
-    (claim_of)."""
-    return claim_of(pull) is not None and pull.branch in released
+    request: every open one from a branch released_branches names, here,
+    the claim's own and a stranger's alike, since GitHub closes each pull
+    request whose head is a branch it renames (renaming-a-branch.md:19);
+    never one from a fork, whose branch of the same name stands in the
+    fork (F17, F19)."""
+    return not pull.fork and pull.branch in released
 
 
 def released_branches(snap):
@@ -739,8 +815,9 @@ class Work(NamedTuple):
     files it changes or, before it changes any, the files its claim says it
     will touch; whether it is marked ready and whether its issue is a
     blocker; whether it is a pull request at all; its branch, "" for a
-    pull request from a fork; and when it began, as GitHub writes a time,
-    "" when nothing says (open_work)."""
+    pull request from a fork; when it began, as GitHub writes a time, ""
+    when nothing says (open_work); and the issue it is a claim's work for,
+    None for a pull request that is no claim's (identity)."""
 
     number: int
     files: tuple
@@ -749,6 +826,23 @@ class Work(NamedTuple):
     is_pull: bool = True
     branch: str = ""
     began: str = ""
+    issue: int | None = None
+
+
+def identity(work):
+    """The number that names a piece of open work for as long as it is
+    open, in the overlap markers and as the place it is told: the issue,
+    for a claim and the pull request later opened from its branch, which
+    are one piece, so opening the pull request tells nothing again; the
+    pull request's own number for one that is no claim's, from a fork,
+    from a branch that is no claim or opened by someone who may not write
+    (spec, Overlaps; F2: until the fix the work was named by its pull
+    request's number as soon as it had one, and told on it, so a claim
+    that opened its pull request was told again of the work it was told
+    of, and that work told again of it). An issue's number names each
+    claim on it in turn, which the coordinator tells apart by when the
+    claim's branch was made (coordinator.heard_of)."""
+    return work.number if work.issue is None else work.issue
 
 
 # Where work whose beginning nothing says stands in the landing order: with
@@ -805,24 +899,30 @@ def open_work(snapshot):
     branch, and a pull request where pull_began says; a pull request from a
     fork carries no branch, since its branch is none of this
     repository's, and is a piece of its own, whatever its branch is called,
-    since it is no claim's (claim_of)."""
+    since it is no claim's (claim_of), as is a stranger's pull request from
+    a claim's branch here, which a release's rename closes with the claim's
+    own (closed_by_release). A claim's own pull request carries the issue
+    it is for, which names the piece (identity)."""
     snap = as_snapshot(snapshot)
     released = released_keys(snap)
+    renamed = released_branches(snap)
     pulls = {p.branch: p for p in snap.pulls if claim_of(p) is not None}
     work = []
     for pull in snap.pulls:
         key = claim_of(pull)
-        if key in released:
+        if closed_by_release(pull, renamed):
             continue
         files = own_files(pull.files) or (own_files(claim_files(snap.claims.get(key) or "")) if key else ())
         work.append(Work(pull.number, files, not pull.draft, bool(key) and is_blocker(snap, key), True,
-                         "" if pull.fork else pull.branch, pull_began(snap, pull)))
+                         "" if pull.fork else pull.branch, pull_began(snap, pull),
+                         number_of(pull.branch) if key else None))
     for branch in claim_branches(snap.branches):
         key, number = key_of(branch), number_of(branch)
         if branch in pulls or key in released or number is None:
             continue
         files = own_files(claim_files(snap.claims.get(key) or ""))
-        work.append(Work(number, files, False, is_blocker(snap, key), False, branch, snap.began.get(branch, "")))
+        work.append(Work(number, files, False, is_blocker(snap, key), False, branch, snap.began.get(branch, ""),
+                         number))
     return sorted(work, key=lambda w: w.number)
 
 
@@ -839,12 +939,15 @@ def pull_began(snap, pull):
 
 def overlaps(snapshot):
     """The files that more than one piece of open work changes, each with
-    that work in the order it should land (landing_key), in file order."""
+    that work in the order it should land (landing_key), in file order; a
+    claim's two pull requests, which GitHub allows to two bases, are one
+    piece (identity), so a file they alone change meets nothing."""
     meeting = {}
     for work in open_work(snapshot):
         for path in work.files:
             meeting.setdefault(path, []).append(work)
-    return {path: sorted(works, key=landing_key) for path, works in sorted(meeting.items()) if len(works) > 1}
+    return {path: sorted(works, key=landing_key) for path, works in sorted(meeting.items())
+            if len({identity(work) for work in works}) > 1}
 
 
 def overlap_rows(snap):

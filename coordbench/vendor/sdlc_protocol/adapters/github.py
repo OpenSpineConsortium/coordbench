@@ -19,6 +19,7 @@ apart, on the exception, for a caller that wants to say why.
 """
 
 import base64
+import dataclasses
 import http.client
 import json
 import os
@@ -26,7 +27,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from .. import board, claims, coordinator, gate, labels, team
 from ..gate import GateFailed, MainMoved, MergeRefused, MergeResult, NotAllowed
@@ -52,9 +54,30 @@ ACTIVITY_PAGE = 100
 # (began_refused_lines).
 UNDATED_PULL = "date its pull request by when it was opened"
 UNDATED_CLAIM = "put its claim last, as work nothing dates"
+UNDATED_STRANGER = ("date a stranger's pull request from it by when it was opened and put its claim last, as work "
+                    "nothing dates")
 # GitHub computes mergeability after the first ask; one more ask after a
 # pause is enough, and "unknown" is the honest word when it still has not.
 MERGEABLE_RETRY_SECONDS = 3
+# The repository's activity may not list a push the moment GitHub takes it:
+# one more read after a pause before a claim is dated by its committer
+# date (head_since, F8).
+PUSH_RETRY_SECONDS = 3
+NO_PUSH_LISTED = "the repository's activity lists no push that set the branch's head"
+# In the run a branch's push started, an entry that set its head more than
+# PUSH_SINCE_SLACK before the run began dates nothing: an older push of
+# that head, the run's own not listed yet, or the run's own where the run
+# began that much after it, queued behind other runs; either way the run's
+# start dates the head, and the line says only what is so of both
+# (head_since).
+OLDER_PUSH_LISTED = "the newest push the repository's activity lists of the branch's head came before this run began"
+# An entry of a branch's activity that names another head dates the claim
+# only when it came after the run began, a push after the run read the
+# branch; this much earlier still counts, for a runner's clock ahead of
+# GitHub's. Dating by it can only hold a claim, never release one. In the
+# run a branch's push started, an entry that set the head counts as that
+# push only when it came as late as this too (OLDER_PUSH_LISTED).
+PUSH_SINCE_SLACK = timedelta(minutes=5)
 RECENT_MERGED = board.RECENT_MERGED
 
 # GitHub's mergeable_state words that say only that something besides the
@@ -148,6 +171,7 @@ class GitHub:
         self.repo = repo
         self.opener = opener or urllib.request.build_opener()
         self.sleep = sleep
+        self.asked = permissions(self)
 
     def headers(self):
         return {
@@ -273,10 +297,19 @@ class GitHub:
         owner, which a fork in the same organization shares (github/docs,
         content/pull-requests/reference/forks.md:113), so a pull request
         from such a fork is left out by the head and base the list gives
-        (board.from_fork; F17's review)."""
+        (board.from_fork; F17's review); and so, from a claim's branch, is
+        one that someone who may not write opened from the branch here,
+        which is no claim's either (claims.opened_by_writer, may_open;
+        F19), a filter for claim branches alone, as mark_strangers's is,
+        since another branch's pull request is no claim's whoever opened
+        it. The gate's world reads a branch's pull request through this too
+        (GitHubWorld.pull_of, merge), so a stranger's from a claim's branch
+        has no standing and is never merged."""
         owner = self.repo.split("/")[0]
         found = self.get(f"/repos/{self.repo}/pulls", {"state": "open", "head": f"{owner}:{branch}"}) or []
-        own = [pull for pull in found if not board.from_fork(pull)]
+        own = [pull for pull in found
+               if not board.from_fork(pull)
+               and (not claims.is_claim_branch(branch) or claims.opened_by_writer(pull, may_open(self.asked)))]
         return self.get(f"/repos/{self.repo}/pulls/{own[0]['number']}") if own else None
 
     def check_runs(self, sha):
@@ -288,6 +321,17 @@ class GitHub:
             if isinstance(page, dict):
                 runs.extend(page.get("check_runs") or [])
         return runs
+
+    def claim_text(self, branch):
+        """The claim file on a claude/<issue> branch, as the board reads it
+        (claim_text below): the clerk reads whose a claim is from it (F18)."""
+        return claim_text(self, branch)
+
+    def released(self, branch):
+        """Whether a release comment counts for the claim on a claude/<issue>
+        branch (claim_released below): the clerk carries a released claim
+        for nobody (F18's review)."""
+        return claim_released(self, branch)
 
     def create_label(self, name, colour):
         """Make the label; GitHub answers 422 for one that exists, which is
@@ -472,8 +516,14 @@ def issue_or_none(api, number):
 def claim_heads(listed):
     """The head commit of each claim branch, by branch, from the branch
     list as the API gives it; a branch given by name alone has none."""
+    return {name: sha for name, sha in branch_heads(listed).items() if claims.is_claim_branch(name)}
+
+
+def branch_heads(listed):
+    """The head commit of every branch, by name, from the branch list as
+    the API gives it; a branch given by name alone has none."""
     return {branch["name"]: (branch.get("commit") or {}).get("sha") or ""
-            for branch in listed if isinstance(branch, dict) and claims.is_claim_branch(branch.get("name") or "")}
+            for branch in listed if isinstance(branch, dict) and branch.get("name")}
 
 
 def may_be_due(issue):
@@ -488,18 +538,25 @@ def may_be_due(issue):
 def ready_branches(pulls):
     """The head branches of the open pull requests marked ready, as the API
     details them; a pull request whose draft state is not given counts as
-    ready, as the board counts it. One from a fork is left out, whatever
-    its branch is called, since it is no claim's (board.claim_of)."""
-    return {(p.get("head") or {}).get("ref") for p in pulls if not p.get("draft") and not board.from_fork(p)}
+    ready, as the board counts it. One from a fork, or one a stranger
+    opened (mark_strangers), is left out, whatever its branch is called,
+    since it is no claim's (board.claim_of)."""
+    return {(p.get("head") or {}).get("ref") for p in pulls if not p.get("draft") and is_claims(p)}
 
 
-def may_write(api):
+def is_claims(pull):
+    """Whether a pull request, as the API details it, may be a claim's own:
+    not from a fork, and not one mark_strangers found a stranger opened
+    (board.claim_of)."""
+    return not board.from_fork(pull) and not board.from_stranger(pull)
+
+
+def permissions(api):
     """A callable saying whether a login may write to the repository, from
-    GitHub's collaborator permission, asked once per login. It stands in
-    for author_association where that word does not vouch for an author:
-    GitHub may show a private member of the organization to a workflow's
-    token as a contributor. A call GitHub refuses counts as no, so a
-    release by an author nobody can vouch for frees nothing."""
+    GitHub's collaborator permission, asked once per login: True where it
+    may, False where GitHub says it may not or knows no such login, and
+    None where GitHub refused the call, which may_write and may_open each
+    read their own way."""
     answers = {}
 
     def ask(login):
@@ -508,10 +565,54 @@ def may_write(api):
                 found = api.get(f"/repos/{api.repo}/collaborators/{urllib.parse.quote(login, safe='')}/permission",
                                 missing_ok=True) or {}
             except GitHubError:
-                found = {}
-            answers[login] = found.get("permission") in WRITE_PERMISSIONS or found.get("role_name") in WRITE_ROLES
+                answers[login] = None
+            else:
+                answers[login] = (found.get("permission") in WRITE_PERMISSIONS
+                                  or found.get("role_name") in WRITE_ROLES)
         return answers[login]
     return ask
+
+
+def may_write(api, asked=None):
+    """A callable saying whether a login may write to the repository, from
+    GitHub's collaborator permission (permissions), asked once per login:
+    through asked where the caller passes it, else the client's own cache
+    (GitHub.asked), so a board run and a clerk's look ask about an author
+    once however many readers name them, and only a client with no cache
+    pays for one of its own (F19's review). It stands in for
+    author_association where that word does not vouch for an author:
+    GitHub may show a private member of the organization to a workflow's
+    token as a contributor. A call GitHub refuses counts as no, so a
+    release by an author nobody can vouch for frees nothing."""
+    asked = asked or getattr(api, "asked", None) or permissions(api)
+    return lambda login: asked(login) is True
+
+
+def may_open(asked):
+    """A callable saying whether a login may have opened a claim's pull
+    request (claims.opened_by_writer), from the answers permissions gives:
+    unless GitHub says it may not write. A call GitHub refuses counts as
+    yes, so a lost answer never takes a claim's own pull request for a
+    stranger's, which would free a finished claim; it costs the runs in
+    which GitHub refuses the call, each releasing no claim such a pull
+    request holds."""
+    return lambda login: asked(login) is not False
+
+
+def mark_strangers(pulls, asked):
+    """Write the board's key stranger (board.from_stranger) on each pull
+    request, as the API details it, from a branch of this repository named
+    as a claim's that someone who may not write opened
+    (claims.opened_by_writer, may_open): it is no claim's, whatever its
+    branch is called (board.claim_of; F19). An author author_association
+    or an App's login vouches for costs no call; any other costs one, once
+    a run, through asked. The pull requests are returned."""
+    for pull in pulls:
+        branch = (pull.get("head") or {}).get("ref") or ""
+        if (claims.is_claim_branch(branch) and not board.from_fork(pull)
+                and not claims.opened_by_writer(pull, may_open(asked))):
+            pull["stranger"] = True
+    return pulls
 
 
 def committed_at(api, sha):
@@ -519,6 +620,249 @@ def committed_at(api, sha):
     does not know the commit."""
     commit = api.get(f"/repos/{api.repo}/git/commits/{sha}", missing_ok=True) or {}
     return (commit.get("committer") or {}).get("date") or ""
+
+
+def head_since(api, branch, sha, refused=None, now=None, started_by=""):
+    """When the branch's last commit came, as (pushed_at, committed_at),
+    the one read and the other "" (board.Release.last_commit): when GitHub
+    received the push that set the head, from the repository's activity
+    (read_push, pushed_by), so no worker's clock decides how long a claim has
+    been idle (F8: until its fix the head's committer date did, which the
+    pusher sets, so a commit dated ahead held a claim past its day and one
+    dated back had it released at once). now is when the run began, the
+    wall clock unless given, taken before the run read the branch. A first
+    read that lists no push that set the head, or that GitHub gives no
+    answer to that holds (a 5xx, a 429, a rate limit's 403, or none at
+    all), is made once more after a pause, as settled asks again for
+    mergeable: the push a run was started by is the one the activity is
+    likeliest not to list yet, and the committer date in its place would
+    let a commit dated back have its claim released in the run its own
+    push started. Where the second read dates no push either, or GitHub
+    refuses the read for good, the head's committer date stands in, the
+    rule before the fix, so a token that may not read the activity still
+    sees claims released and no claim is held for good; but never earlier
+    than the newest entry either read listed for the branch, since the
+    push that set the head came no sooner than that, so an activity that
+    lags still dates a claim no earlier than the push it lists last
+    (latest). In the run that a push to this branch started, started_by,
+    which the workflow's event names (cli.pushed_branch), a head no read
+    dates is dated at the run's start instead, for that run alone, since
+    that push came just before the run, whatever the two reads list: a
+    fresh branch's activity that lags both reads is an empty list, with no
+    floor, so the committer date would have a claim commit dated back
+    released in the run its own push started (F8's third review). So is a
+    head a read dates by an entry that came more than PUSH_SINCE_SLACK
+    before the run began: an older push of the same head that the activity
+    lists while it does not list the run's own yet, as a head pushed back
+    to one the branch had before gives, which dated by that entry would be
+    released in the run its own push started where the entry is more than
+    a day old (OLDER_PUSH_LISTED; F8's follow-up's second review); or the
+    run's own push, where the run began that much after it, queued behind
+    other runs, which the run's start then dates a little late, holding
+    the claim no longer than the queue held the run (its review). The next run
+    reads the activity again, so no claim is held for good. refused
+    records why, by branch, for the run's log (pushed_refused_lines),
+    except for a repository GitHub keeps no activity of (a 404), whose
+    committer dates were always the rule outside the run its push
+    started, which dates it at its start with no line either, and the
+    second read's 404 after a first that listed nothing, which says the
+    same. It costs one call where the first read dates the push; two
+    where it does not and the read is not made again, a refusal for good
+    or a 404, the second the commit; and up to three with a pause where it
+    is made again; in the run the branch's push started, the commit is
+    not read."""
+    now = now or datetime.now(timezone.utc)
+    read = first = read_push(api, branch, sha, now)
+    if first.again:
+        api.sleep(PUSH_RETRY_SECONDS)
+        read = read_push(api, branch, sha, now)
+    if read.pushed and (branch != started_by or came_since(read.pushed, now)):
+        return read.pushed, ""
+    floor, why = latest(read.floor, first.floor), read.why or (first.why if first.floor else "")
+    if branch == started_by:
+        began = github_time(now)
+        why = OLDER_PUSH_LISTED if read.pushed else why
+        if why and refused is not None:
+            refused[branch] = f"{why}, so its idleness is read from the start of this run, {began}, which its push started"
+        return began, ""
+    committed = committed_at(api, sha)
+    if floor and latest(committed, floor) != committed:
+        if refused is not None:
+            refused[branch] = (f"{why}, so its idleness is read from its newest entry's time, {floor}, "
+                               + ("later than its committer date" if committed else "GitHub not showing its commit"))
+        return floor, ""
+    if why and refused is not None:
+        refused[branch] = f"{why}, so its idleness is read from its committer date"
+    return "", committed
+
+
+def github_time(moment):
+    """A moment as GitHub writes a time, ISO 8601 in UTC to the second, so
+    a run's start can stand where the activity's times do."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class PushRead(NamedTuple):
+    """One read of when the push that set a branch's head came: GitHub's
+    time of that push where the activity dates it; else why the committer
+    date would stand in, in words for the run's log ("" for a repository
+    GitHub keeps no activity of, a 404), whether a second read may tell
+    more, and the time of the newest entry listed for the branch, which
+    the push of the head came no sooner than ("" where none was listed)."""
+
+    pushed: str = ""
+    why: str = ""
+    again: bool = False
+    floor: str = ""
+
+
+def read_push(api, branch, sha, now=None):
+    """One read of when the push that set the branch's head came
+    (PushRead), now being when the run began: dated where the newest entry
+    dates the head (pushed_by); else owed a second read where GitHub's
+    answer may change (may_answer_later) or the list names no push of the
+    head yet."""
+    try:
+        entry = newest_entry(api, branch)
+    except GitHubError as problem:
+        return PushRead(why=f"GitHub refused to say when the push that set the branch's head came "
+                            f"({problem}{github_words(problem)})", again=may_answer_later(problem))
+    if entry is None:
+        return PushRead()
+    pushed = pushed_by(entry, sha, now)
+    return PushRead(pushed=pushed) if pushed else PushRead(why=NO_PUSH_LISTED, again=True, floor=entry_time(entry))
+
+
+def may_answer_later(problem):
+    """Whether GitHub may answer the same call after a pause: it gave no
+    answer, a 5xx, a 429, or a 403 that says a rate limit was reached,
+    which GitHub sends for its secondary limits; any other refusal, a 401,
+    a 403 for a token that may not read, a 422, is its answer for good."""
+    status = problem.status
+    if status is None or status >= 500 or status == 429:
+        return True
+    return status == 403 and "rate limit" in (problem.detail or str(problem)).lower()
+
+
+def head_pushed_at(api, branch, sha, now=None):
+    """When GitHub received the push that set the branch's head, as the
+    repository's activity records it (pushed_by, on the newest entry of the
+    branch's activity); "" when that entry does not date it, or there is
+    no entry at all; None when GitHub keeps no activity of the repository
+    (a 404). Any other refusal raises."""
+    entry = newest_entry(api, branch)
+    return None if entry is None else pushed_by(entry, sha, now)
+
+
+def newest_entry(api, branch):
+    """The newest entry of the branch's activity, of any kind; {} where the
+    list is empty or its first item is no entry of this branch; None where
+    GitHub keeps no activity of the repository (a 404). Any other refusal
+    raises."""
+    ref = f"refs/heads/{branch}"
+    listed = api.get(f"/repos/{api.repo}/activity", {"ref": ref, "direction": "desc", "per_page": 1},
+                     missing_ok=True)
+    if listed is None:
+        return None
+    newest = listed[0] if isinstance(listed, list) and listed else None
+    return newest if isinstance(newest, dict) and newest.get("ref") == ref else {}
+
+
+def pushed_by(entry, sha, now):
+    """The time the branch's newest entry dates its head by: its own, when
+    it set the head the run read, a push, a forced push, the branch's
+    creation or a merge into it; or when it came no earlier than
+    PUSH_SINCE_SLACK before now, when the run began, whatever heads it
+    names, a push after the run read the branch, which says the claim had
+    a push then. An older entry that names another head is stale, since a
+    later push the activity does not list yet set the head the run read,
+    and dating by it would read the claim as idle while its holder pushes;
+    with now None only the first rule dates. "" where neither holds, or
+    the entry's time is none GitHub writes."""
+    at = entry_time(entry)
+    if at and (entry.get("after") == sha or came_since(at, now)):
+        return at
+    return ""
+
+
+def entry_time(entry):
+    """The entry's time as GitHub writes it, ISO 8601; "" for one missing
+    or none such, which dates nothing rather than failing the run."""
+    at = entry.get("timestamp") if isinstance(entry, dict) else None
+    if not isinstance(at, str) or not at:
+        return ""
+    try:
+        claims.parse_time(at)
+    except ValueError:
+        return ""
+    return at
+
+
+def came_since(timestamp, now):
+    """Whether GitHub's time of an entry is no earlier than PUSH_SINCE_SLACK
+    before now; a time that is missing or not one is not."""
+    if not timestamp or now is None or not isinstance(timestamp, str):
+        return False
+    try:
+        return claims.parse_time(timestamp) >= now - PUSH_SINCE_SLACK
+    except ValueError:
+        return False
+
+
+def latest(first, second):
+    """The later of two times as GitHub writes them, the first where they
+    are the same instant, and either one where the other is "" or none
+    GitHub writes."""
+    try:
+        later = claims.parse_time(first) >= claims.parse_time(second)
+    except (ValueError, AttributeError):
+        return first if entry_time({"timestamp": first}) else second
+    return first if later else second
+
+
+def pushed_refused_lines(snapshot):
+    """A line for each claim branch whose head the run could not date by
+    the push that set it, saying why and what it read in its place, the
+    committer date, the newest entry listed or the start of the run its
+    push started, for the workflow's log, since the page says nothing of
+    it: a token that may not read the repository's activity would
+    otherwise have every claim's idleness read from its committer date on
+    every run unseen."""
+    snap = board.as_snapshot(snapshot)
+    return [f"{branch}: {why}" for branch, why in sorted(snap.pushed_refused.items())]
+
+
+def claim_released(api, branch, now=None):
+    """Whether a release comment counts for the claim on a claude/<issue>
+    branch, by the part of the release rule its issue's comments and the
+    branch's head decide, read as releases reads them for the board: the
+    latest release comment by an author the repository trusts came after
+    the branch had gone more than a day without a commit, as GitHub dates
+    the push of its head (head_since), and nothing was committed since, or
+    the head is one a release already kept (board.release_counts). The
+    labels and the pull request decide the rest (board.is_released), which
+    the clerk reads from its own look (team.Snapshot.released). A branch
+    with no head GitHub knows is no released claim, as the board counts
+    none. It costs a call for the branch's head, one for the released
+    branch that would keep it, what head_since costs and, once the branch
+    has gone more than a day without a commit or its head is kept, the
+    issue's comments and a call for each author whose permission must be
+    asked, once a client (GitHub.asked), so the clerk's look asks about an
+    author once however many claims it reads."""
+    now = now or datetime.now(timezone.utc)
+    name = board.branch_name(branch)
+    sha = branch_sha(api, name)
+    if not sha:
+        return False
+    key = claims.key_of(name)
+    kept = branch_sha(api, claims.released_branch(key, sha)) == sha
+    pushed, committed = head_since(api, name, sha, now=now)
+    release = board.Release(sha=sha, committed_at=committed, pushed_at=pushed, kept=kept)
+    if not kept and (not release.last_commit or not claims.is_idle(release.last_commit, now)):
+        return False
+    comments = api.get_all(f"/repos/{api.repo}/issues/{quoted(key)}/comments")
+    release.released_at = claims.latest_release(comments, may_write(api))
+    return board.release_counts(release)
 
 
 def finished_draft(api, pull):
@@ -531,10 +875,11 @@ def finished_draft(api, pull):
     return claims.said_finished(api.get_all(f"/repos/{api.repo}/issues/{pull['number']}/comments"), author)
 
 
-def releases(api, heads, found_issues, pulls, now=None):
+def releases(api, heads, found_issues, pulls, now=None, asked=None, every_head=None, refused=None, started_by=""):
     """What the release rule reads about each claim that has gone more than
-    a day without a commit, by key: the branch's head commit with the time
-    it was committed, and the time of the latest release comment on its
+    a day without a commit, or whose head a release kept, by key, as a
+    board.Release's JSON shape: the branch's head commit with the time its
+    last commit came, and the time of the latest release comment on its
     issue, "" when there is none. The coordinator releases such a claim
     unless a comment already did (coordinator.releases_due), and the board
     counts it released once the label claimed is off too
@@ -544,48 +889,76 @@ def releases(api, heads, found_issues, pulls, now=None):
     (finished_draft), which the coordinator never releases, unless a person
     has released it, as the protocol lets anyone who may write release any
     claim: it is read only once its issue no longer carries claimed, and
-    kept only when its release comment counts (claims.was_released), so
+    kept only when its release comment counts (board.release_counts), so
     the board counts the release and the coordinator, which finds it done,
     adds none. A claim whose issue is labelled in-review or is not open,
     or whose pull request is marked ready, costs no call; any other costs
-    one for its head commit, and, when that commit is more than a day old,
-    one for its draft's comments, then, unless the draft is finished and
-    its issue still carries claimed, one for its issue's comments and one
-    per author whose permission must be asked, so the run pays only where
-    a release can be due or can have happened."""
+    what dating its head costs (head_since: one call where the activity
+    dates the push at once, up to three where it does not), and, when its
+    last commit is more than a day old or its head is kept, one for its
+    draft's comments, then, unless the draft is finished and its issue
+    still carries claimed, one for its issue's comments and one per
+    author whose permission must be asked, so the run pays only where
+    a release can be due or can have happened. A draft from a fork, or one
+    a stranger opened, is no claim's (is_claims), so what its author says
+    holds no claim. asked is the run's answers to who may write
+    (permissions), shared with mark_strangers. When the last commit came is
+    when GitHub received the push of the head (head_since, F8), and
+    every_head, each branch's head by name, says which heads a release
+    already kept, a branch released/<issue>-<short sha> standing at the
+    same commit (board.Release.kept), which is read whatever its time, so
+    the board frees the name of a branch pushed again at such a head;
+    refused gathers, for the run's log, why each claim whose head no read
+    dated by its push was dated by its committer date, by the newest
+    entry listed or by the run's start: GitHub's refusal, or an activity
+    that lists no push of the head, or, in the run the branch's push
+    started, only one from before the run began. now is when the run
+    began, taken before it read the branches, so a push after that read is
+    told from a stale entry (pushed_by); started_by is the branch whose
+    push started the run, "" for none, whose head is dated at the run's
+    start where no read dates its push, or a read dates it by an entry from
+    before the run began (head_since)."""
     now = now or datetime.now(timezone.utc)
-    ready, trusted = ready_branches(pulls), may_write(api)
-    drafts = {(p.get("head") or {}).get("ref"): p for p in pulls if p.get("draft") and not board.from_fork(p)}
+    ready, trusted = ready_branches(pulls), may_write(api, asked)
+    drafts = {(p.get("head") or {}).get("ref"): p for p in pulls if p.get("draft") and is_claims(p)}
+    every_head = every_head or {}
     found = {}
     for branch, sha in sorted(heads.items()):
         key = claims.key_of(branch)
         if not sha or branch in ready or not may_be_due(found_issues.get(key)):
             continue
-        last_commit = committed_at(api, sha)
-        if not last_commit or not claims.is_idle(last_commit, now):
+        kept = every_head.get(claims.released_branch(key, sha)) == sha
+        pushed, committed = head_since(api, branch, sha, refused, now, started_by)
+        release = board.Release(sha=sha, committed_at=committed, pushed_at=pushed, kept=kept)
+        if not kept and (not release.last_commit or not claims.is_idle(release.last_commit, now)):
             continue
         finished = finished_draft(api, drafts.get(branch))
         if finished and labels.CLAIMED in found_issues[key]["labels"]:
             continue
-        released_at = claims.latest_release(api.get_all(f"/repos/{api.repo}/issues/{key}/comments"), trusted)
-        if finished and not claims.was_released(released_at, last_commit):
+        release.released_at = claims.latest_release(api.get_all(f"/repos/{api.repo}/issues/{key}/comments"), trusted)
+        if finished and not board.release_counts(release):
             continue
-        found[key] = {"released_at": released_at, "sha": sha, "committed_at": last_commit}
+        found[key] = release.to_dict()
     return found
 
 
-def collect(api, sha, default_branch, now=None):
+def collect(api, sha, default_branch, now=None, started_by=""):
     """Everything the board renders, in the shape a --dry-run fixture has,
     so a live run's answers can be saved and rendered again offline; now is
     the moment a claim's idleness is measured from, the wall clock unless
-    given."""
+    given, taken before the branches are read, so a push after that read
+    dates its claim (pushed_by); started_by is the branch whose push
+    started the run, "" for none (releases)."""
+    now = now or datetime.now(timezone.utc)
     repo = api.repo
+    asked = getattr(api, "asked", None) or permissions(api)
     issues = [i for i in api.get_all(f"/repos/{repo}/issues", {"state": "open"}) if "pull_request" not in i]
-    pulls = [pull_with_detail(api, p["number"], default_branch)
-             for p in api.get_all(f"/repos/{repo}/pulls", {"state": "open"})]
+    pulls = mark_strangers([pull_with_detail(api, p["number"], default_branch)
+                            for p in api.get_all(f"/repos/{repo}/pulls", {"state": "open"})], asked)
     listed = api.get_all(f"/repos/{repo}/branches")
     branches = board.claim_branches(listed)
     found_issues = claim_issues(api, branches, issues)
+    undated = {}
     found = {
         "sha": sha,
         "default_branch": default_branch,
@@ -595,8 +968,11 @@ def collect(api, sha, default_branch, now=None):
         "claims": {claims.key_of(b): claim_text(api, b) for b in branches},
         "claim_issues": found_issues,
         "merged": recent_merged(api),
-        "releases": releases(api, claim_heads(listed), found_issues, pulls, now),
+        "releases": releases(api, claim_heads(listed), found_issues, pulls, now, asked, branch_heads(listed),
+                             undated, started_by),
     }
+    if undated:
+        found["pushed_refused"] = undated
     found["began"], refused = began_times(api, found)
     if refused:
         found["began_refused"] = refused
@@ -694,14 +1070,29 @@ def began_refused_lines(snapshot):
     lands last (board.pull_began, board.UNDATED)."""
     snap = board.as_snapshot(snapshot)
     opened = {pull.branch for pull in snap.pulls if not pull.fork}
+    own = {pull.branch for pull in snap.pulls if board.claim_of(pull) is not None}
     return [f"{branch}: GitHub refused to say when the branch was made ({answer}), so the Overlaps "
-            f"{UNDATED_PULL if branch in opened else UNDATED_CLAIM}"
+            f"{undated_words(branch, opened, own)}"
             for branch, answer in sorted(snap.began_refused.items())]
 
 
-def snapshot(api, sha, default_branch, now=None):
-    """The board's Snapshot of the repository as GitHub knows it now."""
-    return board.Snapshot.from_dict(collect(api, sha, default_branch, now))
+def undated_words(branch, opened, own):
+    """What the Overlaps do with the work of a branch GitHub refused to
+    date: date its pull request by its opening where the branch has one of
+    its own, or is no claim's; and for a claim branch with none of its own,
+    put the claim last, and date a stranger's pull request from it, where
+    there is one, by its opening, since that is a piece of its own (F19;
+    the fix's review)."""
+    if branch in own or (branch in opened and not claims.is_claim_branch(branch)):
+        return UNDATED_PULL
+    return UNDATED_STRANGER if branch in opened else UNDATED_CLAIM
+
+
+def snapshot(api, sha, default_branch, now=None, started_by=""):
+    """The board's Snapshot of the repository as GitHub knows it now;
+    started_by is the branch whose push started the run, "" for none
+    (collect)."""
+    return board.Snapshot.from_dict(collect(api, sha, default_branch, now, started_by))
 
 
 def has_marker(api, number, marker):
@@ -784,10 +1175,22 @@ def release_one(api, snap, key, now):
     the todo it put on, so the issue is as the run found it and the next
     run starts the release over, unless the comment turns out to be there
     after all, one GitHub wrote and lost its answer to, which makes the
-    release whole. Only when GitHub refuses the putting back too are the
-    labels left as the failure left them with no comment, until a run
-    releases the claim or a person puts them back. What was done, in a
-    line."""
+    release whole. A run that cannot read the issue's comments to see
+    whether it is there leaves the labels as the release left them and
+    counts no release of its own (unsettled; F20), since labels put back
+    beside a comment that stands would hold the claim for good: the
+    comment tells every later coordinator the claim is released, and the
+    label claimed tells the board it is held; the next run, reading the
+    comments, settles it as it settles any claim whose labels are off,
+    finding the release whole or releasing the claim again unless its
+    holder pushed or a person put the label claimed back in the meantime,
+    while on a head a release already kept, where a release comment that
+    counts stands, whenever it came (board.release_counts), that earlier
+    release frees the claim in the same run once the labels are off.
+    Where GitHub refuses the putting back too, the labels are left off
+    with no comment, as an unsettled release leaves them where GitHub
+    wrote none, until a run releases the claim or a person puts them
+    back. What was done, in a line."""
     release = snap.releases[key]
     names, put_on = coordinator.labels_released(snap, key), coordinator.labels_put_on(snap, key)
     taken_off = []
@@ -806,13 +1209,16 @@ def release_one(api, snap, key, now):
     try:
         released_at = (api.post(f"/repos/{api.repo}/issues/{key}/comments", {"body": text}) or {}).get("created_at")
     except GitHubError as problem:
-        released_at = landed_release(api, key, release)
+        try:
+            released_at = landed_release(api, key, release)
+        except GitHubError as unread:
+            return unsettled(snap, key, names, put_on, problem, unread)
         if not released_at:
             return (f"#{key}: not released, the comment failed: {problem}{github_words(problem)}"
                     + put_back(api, key, taken_off, put_on))
         lost = f" (GitHub's answer to the comment was lost, {problem}, but the comment is there)"
     coordinator.after_release(snap, key, released_at or now.isoformat(), names, put_on)
-    return f"#{key}: claim released, idle since {release.committed_at}{lost}"
+    return f"#{key}: claim released, idle since {release.last_commit}{lost}"
 
 
 def take_label_off(api, key, name):
@@ -870,33 +1276,83 @@ def put_back(api, key, names, put_on=()):
     return said
 
 
+def unsettled(snap, key, names, put_on, problem, unread):
+    """The line of a release whose comment failed and whose issue's
+    comments could not be read to see whether GitHub wrote it anyway: the
+    labels stay as the release left them, and the snapshot shows them so,
+    with no release of this run's, since the run cannot tell whether one
+    stands, so the page lists the claim as held and nothing is renamed
+    this run; the next run, reading the comments, finds the comment and
+    the release is whole, or finds none and releases the claim again,
+    unless its holder pushed since or a person put the label claimed back
+    beside the comment (F20; until its fix the labels went back beside a
+    comment that might stand, which held the claim for good). A head a
+    release already kept, where a release comment that counts stands, is
+    the exception: that comment counts whenever it came
+    (board.release_counts), so with the labels off the snapshot counts
+    that earlier release, and the same run lists the claim as released
+    and deletes the branch, whose work is kept, with no word of this
+    release on the issue where GitHub wrote none (F20's review). So the
+    line says what was done and nothing of what comes next."""
+    coordinator.after_labels(snap, key, names, put_on)
+    return (f"#{key}: release unsettled, the comment failed: {problem}{github_words(problem)}; its issue's "
+            f"comments could not be read to see whether GitHub wrote it anyway: {unread}{github_words(unread)}; "
+            f"the labels stay as the release left them")
+
+
 def landed_release(api, key, release):
     """When the comment that releases this claim was made, by the rule the
     next run reads it with (claims.was_released), or "" when none stands:
     a call that GitHub answered with an error, a 502 or a timeout, may
-    still have written the comment, and once it stands the release is done.
-    A read GitHub refuses finds none."""
-    try:
-        comments = api.get_all(f"/repos/{api.repo}/issues/{key}/comments")
-    except GitHubError:
-        return ""
+    still have written the comment, and once it stands the release is done;
+    only a comment newer than the latest the run held is this run's
+    (newer). A read GitHub refuses raises GitHubError, since the run then
+    cannot tell whether the comment stands (release_one)."""
+    comments = api.get_all(f"/repos/{api.repo}/issues/{key}/comments")
     released_at = claims.latest_release(comments, may_write(api))
-    return released_at if claims.was_released(released_at, release.committed_at) else ""
+    if not released_at or not newer(released_at, release.released_at):
+        return ""
+    return released_at if board.release_counts(dataclasses.replace(release, released_at=released_at)) else ""
+
+
+def newer(found, held):
+    """Whether a release comment found after a failed post is newer than
+    the latest the run held before it: one no newer is an earlier
+    release's, which for a kept head counts whenever it came
+    (board.release_counts), so it would pass for this run's comment while
+    none was written."""
+    return not held or claims.parse_time(found) > claims.parse_time(held)
 
 
 def tell_overlaps(api, snap):
-    """Post each overlap comment that is due, reading only the comments of
-    the work that meets other work, and counting only the markers of
-    authors the repository trusts (coordinator.told_numbers); work whose
-    comments GitHub would not give is told nothing this run, so it is never
-    told twice. The lines say what was posted."""
+    """Post each overlap comment that is due, on the piece's identity, the
+    issue for a claim's work and the pull request itself for one that is
+    no claim's (board.identity), for the work that meets other work,
+    counting only the markers of authors the repository trusts
+    (coordinator.told_numbers) and only those that came no earlier than
+    the claims they speak of (coordinator.heard_of). The markers on the
+    identity are read first; a claim's work that they leave something to
+    tell is read on its own open pull requests too
+    (coordinator.told_places), where the coordinator told it before F2's
+    fix, so the upgrade tells nothing again; the extra read is paid only
+    where the issue's markers alone would have a comment go out, which for
+    a claim told on its pull request before the fix, and never on its
+    issue since, is every run until its overlap ends. Work whose comments
+    GitHub would not give is told nothing this run, so it is never told
+    twice. The lines say what was posted."""
     lines, told, trusted = [], {}, may_write(api)
     for number in coordinator.meeting(snap):
-        try:
-            comments = api.get_all(f"/repos/{api.repo}/issues/{number}/comments")
-            told[number] = coordinator.told_numbers(comments, trusted)
-        except GitHubError as problem:
-            lines.append(f"#{number}: overlaps not told, its comments were not read: {problem}{github_words(problem)}")
+        markers = markers_on(api, number, trusted, lines, f"#{number}: overlaps not told, its comments were not read")
+        if markers is not None:
+            told[number] = markers
+    for number, _, _ in coordinator.overlap_comments_due(snap, told):
+        for place in coordinator.told_places(snap, number) if number in told else ():
+            failed = f"#{number}: overlaps not told, the comments of its pull request #{place} were not read"
+            markers = markers_on(api, place, trusted, lines, failed)
+            if markers is None:
+                told.pop(number)
+                break
+            told[number] = coordinator.merged_times(told[number], markers)
     for number, marker, text in coordinator.overlap_comments_due(snap, told):
         if number not in told:
             continue
@@ -907,6 +1363,17 @@ def tell_overlaps(api, snap):
             continue
         lines.append(f"#{number}: overlap comment posted")
     return lines
+
+
+def markers_on(api, number, trusted, lines, failed):
+    """When the latest trusted overlap marker on an issue or a pull request
+    named each number (coordinator.told_times), or None, with a line
+    saying why, when GitHub would not give its comments."""
+    try:
+        return coordinator.told_times(api.get_all(f"/repos/{api.repo}/issues/{number}/comments"), trusted)
+    except GitHubError as problem:
+        lines.append(f"{failed}: {problem}{github_words(problem)}")
+        return None
 
 
 def branch_sha(api, branch):
