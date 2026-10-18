@@ -544,7 +544,10 @@ team's own developer agent can be measured under any arm: on the
 claude-cli driver only, as `claude --agents FILE --agent NAME`, with the
 arm's prompt still the task and the run's model and disallowed tools
 holding over the file's; result.json then names the agent and the
-sha256 of its file under `agent_file` (coordbench/agent_file.py).
+sha256 of its file under `agent_file` (coordbench/agent_file.py). An
+agent that lists tools must keep an `mcp__` tool where the arm brings MCP
+servers or a plugin, or the run stops before it starts, since dropping
+the arm's coordination tools would change the arm and not only the agent.
 
 The logs take CooperBench's layout, so `cooperbench eval` and
 bench/cooperbench/report.py read them as they read the authors' runs.

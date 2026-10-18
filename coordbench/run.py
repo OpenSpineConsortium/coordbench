@@ -2311,12 +2311,27 @@ def dataset_dir_of(settings):
     return Path(settings.get("dataset_dir") or Path(settings["cooperbench_dir"]) / "dataset")
 
 
+def refuse_agent_without_coordination(definition, surface):
+    """An agent file that lists tools must keep the arm's coordination
+    tools: one that dropped every mcp__ tool where the arm brings MCP
+    servers or a plugin would change the arm, not only the agent, so the
+    run stops before it starts rather than measuring something else."""
+    if not definition:
+        return
+    tools = next(iter(definition["agents"].values())).get("tools")
+    if tools and (surface.get("mcp_servers") or surface.get("plugin")) \
+            and not any(str(tool).startswith("mcp__") for tool in tools):
+        raise SystemExit(f"--agent-file: {definition['name']} lists tools with no mcp__ tool, so it would drop the "
+                         "arm's coordination tools; add them (or list no tools) and run again")
+
+
 def new_plan(settings, driver, repo, task_id, features):
     arm = find_arm(settings["arm"])
     layout = arm.layout(features)
     setting = pair_setting(arm, layout)
     dataset_dir = dataset_dir_of(settings)
     surface = arm.claude_surface(settings["options"])
+    refuse_agent_without_coordination(settings.get("agent_definition"), surface)
     return {
         "repo": repo, "task_id": int(task_id), "features": list(features), "setting": setting,
         "run_name": settings["run_name"], "run_id": new_run_id(arm_name(arm), task_id, features),

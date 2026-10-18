@@ -51,6 +51,14 @@ class AgentFile(unittest.TestCase):
         args.driver = None
         self.assertEqual(run.agent_definition_of(args, "claude-cli")["name"], "reviewer")
 
+    def test_an_agent_that_drops_the_arms_coordination_tools_is_refused(self):
+        definition = agent_file.definition(self.path)
+        with self.assertRaisesRegex(SystemExit, "coordination"):
+            run.refuse_agent_without_coordination(definition, {"mcp_servers": {"coord": {}}, "plugin": False})
+        run.refuse_agent_without_coordination(definition, {"mcp_servers": {}, "plugin": False})
+        self.path.write_text(AGENT.replace("tools: Read, Grep", "tools: Read, mcp__coord__post"))
+        run.refuse_agent_without_coordination(agent_file.definition(self.path), {"mcp_servers": {"coord": {}}})
+
     def test_a_bad_file_is_refused(self):
         self.path.write_text("no front matter\n")
         args = types.SimpleNamespace(agent_file=str(self.path), driver="claude-cli")
