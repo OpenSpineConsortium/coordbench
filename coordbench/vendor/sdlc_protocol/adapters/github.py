@@ -19,6 +19,7 @@ apart, on the exception, for a caller that wants to say why.
 """
 
 import base64
+import collections
 import dataclasses
 import http.client
 import json
@@ -79,6 +80,36 @@ OLDER_PUSH_LISTED = "the newest push the repository's activity lists of the bran
 # push only when it came as late as this too (OLDER_PUSH_LISTED).
 PUSH_SINCE_SLACK = timedelta(minutes=5)
 RECENT_MERGED = board.RECENT_MERGED
+# The headers GitHub answers a REST call with that say what the token's
+# rate limit has left: the calls left, the calls an hour allows and when
+# the hour ends, in seconds since the epoch. A workflow's GITHUB_TOKEN is
+# allowed 1,000 calls an hour per repository, shared by every workflow of
+# the repository that uses it, the board's among them (calls_line).
+LIMIT_HEADERS = ("x-ratelimit-remaining", "x-ratelimit-limit", "x-ratelimit-reset")
+# The most digits a header of the rate limit is read with: a count or a
+# time GitHub writes never comes near it, a time of ten digits is before
+# the year 2287, which datetime writes, and int() of a longer string
+# spends time no answer is worth (count_in).
+LIMIT_DIGITS = 10
+# GitHub refuses a call for a rate limit with a 403 or a 429, as its own
+# documentation says ("Rate limits for the REST API", "Exceeding the rate
+# limit"): its primary limit with x-ratelimit-remaining at 0, to be asked
+# again only after x-ratelimit-reset; a secondary limit with a message that
+# names it, to be asked again after retry-after's seconds where the answer
+# gives them, else after at least a minute and longer each time, giving up
+# after a few tries. The client waits as GitHub asks only while the wait
+# is short (rate_wait): a run that waited longer would hold up the runs
+# queued behind it, and the next run reads everything again anyway, so a
+# longer wait fails the call as any other refusal does. A client's waits
+# are bounded in all too (RATE_WAIT_BUDGET), at three minutes, so a job
+# with a limit of five minutes, the shortest a consumer gives a job that
+# runs the client, ends with GitHub's own words and not by its limit.
+RATE_STATUSES = (403, 429)
+RATE_WORDS = "rate limit"
+RATE_RETRIES = 2
+RATE_FIRST_WAIT = 60
+RATE_LONGEST_WAIT = 120
+RATE_WAIT_BUDGET = 180
 
 # GitHub's mergeable_state words that say only that something besides the
 # branch stops the merge, a rule, a review or the draft itself: how the
@@ -98,18 +129,25 @@ PASSING = {"success", "neutral", "skipped"}
 class GitHubError(team.ClientError):
     """A call GitHub refused or did not answer. The message names the
     method, the path and the status, never the token; status is the HTTP
-    status (None when there was no answer) and detail GitHub's own message
-    from the answer's body, "" when it gave none."""
+    status (None when there was no answer), detail GitHub's own message
+    from the answer's body, "" when it gave none, and headers the
+    answer's headers, None when there was no answer, for the wait a rate
+    limit asks (rate_wait); after_rate_limit says the client made the
+    call again after GitHub refused an earlier try of it for a rate limit
+    (GitHub.request), so the refusal is the last of several answers and
+    may follow a try GitHub acted on (wrote_nothing)."""
 
-    def __init__(self, message, status=None, detail=""):
+    def __init__(self, message, status=None, detail="", headers=None):
         super().__init__(message)
         self.status = status
         self.detail = detail
+        self.headers = headers
+        self.after_rate_limit = False
 
 
 def next_link(headers):
     """The URL of the next page named by a Link header, or None."""
-    link = (headers.get("Link") if headers is not None else None) or ""
+    link = header(headers, "link") or ""
     for part in link.split(","):
         pieces = part.split(";")
         if len(pieces) >= 2 and pieces[1].strip() == 'rel="next"':
@@ -129,6 +167,101 @@ def error_detail(problem):
     except (AttributeError, OSError, TypeError, ValueError, http.client.HTTPException):
         return ""
     return str(body.get("message") or "") if isinstance(body, dict) else ""
+
+
+def count_in(text):
+    """The whole number a header of the rate limit says, or None for one
+    missing or written otherwise: ASCII digits, at most LIMIT_DIGITS of
+    them, around which GitHub may leave spaces."""
+    text = text.strip() if isinstance(text, str) else ""
+    if not 0 < len(text) <= LIMIT_DIGITS or not (text.isascii() and text.isdigit()):
+        return None
+    return int(text)
+
+
+def header(headers, name):
+    """One header of an answer by its lowercase name, read in any case as
+    HTTP reads names, or None where the answer had none: urllib gives an
+    HTTPError's headers as None when it has no answer to read them from,
+    and a stand-in may give them as a plain mapping, whose names keep the
+    case they were written in."""
+    if headers is None:
+        return None
+    return next((value for key, value in headers.items() if isinstance(key, str) and key.lower() == name), None)
+
+
+def rate_limited(status, headers, detail):
+    """Whether GitHub refused a call for a rate limit, a refusal it asks to
+    have waited out (rate_wait) and that says nothing against the call
+    itself: a 429, Too Many Requests; or a 403 that says it is one, by a
+    retry-after header or by a message that names a rate limit, as
+    GitHub's refusals for its primary limit ("API rate limit exceeded")
+    and its secondary limits do. That retry-after tells one whatever the
+    message says is this project's assumption (validation/DESIGN.md,
+    3.2): GitHub's documentation names it for a secondary limit's refusal
+    and never says that no other refusal sends it. A 403 that says
+    neither is GitHub's answer to a token without the right or to a rule,
+    whatever its x-ratelimit-remaining says: every answer counts against
+    the hour, so the hour's last call is answered with none left,
+    whatever GitHub answers it with."""
+    if status not in RATE_STATUSES:
+        return False
+    return status == 429 or header(headers, "retry-after") is not None or RATE_WORDS in (detail or "").lower()
+
+
+def rate_wait(status, headers, detail, tries, now):
+    """The seconds to wait before a call GitHub refused is made again, the
+    call having been made again tries times already: for a refusal of a
+    rate limit's (rate_limited), the longest of the waits GitHub asks
+    for, the seconds retry-after names and, where the token has no call
+    left, until the hour's end, since each holds whatever the other says
+    ("Exceeding the rate limit"), or, where it asks for neither, a minute
+    and then two; None for any other refusal, for a spent hour whose end
+    the answer does not say, once the tries are spent (RATE_RETRIES), or
+    where GitHub asks for a longer wait than a run waits
+    (RATE_LONGEST_WAIT). now is the clock's time in seconds since the
+    epoch, which x-ratelimit-reset is written in."""
+    if tries >= RATE_RETRIES or not rate_limited(status, headers, detail):
+        return None
+    asked = count_in(header(headers, "retry-after"))
+    left = count_in(header(headers, "x-ratelimit-remaining"))
+    reset = count_in(header(headers, "x-ratelimit-reset"))
+    if left == 0 and reset is None:
+        return None
+    waits = [] if asked is None else [asked]
+    if left == 0:
+        waits.append(max(reset - int(now), 0) + 1)
+    wait = max(waits) if waits else RATE_FIRST_WAIT * 2 ** tries
+    return wait if wait <= RATE_LONGEST_WAIT else None
+
+
+def many(count, word):
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def calls_line(api):
+    """The run's last log line: how many of the run's calls to GitHub's
+    REST API GitHub answered, its reads and its writes, and what the
+    token's rate limit had left by the latest answer that said it, so
+    whoever reads the run's log sees what a board run costs and how near
+    the hour's limit it ran (LIMIT_HEADERS), and, where it waited for a
+    rate limit, how many times and how long in all, each wait one call
+    made again, while a refusal it did not wait out is a call like any
+    other; a stand-in client that keeps no waits, as one written before
+    the client waited, waited for none."""
+    reads = api.made["GET"]
+    writes = sum(api.made.values()) - reads
+    line = f"GitHub's REST API: {many(reads + writes, 'call')} in this run, {many(reads, 'read')} and " \
+           f"{many(writes, 'write')}"
+    waited = getattr(api, "waited", None) or ()
+    if waited:
+        line += f"; it waited for GitHub's rate limits {many(len(waited), 'time')}, {sum(waited)} s in all"
+    if api.limit is None:
+        return line
+    left, allowed, reset = api.limit
+    until = datetime.fromtimestamp(reset, timezone.utc).strftime("%H:%M UTC")
+    return f"{line}; GitHub last said the token had {left} of its {allowed} calls an hour left, the hour " \
+           f"ending at {until}"
 
 
 def quoted(name):
@@ -159,19 +292,30 @@ class GitHub:
     """The REST calls the package makes, through urllib, and the methods
     team.Client lists.
 
-    The opener and the sleep are arguments so a test can hand in fakes; the
-    token is the argument, else GITHUB_TOKEN, and with neither there is no
-    client, since every call would be refused.
+    The opener, the sleep and the clock are arguments so a test can hand in
+    fakes; the token is the argument, else GITHUB_TOKEN, and with neither
+    there is no client, since every call would be refused.
     """
 
-    def __init__(self, token, repo, opener=None, sleep=time.sleep):
+    def __init__(self, token, repo, opener=None, sleep=time.sleep, clock=time.time):
         self.token = token or os.environ.get("GITHUB_TOKEN")
         if not self.token:
             raise GitHubError("no token: pass one, or set GITHUB_TOKEN")
         self.repo = repo
         self.opener = opener or urllib.request.build_opener()
         self.sleep = sleep
+        self.clock = clock
+        # The seconds of each wait the client made for a rate limit, in
+        # order, for the run's log (calls_line) and the run's bound
+        # (RATE_WAIT_BUDGET).
+        self.waited = []
         self.asked = permissions(self)
+        # The calls GitHub answered this client, by method, and the rate
+        # limit as the latest answer that said it left it: the calls left,
+        # the calls an hour allows and when the hour ends (LIMIT_HEADERS),
+        # for the run's log (calls_line).
+        self.made = collections.Counter()
+        self.limit = None
 
     def headers(self):
         return {
@@ -185,7 +329,44 @@ class GitHub:
         return API + path + ("?" + urllib.parse.urlencode(params) if params else "")
 
     def request(self, method, url, body=None, missing_ok=False):
-        """One call; the decoded JSON and the answer's headers. A 404 is
+        """One call, made again after the wait GitHub asks where it refuses
+        the call for a rate limit and the wait is one a run takes
+        (wait_before_again); the decoded JSON and the answer's headers, or
+        the last refusal's GitHubError. A write is made again as a read is,
+        on an assumption: that GitHub refuses a rate limit's call before it
+        acts on it, which its documentation does not say, and which the
+        validation harness's fake assumes until a canary check settles it
+        (validation/DESIGN.md, 3.2 and section 11, C4). The labels a
+        release puts back after its comment failed do not rest on it
+        (wrote_nothing), so the refusal raised says whether an earlier try
+        was refused for a rate limit (GitHubError.after_rate_limit), since
+        only the last try's answer is raised, and a 422 after a rate
+        limit's refusal says nothing of what that earlier try did (F23's
+        second review)."""
+        tries = 0
+        while True:
+            try:
+                return self.send(method, url, body, missing_ok)
+            except GitHubError as problem:
+                wait = self.wait_before_again(problem, tries)
+                if wait is None:
+                    problem.after_rate_limit = tries > 0
+                    raise
+            self.waited.append(wait)
+            self.sleep(wait)
+            tries += 1
+
+    def wait_before_again(self, problem, tries):
+        """The wait rate_wait asks before the call is made again, or None
+        where it asks none or the run has waited as long as it waits in all
+        (RATE_WAIT_BUDGET)."""
+        wait = rate_wait(problem.status, problem.headers, problem.detail, tries, self.clock())
+        if wait is None or sum(self.waited) + wait > RATE_WAIT_BUDGET:
+            return None
+        return wait
+
+    def send(self, method, url, body=None, missing_ok=False):
+        """One call, made once; the decoded JSON and the headers. A 404 is
         (None, headers) when missing_ok says absence is an answer. Every
         failure of the call, whether GitHub, the connection or http.client
         refused it, is a GitHubError, whichever part of urllib raised it;
@@ -206,11 +387,14 @@ class GitHub:
         where = f"{method} {urllib.parse.urlsplit(url).path}"
         try:
             with self.opener.open(call, timeout=TIMEOUT) as answer:
+                self.count_answer(method, answer.headers)
                 raw, answered = answer.read(), answer.headers
         except urllib.error.HTTPError as problem:
+            self.count_answer(method, problem.headers)
             if problem.code == 404 and missing_ok:
                 return None, problem.headers
-            raise GitHubError(f"{where}: HTTP {problem.code}", problem.code, error_detail(problem)) from None
+            raise GitHubError(f"{where}: HTTP {problem.code}", problem.code, error_detail(problem),
+                              problem.headers) from None
         except OSError as problem:
             raise GitHubError(f"{where}: {getattr(problem, 'reason', problem)}") from None
         except http.client.HTTPException as problem:
@@ -221,6 +405,19 @@ class GitHub:
             return (json.loads(raw) if raw else None), answered
         except ValueError:
             raise GitHubError(f"{where}: the answer was not JSON") from None
+
+    def count_answer(self, method, headers):
+        """Count a call GitHub answered, whatever it answered, and keep the
+        rate limit its headers say, where they say all of it, for the run's
+        log (calls_line). A call never sent, or one the connection lost
+        before any answer, is not counted, as GitHub said nothing of it; a
+        redirect urllib follows, which GitHub answers a renamed repository's
+        old name with, is two calls counted as one. The headers are read
+        in any case (header), as rate_wait reads them."""
+        self.made[method] += 1
+        limit = tuple(count_in(header(headers, name)) for name in LIMIT_HEADERS)
+        if None not in limit:
+            self.limit = limit
 
     def get(self, path, params=None, missing_ok=False):
         data, _ = self.request("GET", self.url(path, params), missing_ok=missing_ok)
@@ -482,7 +679,8 @@ def recent_merged(api):
 
 def claim_issues(api, branches, open_issues):
     """The issue behind each claim branch, by its key: the state and the
-    label names. An open issue comes from the list already read; any other
+    label names, and GitHub's state_reason for one reopened, which
+    may_be_due reads. An open issue comes from the list already read; any other
     takes one call, so the board can say that a branch outlived its issue.
     A branch whose key is no number (claims.number_in) has none and costs
     no call: a key such as a superscript would put a path in the URL that
@@ -495,7 +693,8 @@ def claim_issues(api, branches, open_issues):
             continue
         issue = by_number.get(key) or issue_or_none(api, key)
         if issue is not None:
-            found[key] = {"state": issue.get("state", ""), "labels": labels.label_names(issue)}
+            found[key] = {"state": issue.get("state", ""), "labels": labels.label_names(issue)} \
+                | ({"state_reason": board.REOPENED} if issue.get("state_reason") == board.REOPENED else {})
     return found
 
 
@@ -511,6 +710,154 @@ def issue_or_none(api, number):
         if problem.status == GONE:
             return None
         raise
+
+
+def kept_names(listed):
+    """The branches a release left standing, released/<issue>-<short sha>,
+    by name, from the branch list as the API gives it."""
+    return [name for name in (board.branch_name(b) for b in listed) if name.startswith(claims.RELEASED_PREFIX)]
+
+
+def ended_releases(api, issues, branches, kept, asked):
+    """The reopened issues, by key, whose released branches a release of a
+    claim before the issue's last close left: an open issue GitHub says
+    was reopened that carries claimed or in-review, with no claim branch
+    and a branch released/<issue>-<short sha> standing, whose events
+    record a close, with no label claimed put on after it but by a claim
+    made since (claimed_by_a_claim), and whose comments hold no release
+    comment after it. Such a branch is no
+    release being undone, so the coordinator frees the issue wholly
+    (coordinator.claim_stands; F22).
+
+    The label claimed put on after the last close is a person undoing the
+    release, as the release's note on the issue asks (board.released_text),
+    unless the newest entry the repository's activity lists for the claim
+    branch claude/<issue>, of any kind, came at or after that close and no
+    earlier than the label: a claim made since puts its own claimed on
+    after its branch's making, and the branch, gone now, was deleted or
+    pushed after that, while an undo puts claimed back with no push to the
+    branch after it, whether no claim came between or one came and ended
+    before the person put claimed back (claimed_by_a_claim; F22's third
+    review and its review). An entry in the label's own second reads as
+    the claim's. A claim the activity does not list, one GitHub no longer
+    keeps the entries of or one whose entries a rename took, reads as an
+    undo: an empty list is what the ordinary undo, with no claim between,
+    shows, so reading it as a claim's would take every such person's
+    claimed off, while reading the unlisted claim as an undo only leaves
+    claimed on, with in-review off, for a person to take off. Claimed that
+    came through the close is the ended claim's (F22's second review).
+    Where GitHub refuses the activity, keeps none of the repository (a
+    404), or writes no time for the label or the entry, the issue is left
+    out this run. A release comment after the close counts unless GitHub
+    says its author may not write (may_open, from asked, the run's answers
+    to who may write), so a refused permission read leaves the issue out
+    this run, as a refused read of the events or the comments does, rather
+    than taking a writer's release for a stranger's and the labels off on
+    a guess. One left out keeps its released branch as a release being
+    undone, and the freeing takes in-review off alone, as before this was
+    read, until a later run reads it.
+
+    Only such an issue costs calls: every page of its events; one read of
+    the claim branch's newest entry in the activity where claimed went on
+    after the close; and every page of its comments where the events and the
+    activity leave the question open, with a permission asked, once a
+    run, for each author of a release comment after the close that
+    GitHub's word does not vouch for. A freed issue carries neither label
+    and costs nothing again; one whose release is being undone costs its
+    events and the activity read in every board run until a person
+    renames the branch back, as the note says, which nothing bounds
+    without a record kept from run to run (validation/DESIGN.md, F22)."""
+    found = []
+    for issue in issues:
+        key = str(issue.get("number", ""))
+        if not reopened_with_released_branch(issue, key, branches, kept):
+            continue
+        try:
+            events = api.get_all(f"/repos/{api.repo}/issues/{key}/events")
+            closed = latest_close(events)
+            if not closed or (claimed_since_close(events)
+                              and not claimed_by_a_claim(api, key, closed, last_claimed(events))):
+                continue
+            comments = api.get_all(f"/repos/{api.repo}/issues/{key}/comments")
+        except GitHubError:
+            continue
+        if not released_after(comments, closed, may_open(asked)):
+            found.append(key)
+    return found
+
+
+def reopened_with_released_branch(issue, key, branches, kept):
+    """Whether an issue is one ended_releases reads: GitHub says it was
+    reopened, it carries claimed or in-review, no claim branch stands for
+    it and a branch released/<issue>-<short sha> does."""
+    names = set(labels.label_names(issue))
+    return (issue.get("state_reason") == board.REOPENED and bool({labels.CLAIMED, labels.IN_REVIEW} & names)
+            and claims.branch_of(key) not in branches
+            and any(name.startswith(claims.released_branch(key, "")) for name in kept))
+
+
+def latest_close(events):
+    """When an issue was last closed, as GitHub wrote the time of its
+    latest event closed, or "" where its events record none."""
+    times = [entry_time({"timestamp": e.get("created_at")}) for e in events
+             if isinstance(e, dict) and e.get("event") == "closed"]
+    return max((at for at in times if at), key=claims.parse_time, default="")
+
+
+def claimed_since_close(events):
+    """Whether the label claimed was put on after the issue's last close,
+    by the order GitHub lists its events in, oldest first, so a close and
+    a label in the same second still read in the order they came."""
+    last_close = last_claimed = -1
+    for at, event in enumerate(e for e in events if isinstance(e, dict)):
+        if event.get("event") == "closed":
+            last_close = at
+        elif event.get("event") == "labeled" and (event.get("label") or {}).get("name") == labels.CLAIMED:
+            last_claimed = at
+    return last_claimed > last_close >= 0
+
+
+def last_claimed(events):
+    """When the label claimed was last put on the issue, as GitHub wrote
+    the time of the latest such event, by the order GitHub lists them in;
+    "" where none is listed or its time reads as none."""
+    put_on = [e for e in events if isinstance(e, dict) and e.get("event") == "labeled"
+              and (e.get("label") or {}).get("name") == labels.CLAIMED]
+    return entry_time({"timestamp": put_on[-1].get("created_at")}) if put_on else ""
+
+
+def claimed_by_a_claim(api, key, closed, claimed_at):
+    """Whether the label claimed, last put on at claimed_at, after the
+    time closed, is a claim's own rather than a person's undo: the newest
+    entry the repository's activity lists for claude/<issue>, of any kind
+    (newest_entry: its making, a push or its delete), came at or after
+    the close and no earlier than the label, one read (ended_releases;
+    F22's third review). False where the activity lists no entry for the
+    branch, which an undo shows, an unlisted claim reading so too. None
+    where GitHub keeps no activity of the repository (a 404) or no time is
+    written for the label or the entry, which says neither, so the issue
+    is left out this run and no label comes off on a guess; any other
+    refusal raises, which leaves it out too."""
+    if not claimed_at:
+        return None
+    entry = newest_entry(api, claims.branch_of(key))
+    if entry is None:
+        return None
+    if not entry:
+        return False
+    at = entry_time(entry)
+    if not at:
+        return None
+    when = claims.parse_time(at)
+    return when >= claims.parse_time(closed) and when >= claims.parse_time(claimed_at)
+
+
+def released_after(comments, closed, trusted):
+    """Whether a release comment among an issue's comments came after the
+    time closed, its author counted by trusted (claims.is_release_comment)."""
+    after = [c for c in comments if isinstance(c, dict) and (at := entry_time({"timestamp": c.get("created_at")}))
+             and claims.parse_time(at) > claims.parse_time(closed)]
+    return bool(claims.latest_release(after, trusted))
 
 
 def claim_heads(listed):
@@ -530,9 +877,13 @@ def may_be_due(issue):
     """Whether a release can be due on a claim on this issue, or can have
     happened: the issue is open and not labelled in-review, which a
     finished claim waiting for review is, whether or not the label claimed
-    is still on it."""
+    is still on it; or open and reopened, since the coordinator takes the
+    in-review an ended claim left off it before it releases, so its claim
+    branch, which stands, is released in the same run once it has gone a
+    day without a commit (coordinator.freeing; F22)."""
     names = (issue or {}).get("labels", [])
-    return issue is not None and issue.get("state") == "open" and labels.IN_REVIEW not in names
+    return issue is not None and issue.get("state") == "open" and (
+        labels.IN_REVIEW not in names or issue.get("state_reason") == board.REOPENED)
 
 
 def ready_branches(pulls):
@@ -632,8 +983,8 @@ def head_since(api, branch, sha, refused=None, now=None, started_by=""):
     dated back had it released at once). now is when the run began, the
     wall clock unless given, taken before the run read the branch. A first
     read that lists no push that set the head, or that GitHub gives no
-    answer to that holds (a 5xx, a 429, a rate limit's 403, or none at
-    all), is made once more after a pause, as settled asks again for
+    answer to that holds (a 5xx, or none at all, but not a rate limit's
+    refusal), is made once more after a pause, as settled asks again for
     mergeable: the push a run was started by is the one the activity is
     likeliest not to list yet, and the committer date in its place would
     let a commit dated back have its claim released in the run its own
@@ -666,11 +1017,17 @@ def head_since(api, branch, sha, refused=None, now=None, started_by=""):
     committer dates were always the rule outside the run its push
     started, which dates it at its start with no line either, and the
     second read's 404 after a first that listed nothing, which says the
-    same. It costs one call where the first read dates the push; two
-    where it does not and the read is not made again, a refusal for good
-    or a 404, the second the commit; and up to three with a pause where it
-    is made again; in the run the branch's push started, the commit is
-    not read."""
+    same. A rate limit's refusal is not read again after the pause: the
+    client has waited it out already, as long as GitHub asks and a run
+    waits, and made the call again (GitHub.request), so it is a refusal
+    like any other, after which the committer date stands in
+    (may_answer_later). It costs one read where the first read dates the
+    push; two where it does not and the read is not made again, a refusal
+    for good or a rate limit's, or a 404, the second the commit; and up to
+    three with a pause where it is made again; in the run the branch's
+    push started, the commit is not read. Each read is one call, or up to
+    three where GitHub refuses it for a rate limit and the client asks
+    again after each wait."""
     now = now or datetime.now(timezone.utc)
     read = first = read_push(api, branch, sha, now)
     if first.again:
@@ -735,13 +1092,14 @@ def read_push(api, branch, sha, now=None):
 
 def may_answer_later(problem):
     """Whether GitHub may answer the same call after a pause: it gave no
-    answer, a 5xx, a 429, or a 403 that says a rate limit was reached,
-    which GitHub sends for its secondary limits; any other refusal, a 401,
-    a 403 for a token that may not read, a 422, is its answer for good."""
-    status = problem.status
-    if status is None or status >= 500 or status == 429:
-        return True
-    return status == 403 and "rate limit" in (problem.detail or str(problem)).lower()
+    answer, or a 5xx. Any other refusal is its answer for the run: a 401,
+    a 403 for a token that may not read, a 422, and a rate limit's 429 or
+    403 too, which the client has waited out already, as long as GitHub
+    asks and a run waits, and made again (GitHub.request), so a read after
+    a shorter pause would ask again while GitHub still asks for no call,
+    which "may result in the banning of your integration" (GitHub's "Rate
+    limits for the REST API")."""
+    return problem.status is None or problem.status >= 500
 
 
 def head_pushed_at(api, branch, sha, now=None):
@@ -893,8 +1251,9 @@ def releases(api, heads, found_issues, pulls, now=None, asked=None, every_head=N
     the board counts the release and the coordinator, which finds it done,
     adds none. A claim whose issue is labelled in-review or is not open,
     or whose pull request is marked ready, costs no call; any other costs
-    what dating its head costs (head_since: one call where the activity
-    dates the push at once, up to three where it does not), and, when its
+    what dating its head costs (head_since: one read where the activity
+    dates the push at once, up to three where it does not, each up to
+    three calls where GitHub refuses it for a rate limit), and, when its
     last commit is more than a day old or its head is kept, one for its
     draft's comments, then, unless the draft is finished and its issue
     still carries claimed, one for its issue's comments and one per
@@ -973,6 +1332,12 @@ def collect(api, sha, default_branch, now=None, started_by=""):
     }
     if undated:
         found["pushed_refused"] = undated
+    kept = kept_names(listed)
+    if kept:
+        found["kept_names"] = kept
+        ended = ended_releases(api, issues, branches, kept, asked)
+        if ended:
+            found["ended_releases"] = ended
     found["began"], refused = began_times(api, found)
     if refused:
         found["began_refused"] = refused
@@ -1138,16 +1503,98 @@ def post_comments(api, due):
 
 def coordinate(api, snapshot, now):
     """What the coordinator does in the board's run, before the board is
-    rendered: release every claim coordinator.releases_due names, then tell
-    each piece of open work about other work it meets that it has not been
-    told of. The snapshot is brought up to date with each release, so the
-    board this run renders shows it and the branch is renamed in the same
-    run. Nothing here raises: a call GitHub refuses is a line, and the next
-    claim is still released. The lines say what was done, one each, for the
-    workflow's log."""
+    rendered: free every reopened issue coordinator.reopened_due names,
+    release every claim coordinator.releases_due names, then tell each
+    piece of open work about other work it meets that it has not been told
+    of. The snapshot is brought up to date with each change, so the board
+    this run renders shows it and a released branch is renamed in the same
+    run, as a claim whose in-review a freeing took off is released once
+    due, its release read with the others' (may_be_due). Nothing here raises: a
+    call GitHub refuses is a line, and the next issue is still freed and
+    the next claim still released. The lines say what was done, one each,
+    for the workflow's log."""
     snap = board.as_snapshot(snapshot)
-    lines = [release_one(api, snap, key, now) for key in coordinator.releases_due(snap, now)]
+    lines = [free_reopened(api, snap, number) for number in coordinator.reopened_due(snap)]
+    lines += [release_one(api, snap, key, now) for key in coordinator.releases_due(snap, now)]
     return lines + tell_overlaps(api, snap)
+
+
+def free_reopened(api, snap, number):
+    """Free one reopened issue whose labels still speak of a claim that
+    ended (coordinator.freeing; F22): read it again first, since a merge
+    can close an issue after the board read it, and leave one that is
+    closed by then; where the board read no branch for it, read its claim
+    branch again too, and leave the issue to the next run once one
+    stands, since a worker that claimed it after the board read the
+    branches has just put claimed and its label on; and read its claim's
+    open pull request again, which the freeing reads in place of the
+    board's, so the issue is left as it is once that is marked ready,
+    since in-review is then the finished claim's own; then
+    put todo on where it goes and take the labels off in freeing's order,
+    claimed last, reading the claim branch once more just before claimed
+    comes off and leaving claimed on once one stands, so a worker that
+    claimed the issue while it was freed keeps the label its claim put
+    on, and a run that fails partway leaves the issue carrying claimed or
+    in-review for the next run to free. Nothing is put back: every
+    step brings the issue nearer to free. The snapshot takes what was
+    done, so the board this run renders shows it. Nothing here raises;
+    what was done, in a line."""
+    branch = claims.branch_of(str(number))
+    try:
+        issue = api.issue(number) or {}
+        if issue.get("state") != "open":
+            return f"#{number}: not freed, closed since the board read it"
+        pull = api.pull_detail(branch)
+        plan = coordinator.freeing(with_claims_pull(snap, number, pull), number, labels.label_names(issue))
+        if not plan.taken_off and marked_ready(pull):
+            return f"#{number}: not freed, its claim's pull request was marked ready since the board read it"
+        if plan.taken_off and not plan.branch_stands and branch_sha(api, branch):
+            return f"#{number}: not freed, claimed since the board read the branches"
+    except GitHubError as problem:
+        return f"#{number}: not freed, reading it again failed: {problem}{github_words(problem)}"
+    put_on, taken_off = [], []
+    try:
+        if plan.put_on:
+            api.post(f"/repos/{api.repo}/issues/{number}/labels", {"labels": list(plan.put_on)})
+            put_on += plan.put_on
+        for name in plan.taken_off:
+            if name == labels.CLAIMED and not plan.branch_stands and branch_sha(api, branch):
+                coordinator.after_labels(snap, str(number), taken_off, put_on)
+                return (f"#{number}: reopened, not wholly freed, claimed while it was freed, so claimed stays"
+                        + done_words(put_on, taken_off))
+            take_label_off(api, number, name)
+            taken_off.append(name)
+    except GitHubError as problem:
+        coordinator.after_labels(snap, str(number), taken_off, put_on)
+        return (f"#{number}: reopened, not wholly freed, the next run goes on: {problem}{github_words(problem)}"
+                + done_words(put_on, taken_off))
+    coordinator.after_labels(snap, str(number), taken_off, put_on)
+    if not taken_off:
+        return f"#{number}: reopened, nothing left to free"
+    if plan.branch_stands:
+        return f"#{number}: reopened with a branch standing for it" + done_words(put_on, taken_off)
+    return f"#{number}: reopened with its claim ended, freed" + done_words(put_on, taken_off)
+
+
+def with_claims_pull(snap, number, pull):
+    """The snapshot with the claim's own open pull request on this issue as
+    read again (pull_detail), or none where it reads none, in place of the
+    one the board read, so a pull request marked ready since then finishes
+    the claim for the freeing (coordinator.freeing)."""
+    others = [p for p in snap.pulls if not board.of_claim(p, str(number))]
+    return dataclasses.replace(snap, pulls=others + ([board.Pull.from_dict(pull)] if pull else []))
+
+
+def marked_ready(pull):
+    """Whether the claim's own open pull request, as pull_detail gives it,
+    is marked ready; None, no such pull request, is not."""
+    return pull is not None and not pull.get("draft")
+
+
+def done_words(put_on, taken_off):
+    """What a freeing did, as the end of its line."""
+    said = f"; {', '.join(put_on)} put on" if put_on else ""
+    return said + (f"; {', '.join(taken_off)} taken off" if taken_off else "")
 
 
 def holding(api, default_branch, sha):
@@ -1171,34 +1618,44 @@ def release_one(api, snap, key, now):
     and todo on where the issue carries none of todo, epic and blocker
     (coordinator.labels_put_on), then the comment, in the protocol's
     order, and the board counts a release only once both are done. A run
-    that fails between them puts back the labels it took off and takes off
-    the todo it put on, so the issue is as the run found it and the next
-    run starts the release over, unless the comment turns out to be there
-    after all, one GitHub wrote and lost its answer to, which makes the
-    release whole. A run that cannot read the issue's comments to see
-    whether it is there leaves the labels as the release left them and
-    counts no release of its own (unsettled; F20), since labels put back
-    beside a comment that stands would hold the claim for good: the
-    comment tells every later coordinator the claim is released, and the
-    label claimed tells the board it is held; the next run, reading the
-    comments, settles it as it settles any claim whose labels are off,
-    finding the release whole or releasing the claim again unless its
-    holder pushed or a person put the label claimed back in the meantime,
-    while on a head a release already kept, where a release comment that
-    counts stands, whenever it came (board.release_counts), that earlier
-    release frees the claim in the same run once the labels are off.
-    Where GitHub refuses the putting back too, the labels are left off
-    with no comment, as an unsettled release leaves them where GitHub
-    wrote none, until a run releases the claim or a person puts them
-    back. What was done, in a line."""
+    that fails at the labels, taking one off or putting todo on, puts
+    back the labels it took off, even one whose removal GitHub answered
+    with an error other than a refusal that says it wrote nothing
+    (take_labels_off; F27), and takes off the todo it put on, even one
+    whose putting on GitHub answered with an error, since GitHub may have
+    written either (put_labels_on, put_back), so the issue is as the run
+    found it and the next run starts the release over. A run whose
+    comment fails reads the issue's comments, and the comment there after
+    all, one GitHub wrote and lost its answer to, makes the release
+    whole. Where they list none and GitHub refused the comment with a
+    4xx other than a rate limit's, which says it wrote nothing
+    (wrote_nothing), the run puts the labels back as a run that fails at
+    the labels does. Where they list none after any other answer, a rate
+    limit's refusal, a server error, a redirect, an answer that was not
+    JSON or no answer at all, none of which says GitHub wrote nothing,
+    and GitHub may list a comment it wrote only later (not_listed; F23
+    and its review), or where the run cannot read them, whatever GitHub
+    answered the comment with (unsettled; F20), the run cannot tell
+    whether a release comment stands, its own, an earlier run's or one
+    someone else wrote, so it leaves the labels as the release left them
+    and counts no release of its own, since labels put back beside a
+    comment that stands would hold the claim for good: the comment tells
+    every later coordinator the claim is released, and the label claimed
+    tells the board it is held; the next run, reading the comments,
+    settles it as it settles any claim whose labels are off, finding the
+    release whole or releasing the claim again unless its holder pushed
+    or a person put the label claimed back in the meantime, while on a
+    head a release already kept, where a release comment that counts
+    stands, whenever it came (board.release_counts), that earlier release
+    frees the claim in the same run once the labels are off. Where GitHub
+    refuses the putting back too, the labels are left off with no
+    comment, as an unsettled release leaves them where GitHub wrote none,
+    until a run releases the claim or a person puts them back. What was
+    done, in a line."""
     release = snap.releases[key]
     names, put_on = coordinator.labels_released(snap, key), coordinator.labels_put_on(snap, key)
-    taken_off = []
-    try:
-        for name in names:
-            if take_label_off(api, key, name):
-                taken_off.append(name)
-    except GitHubError as problem:
+    taken_off, problem = take_labels_off(api, key, names)
+    if problem:
         return (f"#{key}: not released, taking the labels off failed: {problem}{github_words(problem)}"
                 + put_back(api, key, taken_off))
     refused = put_labels_on(api, key, put_on, taken_off)
@@ -1213,6 +1670,8 @@ def release_one(api, snap, key, now):
             released_at = landed_release(api, key, release)
         except GitHubError as unread:
             return unsettled(snap, key, names, put_on, problem, unread)
+        if not released_at and not wrote_nothing(problem):
+            return not_listed(snap, key, names, put_on, problem)
         if not released_at:
             return (f"#{key}: not released, the comment failed: {problem}{github_words(problem)}"
                     + put_back(api, key, taken_off, put_on))
@@ -1221,16 +1680,46 @@ def release_one(api, snap, key, now):
     return f"#{key}: claim released, idle since {release.last_commit}{lost}"
 
 
-def take_label_off(api, key, name):
+def take_labels_off(api, key, names):
+    """Take a release's labels off its issue, in order, stopping at the
+    first GitHub fails: the labels to put back should a step fail, and
+    the failure, or None. The label whose removal failed is among them
+    unless GitHub refused it in a way that says it wrote nothing
+    (wrote_nothing), since a server error or no answer at all may come
+    after GitHub took it off, and putting back a label still on changes
+    nothing, where leaving off one GitHub took leaves the issue as
+    neither the release nor the run found it (F27, until whose fix only
+    the labels whose removal GitHub answered went back). A 404 that
+    answers a try after a rate limit's refusal counts as a label taken
+    off, for the same reason (take_label_off; F27's review)."""
+    taken_off = []
+    for name in names:
+        try:
+            if take_label_off(api, key, name, retried_404_taken=True):
+                taken_off.append(name)
+        except GitHubError as problem:
+            return taken_off + ([] if wrote_nothing(problem) else [name]), problem
+    return taken_off, None
+
+
+def take_label_off(api, key, name, retried_404_taken=False):
     """Take one label off a claim's issue: True when it came off, False when
     GitHub answered 404, for an issue that no longer carried it, which is
     the label being off too, so a release goes on and puts back, if a later
-    step fails, only what it took off."""
+    step fails, only what it took off. With retried_404_taken, as a
+    release takes its labels off (take_labels_off), a 404 that answers a
+    try the client made after a rate limit's refusal of an earlier one
+    counts as the label taken off: GitHub may have taken it off on the
+    refused try, so the 404 says it is off now, not that the issue never
+    carried it, and the release goes on and puts it back should a later
+    step fail, where a plain 404 left it off a held claim's issue (F27's
+    review). Taking a todo off again, or freeing a reopened issue, wants
+    only the label off, which such a 404 says either way."""
     try:
         api.delete(f"/repos/{api.repo}/issues/{key}/labels/{urllib.parse.quote(name, safe='')}")
     except GitHubError as problem:
         if problem.status == 404:
-            return False
+            return retried_404_taken and problem.after_rate_limit
         raise
     return True
 
@@ -1278,35 +1767,93 @@ def put_back(api, key, names, put_on=()):
 
 def unsettled(snap, key, names, put_on, problem, unread):
     """The line of a release whose comment failed and whose issue's
-    comments could not be read to see whether GitHub wrote it anyway: the
-    labels stay as the release left them, and the snapshot shows them so,
-    with no release of this run's, since the run cannot tell whether one
-    stands, so the page lists the claim as held and nothing is renamed
-    this run; the next run, reading the comments, finds the comment and
-    the release is whole, or finds none and releases the claim again,
-    unless its holder pushed since or a person put the label claimed back
-    beside the comment (F20; until its fix the labels went back beside a
-    comment that might stand, which held the claim for good). A head a
-    release already kept, where a release comment that counts stands, is
-    the exception: that comment counts whenever it came
+    comments could not be read to see whether a release comment stands:
+    the run's own, which GitHub may have written unless its refusal says
+    it wrote nothing (wrote_nothing), or, whatever GitHub answered, a
+    refusal among them, one an earlier run's post or someone else wrote;
+    so the labels stay as the release left them (labels_left; F20, until
+    whose fix the labels went back beside a comment that might stand,
+    which held the claim for good). Until F23's review the line asked
+    whether GitHub wrote the run's own comment, which after a refusal
+    that says it wrote nothing it surely did not."""
+    return labels_left(snap, key, names, put_on, problem,
+                       f"its issue's comments could not be read to see whether a release comment stands: "
+                       f"{unread}{github_words(unread)}")
+
+
+def not_listed(snap, key, names, put_on, problem):
+    """The line of a release whose comment GitHub answered with anything
+    but a refusal that says it wrote nothing (wrote_nothing), a rate
+    limit's refusal, a server error, a redirect, an answer that was not
+    JSON or no answer at all, and whose issue's comments, read after it,
+    list none: none of those says GitHub wrote nothing, and it may list a
+    comment it wrote only later, so the read does not tell whether the
+    comment stands, and the labels stay as the release left them
+    (labels_left; F23, until whose fix the labels went back, which held
+    the claim for good where GitHub had written the comment, and until
+    whose review they went back after a rate limit's refusal too). The
+    line says the same of a rate limit's refusal as of a server error,
+    since GitHub may have acted on the call before it refused it."""
+    return labels_left(snap, key, names, put_on, problem,
+                       "its issue's comments list none yet, though GitHub may have written it before that failure "
+                       "and list it only later")
+
+
+def labels_left(snap, key, names, put_on, problem, why):
+    """The line of a release the run cannot tell is whole, why being the
+    reason it cannot: the labels stay as the release left them, and the
+    snapshot shows them so, with no release of this run's, since the run
+    cannot tell whether one stands, so the page lists the claim as held
+    and nothing is renamed this run; the next run, reading the comments,
+    finds the comment and the release is whole, or finds none and
+    releases the claim again, unless its holder pushed since or a person
+    put the label claimed back beside the comment. A head a release
+    already kept, where a release comment that counts stands, is the
+    exception: that comment counts whenever it came
     (board.release_counts), so with the labels off the snapshot counts
     that earlier release, and the same run lists the claim as released
     and deletes the branch, whose work is kept, with no word of this
     release on the issue where GitHub wrote none (F20's review). So the
     line says what was done and nothing of what comes next."""
     coordinator.after_labels(snap, key, names, put_on)
-    return (f"#{key}: release unsettled, the comment failed: {problem}{github_words(problem)}; its issue's "
-            f"comments could not be read to see whether GitHub wrote it anyway: {unread}{github_words(unread)}; "
+    return (f"#{key}: release unsettled, the comment failed: {problem}{github_words(problem)}; {why}; "
             f"the labels stay as the release left them")
+
+
+def wrote_nothing(problem):
+    """Whether a write that failed surely changed nothing: GitHub refused
+    it with a 4xx, which it answers in place of making the write, where a
+    server error, a 502 among them, or no answer at all may come after
+    GitHub made it, and GitHub may list what it made only later, so a read
+    that finds nothing then tells nothing (F23); a redirect of the post, a
+    307 or a 308, which urllib does not follow for a POST, and an answer
+    that was not JSON, which has no status either, say nothing of whether
+    GitHub made it, so neither is a refusal (F23's review). Nor is a rate
+    limit's refusal, a 429 or a 403 that says it is one (rate_limited),
+    though it is a 4xx: GitHub's documentation says how long to wait and
+    when to stop asking, never that GitHub refuses such a call before it
+    acts on it, which the client's making a write again assumes
+    (GitHub.request) and canary C4 would settle and is not run, so the
+    labels a release puts back rest on no such assumption (F23's review;
+    validation/DESIGN.md, 3.2 and 11). Nor is any refusal of a call the
+    client made again after a rate limit's refusal of an earlier try
+    (GitHubError.after_rate_limit): the 4xx that ends the call answers its
+    last try alone, and GitHub may have acted on the try it refused for
+    the rate limit (F23's second review)."""
+    if problem.after_rate_limit or rate_limited(problem.status, problem.headers, problem.detail):
+        return False
+    return problem.status is not None and 400 <= problem.status < 500
 
 
 def landed_release(api, key, release):
     """When the comment that releases this claim was made, by the rule the
-    next run reads it with (claims.was_released), or "" when none stands:
-    a call that GitHub answered with an error, a 502 or a timeout, may
-    still have written the comment, and once it stands the release is done;
-    only a comment newer than the latest the run held is this run's
-    (newer). A read GitHub refuses raises GitHubError, since the run then
+    next run reads it with (claims.was_released), or "" when none is
+    listed: a call that GitHub answered with an error, a 502 or a timeout,
+    may still have written the comment, and once it stands the release is
+    done; only a comment newer than the latest the run held is this run's
+    (newer). "" says no more than that none is listed yet, since GitHub
+    may list a comment it wrote only later (release_one, wrote_nothing;
+    F23). A read GitHub refuses raises GitHubError, since the run then
     cannot tell whether the comment stands (release_one)."""
     comments = api.get_all(f"/repos/{api.repo}/issues/{key}/comments")
     released_at = claims.latest_release(comments, may_write(api))
@@ -1439,11 +1986,14 @@ def explain_refusal(api, key, old, new, problem):
     """Say once on the issue why its released claim's name is not free,
     when GitHub refused the rename for good: a ruleset over the claim
     branches, or a token without the right. Any other answer, or none, is
-    for the moment, and the next run tries again without a word. The
-    rulesets are read only for the first saying, so a rename refused run
-    after run costs one more call each time. What was said, for the log
-    line, or ""."""
-    if problem.status not in REFUSED_FOR_GOOD:
+    for the moment, and the next run tries again without a word: a 403 of
+    a rate limit's among them (rate_limited), which the client waited out
+    as long as a run waits, since its comment would send the owner after
+    a rule or a right that is not missing, and its marker would keep a
+    later refusal for good unsaid. The rulesets are read only for the
+    first saying, so a rename refused run after run costs one more call
+    each time. What was said, for the log line, or ""."""
+    if problem.status not in REFUSED_FOR_GOOD or rate_limited(problem.status, problem.headers, problem.detail):
         return ""
     marker = board.RENAME_REFUSED_MARKER.format(branch=new)
     words = f"HTTP {problem.status}{github_words(problem)}"
