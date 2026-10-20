@@ -1,0 +1,61 @@
+# Settings: turn "Require branches to be up to date before merging" off in
+# this repository's own rulesets, with the SymphonyBoard App's token, since
+# GITHUB_TOKEN cannot administer rulesets. With the rule on, every merge
+# made each other ready pull request behind and its check ran again on a
+# branch that changed nothing it touched; the owner asked on 2026-10-20 for
+# it off everywhere. Every other rule is kept as it is. It runs when this
+# file changes on main and by hand, and changes nothing where the rule is
+# already off.
+name: Settings
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/settings.yml]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: settings
+  cancel-in-progress: false
+
+jobs:
+  rulesets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint the App's token for this repository
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.SDLC_APP_ID }}
+          private-key: ${{ secrets.SDLC_APP_PRIVATE_KEY }}
+          permission-administration: write
+          permission-metadata: read
+      - name: Turn the up-to-date rule off
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for id in $(gh api "repos/$REPO/rulesets?includes_parents=false&per_page=100" --jq '.[].id'); do
+            gh api "repos/$REPO/rulesets/$id" > "$RUNNER_TEMP/ruleset.json"
+            if python3 - "$RUNNER_TEMP/ruleset.json" "$RUNNER_TEMP/body.json" <<'PY'
+          import json, sys
+          ruleset = json.load(open(sys.argv[1]))
+          rules = [rule for rule in ruleset.get("rules") or [] if rule.get("type") == "required_status_checks"]
+          if not any((rule.get("parameters") or {}).get("strict_required_status_checks_policy") for rule in rules):
+              sys.exit(1)
+          for rule in rules:
+              rule["parameters"]["strict_required_status_checks_policy"] = False
+          keys = ("name", "target", "enforcement", "conditions", "rules", "bypass_actors")
+          json.dump({key: ruleset[key] for key in keys if key in ruleset}, open(sys.argv[2], "w"))
+          PY
+            then
+              gh api --method PUT "repos/$REPO/rulesets/$id" --input "$RUNNER_TEMP/body.json" --silent
+              echo "ruleset $id: up-to-date rule turned off" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "ruleset $id: up-to-date rule off already" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          done
