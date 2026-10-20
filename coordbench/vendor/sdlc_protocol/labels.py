@@ -19,6 +19,13 @@ IN_REVIEW = "in-review"
 BLOCKER = "blocker"
 EPIC = "epic"
 BLOCKED = "blocked"
+# A goal is a request a person breaks into epics, each a sub-issue of the
+# goal, which the coordinator then plans: the board leaves it out of its
+# Queue as it leaves an epic out and draws it above its epics. Only a
+# person puts it on, so it is not among the labels a repository makes up
+# front (LABELS), and a repository whose label goal means something else
+# renames that label first, since an issue carrying it is dealt to nobody.
+GOAL = "goal"
 
 # A worker's label: the name after the colon is the worker that holds the
 # issue, or that the coordinator gave it. The older spellings, an
@@ -126,12 +133,37 @@ def holders(issue):
     return set(holder_names(label_names(issue)))
 
 
+def planned(names):
+    """Whether these label names mark an issue the coordinator plans and
+    nobody takes whole: an epic, planned into tasks, or a goal, planned
+    into epics."""
+    return EPIC in names or GOAL in names
+
+
 def reserved(labels):
-    """Whether these labels keep an issue off the open queue: an epic,
-    which the coordinator plans into tasks, or an issue a worker's label
-    names, which that worker holds or was given and only that worker
+    """Whether these labels keep an issue off the open queue: an epic or a
+    goal, which the coordinator plans (planned), or an issue a worker's
+    label names, which that worker holds or was given and only that worker
     takes."""
-    return EPIC in labels or bool(holder_names(labels))
+    return planned(labels) or bool(holder_names(labels))
+
+
+def blocked_by_counts(issue):
+    """How many issues GitHub's dependencies say block this one, open and
+    in all, from the dependency summary GitHub carries on every issue it
+    lists: (0, 0) where the summary is missing or a count is not a whole
+    number, since an issue whose summary GitHub does not give is read as
+    blocked by nothing (spec/PROTOCOL.md, Pick)."""
+    summary = (issue or {}).get("issue_dependencies_summary")
+    if not isinstance(summary, dict):
+        return (0, 0)
+    return (whole_count(summary.get("blocked_by")), whole_count(summary.get("total_blocked_by")))
+
+
+def whole_count(value):
+    """A count as the summary gives it, or 0 where it is not a whole number
+    of zero or more; a bool is not a count, though Python counts it."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 # The name team mode gave the same rule, kept for its callers.

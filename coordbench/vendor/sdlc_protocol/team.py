@@ -45,7 +45,7 @@ from .claims import PREFIX as CLAIM_PREFIX, UNNAMED, claim_worker, issue_files, 
 from .labels import (ACCOUNT_PREFIX, AGENT_PREFIX, BLOCKED as BLOCKED_LABEL,
                      BLOCKER as BLOCKER_LABEL, CLAIMED as CLAIMED_LABEL, EPIC as EPIC_LABEL,
                      IN_REVIEW as IN_REVIEW_LABEL, TODO as TODO_LABEL, WORKER_COLOUR, agent_label as agent_of,
-                     holders, label_names, worker_label, worker_of)
+                     blocked_by_counts, holders, label_names, planned, worker_label, worker_of)
 from .workers import fits
 
 # The one check the ruleset requires and a member can fix; the board's own
@@ -131,6 +131,11 @@ class Client(Protocol):
 
     def add_sub_issue(self, parent: int, child_id: int) -> None:
         """Hang the issue with that id under the parent issue's number."""
+
+    def add_blocked_by(self, number: int, blocker_id: int) -> None:
+        """Record that the issue with that id blocks the issue with this
+        number, as GitHub's blocked-by relation, the one an issue's page
+        shows under Relationships."""
 
     def set_body(self, number: int, body: str) -> None:
         """Replace an issue's body."""
@@ -354,10 +359,16 @@ class Snapshot:
         alone would otherwise be dealt it again on every run, its share of
         the queue held back behind it. An issue reopened after its merged
         branch was deleted is such an issue only until the coordinator's
-        next run frees it (coordinator.freeing; F22)."""
+        next run frees it (coordinator.freeing; F22). Nor is an issue free
+        that GitHub's dependencies say an open issue blocks, the relation
+        the coordinator writes from a plan's depends_on and a person draws
+        on the issue's page: it waits until every open issue blocking it
+        is closed, and the summary GitHub carries on every listed issue
+        says how many are open (labels.blocked_by_counts), so the clerk
+        reads no more for it."""
         labels = label_names(issue)
         return (issue["number"] not in self.claimed and BLOCKED_LABEL not in labels
-                and CLAIMED_LABEL not in labels)
+                and CLAIMED_LABEL not in labels and blocked_by_counts(issue)[0] == 0)
 
     def carry(self, agent):
         """"carry <issue>" for the first claim of the member's own that needs
@@ -375,7 +386,8 @@ class Snapshot:
     def given(self, agent, taken=(), alone=False):
         """The first task the labels give the member, beside other workers
         or, with alone, to the member alone (is_mine), that is free and no
-        epic, which the coordinator plans and nobody takes whole, and that
+        epic, which the coordinator plans into tasks, nor goal, which a
+        person breaks into epics, since nobody takes either whole, and that
         no member before it in the team took (taken), whether or not it also
         carries todo, since the board shows it under Given to workers either
         way (F14) and the spec has the worker take it first; None when there
@@ -383,7 +395,7 @@ class Snapshot:
         mine = is_mine if alone else given_to
         for issue in self.issues:
             if (issue["number"] not in taken and mine(issue, agent) and self.free(issue)
-                    and EPIC_LABEL not in label_names(issue)):
+                    and not planned(label_names(issue))):
                 return issue
         return None
 
@@ -401,11 +413,12 @@ class Snapshot:
 
     def pool(self):
         """The shared work: unclaimed issues labelled blocker or todo that
-        no worker was given and that are not epics, blockers first, since a
-        blocker stops everyone (spec/PROTOCOL.md)."""
+        no worker was given and that are neither epics, which the
+        coordinator plans, nor goals, which a person breaks into epics,
+        blockers first, since a blocker stops everyone (spec/PROTOCOL.md)."""
         def shared(issue):
             labels = label_names(issue)
-            return (self.free(issue) and not holders(issue) and EPIC_LABEL not in labels
+            return (self.free(issue) and not holders(issue) and not planned(labels)
                     and (TODO_LABEL in labels or BLOCKER_LABEL in labels))
         return sorted((i for i in self.issues if shared(i)),
                       key=lambda i: (BLOCKER_LABEL not in label_names(i), i["number"]))
@@ -529,13 +542,22 @@ def plan_schema(owners):
     """The JSON schema the coordinator's plan answers to, as Claude Code's
     --json-schema takes it, and as seed reads the plan: one or two
     paragraphs, then the tasks, each with a title, the worker it goes to,
-    the files it owns and its body. With workers registered, a task's owner
-    is one of them; with none, any text, which seed leaves out, so every
-    task goes to the open queue."""
+    the files it owns, its body and, where one task must close before
+    another can be taken, the positions of the tasks it depends on, which
+    seed writes as GitHub's blocked-by relations. With workers registered,
+    a task's owner is one of them; with none, any text, which seed leaves
+    out, so every task goes to the open queue."""
     owner = {"type": "string", "enum": list(owners)} if owners else {"type": "string"}
+    # No minimum and no uniqueItems: the API's structured output takes
+    # neither keyword for sure, and dependency_problems and positions hold
+    # the plan to both whatever wrote it.
+    depends_on = {"type": "array", "items": {"type": "integer"},
+                  "description": ("positions of the tasks of this plan that must close before this one "
+                                  "can be taken, counted from 1 in the order the tasks are listed")}
     task = {"type": "object",
             "properties": {"title": {"type": "string"}, "owner": owner,
-                           "files": {"type": "array", "items": {"type": "string"}}, "body": {"type": "string"}},
+                           "files": {"type": "array", "items": {"type": "string"}}, "body": {"type": "string"},
+                           "depends_on": depends_on},
             "required": ["title", "owner", "files", "body"]}
     return {"type": "object",
             "properties": {"plan": {"type": "string"}, "tasks": {"type": "array", "minItems": 1, "items": task}},
@@ -561,6 +583,78 @@ def owners_for(tasks, agents):
     return owners
 
 
+def depends_on(task):
+    """What a task's depends_on lists, as the plan wrote it, or none; a
+    plan written by hand may list anything, so dependency_problems reads
+    this and the rest read positions."""
+    return task.get("depends_on") or []
+
+
+def positions(task):
+    """The positions a task depends on, each once: a position listed
+    twice, which the schema asks against and a hand-written plan may
+    carry, is one relation, not two writes of it. Only called once
+    dependency_problems has found the list to hold positions."""
+    return list(dict.fromkeys(depends_on(task)))
+
+
+def is_position(value):
+    """Whether a value is a position: a whole number from 1, and not a
+    bool, which Python counts as one."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def dependency_problems(tasks):
+    """What is wrong with the plan's dependencies, each in one line, in
+    the order a reader finds them: a task whose depends_on lists something
+    other than positions, one that depends on a position the plan has no
+    task of, one that depends on itself, and a cycle, which no order of
+    work could ever close. The first problem refuses the plan before any
+    task is opened, since a plan half written is harder to mend than one
+    refused whole."""
+    problems = []
+    for position, task in enumerate(tasks, 1):
+        listed = depends_on(task)
+        # A depends_on that is no list, a bare number for one dependency,
+        # is the same problem as a list of the wrong things.
+        if not isinstance(listed, list) or not all(is_position(value) for value in listed):
+            problems.append(f"plan: task {position}'s depends_on must list positions, whole numbers from 1")
+            continue
+        for value in listed:
+            if value > len(tasks):
+                problems.append(f"plan: task {position} depends on {value}, which the plan has no task of")
+            elif value == position:
+                problems.append(f"plan: task {position} depends on itself")
+    if not problems:
+        cycle = dependency_cycle(tasks)
+        if cycle:
+            problems.append("plan: tasks " + ", ".join(str(p) for p in cycle) + " depend on each other in a cycle")
+    return problems
+
+
+def dependency_cycle(tasks):
+    """The positions of one cycle in the plan's dependencies, ascending,
+    or none: a depth-first walk from each position along what it depends
+    on, which meets a position still on its path exactly when there is a
+    cycle. Only called once every position listed is a task's."""
+    edges = {position: positions(task) for position, task in enumerate(tasks, 1)}
+    done = set()
+    for start in edges:
+        stack = [(start, iter(edges[start]))]
+        while stack:
+            position, following = stack[-1]
+            following_position = next(following, None)
+            path = [p for p, _ in stack]
+            if following_position is None:
+                stack.pop()
+                done.add(position)
+            elif following_position in path:
+                return sorted(path[path.index(following_position):])
+            elif following_position not in done:
+                stack.append((following_position, iter(edges[following_position])))
+    return []
+
+
 def task_body(epic_number, task):
     files = "\n".join(f"- {path}" for path in task.get("files", [])) or "- (none named)"
     return (f"Epic: #{epic_number}\n\n{task.get('body', '').strip()}\n\n"
@@ -580,7 +674,8 @@ def ensure_label(client, name):
 def open_task(client, epic_number, task, owner):
     """Open one task issue, given to its owner when it has one, and hang it
     under the epic as a sub-issue; the link is a convenience for people, so
-    its failure is not one."""
+    its failure is not one. The answer is the issue as GitHub returned it,
+    with its "number" and its "id", which a blocked-by relation names."""
     names = [TODO_LABEL]
     if owner:
         names.append(worker_label(owner))
@@ -590,36 +685,122 @@ def open_task(client, epic_number, task, owner):
         client.add_sub_issue(epic_number, made["id"])
     except ClientError:
         pass
-    return made["number"]
+    return made
 
 
-def plan_section(plan, made):
+def refusal_words(problem):
+    """How a refused call is told in the plan and the clerk's answer: the
+    status GitHub answered, which a GitHubError carries, or that it did not
+    answer."""
+    status = getattr(problem, "status", None)
+    return f"GitHub answered {status}" if status else "GitHub did not answer"
+
+
+def write_relations(client, tasks, made):
+    """Write every blocked-by relation the plan's depends_on names, once
+    every task is open and has an id, and say which GitHub refused: each
+    relation alone, so one refusal stops no other, and none retried, since
+    the relation is a convenience the plan's text keeps too. The answer is
+    the relations written, by the blocked task's number, and the refusals
+    as (blocked, blocker, words)."""
+    numbers = [issue["number"] for issue in made]
+    blockers, refused = {}, []
+    for position, task in enumerate(tasks, 1):
+        for depended in positions(task):
+            blocked, blocker = numbers[position - 1], numbers[depended - 1]
+            try:
+                client.add_blocked_by(blocked, made[depended - 1]["id"])
+                blockers.setdefault(blocked, []).append(blocker)
+            except ClientError as problem:
+                refused.append((blocked, blocker, refusal_words(problem)))
+    return blockers, refused
+
+
+def task_line(number, title, owner, blockers=(), refused=()):
+    """One task's line in the plan section: its number and title, its
+    worker, the tasks that block it, and the relations GitHub refused to
+    record, so a reader sees the plan's order even where GitHub does not."""
+    line = f"- [ ] #{number} {title}" + (f" ({worker_label(owner)})" if owner else "")
+    if blockers:
+        line += ", blocked by " + ", ".join(f"#{blocker}" for blocker in blockers)
+    if refused:
+        line += "; not written: " + ", ".join(f"#{blocker} ({words})" for blocker, words in refused)
+    return line
+
+
+def plan_section(plan, made, blockers=None, refused=()):
     """What seed appends to the epic: the coordinator's plan, the task
-    list, and the machine line route reads."""
-    lines = [f"- [ ] #{number} {title}" + (f" ({worker_label(owner)})" if owner else "")
+    list, with the tasks that block each task where the plan has any, and the
+    machine line route reads."""
+    blockers = blockers or {}
+    lines = [task_line(number, title, owner, blockers.get(number, ()),
+                       [(blocker, words) for blocked, blocker, words in refused if blocked == number])
              for number, title, owner in made]
     numbers = " ".join(str(number) for number, _, _ in made)
     return (f"\n\n{PLAN_MARKER}\n## Plan, by the coordinator\n\n{plan.strip()}\n\n"
             "## Tasks\n\n" + "\n".join(lines) + f"\n\n<!-- team:tasks {numbers} -->\n")
 
 
+def body_as_it_stands(client, epic_number, first):
+    """The epic's body right before the plan is written: read again, since
+    the tasks took a while to open and a person, or the board's graph, may
+    have changed it meanwhile; where GitHub refuses that read the body
+    read when seed began stands in, since the tasks and their relations
+    exist by now and a plan not written would have the next run open them
+    all again, which costs more than an edit lost."""
+    try:
+        return client.issue(epic_number).get("body") or ""
+    except ClientError:
+        return first
+
+
+def write_plan(client, epic_number, first, section):
+    """Write the plan section onto the epic's body as it stands, then read
+    the body back once and write the section again where the marker is
+    gone. The board's graph writer reads and writes the whole body too,
+    and one that read the epic before this write and wrote after it would
+    have put the plan out; the plan is written once and route reads it
+    ever after, so losing it would open the tasks twice, while the graph
+    is drawn again every run and costs nothing lost. A read-back GitHub
+    refuses is let go, since the write itself went through."""
+    client.set_body(epic_number, body_as_it_stands(client, epic_number, first) + section)
+    try:
+        written = client.issue(epic_number).get("body") or ""
+    except ClientError:
+        return
+    if PLAN_MARKER not in written:
+        client.set_body(epic_number, written + section)
+
+
 def seed(client, epic_number, plan, agents):
-    """Open the epic's tasks and write the plan into it, once."""
+    """Open the epic's tasks, write the dependencies the plan names as
+    GitHub's blocked-by relations, and write the plan into the epic, once.
+    A plan whose dependencies do not hold together is refused before any
+    task is opened (dependency_problems); the plan is written onto the
+    epic as it stands once the tasks are open and read back once, so a
+    body written over it meanwhile does not lose it (write_plan)."""
     epic = client.issue(epic_number)
-    if PLAN_MARKER in (epic.get("body") or ""):
+    first = epic.get("body") or ""
+    if PLAN_MARKER in first:
         return "already planned"
     tasks = plan.get("tasks") or []
     if not tasks:
         raise TeamError("the plan has no tasks")
-    made = []
-    for task, owner in zip(tasks, owners_for(tasks, agents)):
-        made.append((open_task(client, epic_number, task, owner), task["title"], owner))
-    body = (epic.get("body") or "") + plan_section(plan.get("plan", ""), made)
-    client.set_body(epic_number, body)
+    problems = dependency_problems(tasks)
+    if problems:
+        raise ValueError(problems[0])
+    owners = owners_for(tasks, agents)
+    opened = [open_task(client, epic_number, task, owner) for task, owner in zip(tasks, owners)]
+    made = [(issue["number"], task["title"], owner) for issue, task, owner in zip(opened, tasks, owners)]
+    blockers, refused = write_relations(client, tasks, opened)
+    write_plan(client, epic_number, first, plan_section(plan.get("plan", ""), made, blockers, refused))
     # An epic opened with the Task form carries todo, which would put it on
     # the board's queue for any worker to take whole; its tasks are the work.
     client.remove_label(epic_number, TODO_LABEL)
-    return "seeded " + " ".join(str(number) for number, _, _ in made)
+    answer = "seeded " + " ".join(str(number) for number, _, _ in made)
+    for blocked, blocker, words in refused:
+        answer += f"; #{blocked} blocked by #{blocker} not written: {words}"
+    return answer
 
 
 # --- the team variable ----------------------------------------------------------

@@ -51,6 +51,12 @@ PER_PAGE = 100
 # The branch creations one read of the repository's activity lists, the
 # most GitHub gives on a page (began_times).
 ACTIVITY_PAGE = 100
+# The calls the board keeps in reserve for the writes a run makes after
+# its reads, which the Dependencies section's reads never eat into: one
+# read per open epic and goal, one per sub-issue with a blocker, and the
+# epic bodies written after the page, against a token's thousand an hour
+# (within_budget). A section left out this run is drawn the next.
+DEPENDENCIES_RESERVE = 300
 # What the Overlaps do with the work of a branch GitHub refused to date
 # (began_refused_lines).
 UNDATED_PULL = "date its pull request by when it was opened"
@@ -544,6 +550,12 @@ class GitHub:
 
     def add_sub_issue(self, parent, child_id):
         self.post(f"/repos/{self.repo}/issues/{parent}/sub_issues", {"sub_issue_id": child_id})
+
+    def add_blocked_by(self, number, blocker_id):
+        """Record GitHub's blocked-by relation: the issue with the id
+        blocks the issue with the number, as the issue's page shows it
+        under Relationships and its dependency summary counts it."""
+        self.post(f"/repos/{self.repo}/issues/{number}/dependencies/blocked_by", {"issue_id": blocker_id})
 
     def set_body(self, number, body):
         self.patch(f"/repos/{self.repo}/issues/{number}", {"body": body})
@@ -1341,7 +1353,218 @@ def collect(api, sha, default_branch, now=None, started_by=""):
     found["began"], refused = began_times(api, found)
     if refused:
         found["began_refused"] = refused
+    dependencies(api, found)
     return found
+
+
+# --- the dependencies ---------------------------------------------------------
+
+def within_budget(api, calls):
+    """Whether the token has more than the reserve left after this many
+    more calls, by the rate limit the latest answer said; a client that
+    keeps no limit, a stand-in or one before its first answer, is within
+    it."""
+    limit = getattr(api, "limit", None)
+    return limit is None or limit[0] - calls > DEPENDENCIES_RESERVE
+
+
+def reserve_words(api):
+    """What the log says of a read the reserve stopped."""
+    left, allowed, _ = api.limit
+    return f"{left} of {allowed} calls left, the reserve is {DEPENDENCIES_RESERVE}"
+
+
+def pages_or_empty(api, path):
+    """Every item of a list endpoint, or none where GitHub has no such
+    issue (404) or someone deleted it (410), as issue_or_none reads one."""
+    try:
+        return api.get_all(path)
+    except GitHubError as problem:
+        if problem.status in (404, GONE):
+            return []
+        raise
+
+
+def in_repository(issue, repo):
+    """Whether an issue object is this repository's: its repository_url
+    names the repository, as every issue GitHub gives carries, or it
+    carries none, as a fixture's does. A sub-issue or an issue blocking
+    one may live in another repository, where its number means nothing
+    here and would be read and drawn as this repository's issue of the
+    same number, so such an item is left out of the reads."""
+    url = issue.get("repository_url")
+    return not isinstance(url, str) or url.lower().endswith("/repos/" + repo.lower())
+
+
+def owes_no_read(parent):
+    """Whether a planned issue's own summary says it has no sub-issue, so
+    its read would answer nothing: the open list carries the summary on
+    every issue, and an issue with none, an older answer, is read."""
+    summary = parent.get("sub_issues_summary")
+    # A bool is not a count, though Python counts it: a summary that says
+    # no whole number is read, as the issue is read when it carries none.
+    return isinstance(summary, dict) and type(summary.get("total")) is int and summary["total"] == 0
+
+
+class DependencyReads:
+    """What the Dependencies section's reads found, as collect writes it
+    into the snapshot: each open epic's and goal's sub-issues, the issues
+    blocking each of an epic's sub-issues, and the issues those name that
+    the open list does not hold, as board.Issue dictionaries."""
+
+    def __init__(self, api, found):
+        self.api = api
+        self.repo = api.repo
+        self.listed = {issue["number"] for issue in found["issues"]}
+        self.sub_issues, self.blocked_by, self.others = {}, {}, {}
+        self.reading = ""
+
+    def read(self, planned):
+        """Read every planned issue's sub-issues and, for an epic's, the
+        issues blocking each sub-issue, which the epic's chart draws; a
+        goal's sub-issues are epics, whose chart draws no relation of the
+        epic's own, so their blocked-by relations are not read. False where
+        the reserve stopped a read, with the rest left unread, since a
+        section half drawn would mislead."""
+        for parent in sorted(planned, key=lambda issue: issue["number"]):
+            self.reading = f"#{parent['number']}'s sub-issues"
+            children = [child for child in pages_or_empty(self.api, self.issue_path(parent["number"], "sub_issues"))
+                        if "pull_request" not in child and in_repository(child, self.repo)]
+            if not within_budget(self.api, 0):
+                return False
+            if children:
+                self.sub_issues[parent["number"]] = [child["number"] for child in children]
+            for child in children:
+                self.remember(child)
+                if labels.EPIC in labels.label_names(parent) and not self.read_blockers(child):
+                    return False
+        return True
+
+    def read_blockers(self, child):
+        """Read the issues blocking a sub-issue, where its summary counts
+        one and no earlier parent's read brought them; False where the
+        reserve stopped the read."""
+        if labels.blocked_by_counts(child)[1] == 0 or child["number"] in self.blocked_by:
+            return True
+        if not within_budget(self.api, 1):
+            return False
+        self.reading = f"the issues blocking #{child['number']}"
+        listed = pages_or_empty(self.api, self.issue_path(child["number"], "dependencies/blocked_by"))
+        blockers = [blocker for blocker in listed if in_repository(blocker, self.repo)]
+        if not within_budget(self.api, 0):
+            return False
+        self.blocked_by[child["number"]] = sorted(blocker["number"] for blocker in blockers)
+        for blocker in blockers:
+            self.remember(blocker)
+        return True
+
+    def remember(self, issue):
+        """Keep an issue the open list does not hold, a closed sub-issue
+        or an issue blocking one from outside the epic, so the chart draws
+        it."""
+        if issue["number"] not in self.listed:
+            self.others[issue["number"]] = board.Issue.from_dict(issue).to_dict()
+
+    def issue_path(self, number, rest):
+        return f"/repos/{self.repo}/issues/{number}/{rest}"
+
+    def write_into(self, found):
+        for key in ("sub_issues", "blocked_by", "others"):
+            if getattr(self, key):
+                found[key] = getattr(self, key)
+
+
+def dependencies(api, found):
+    """The Dependencies section's reads, last in collect, so the page's
+    tables are read whatever happens here: for every open issue labelled
+    epic or goal whose summary does not say it has no sub-issue, its
+    sub-issues, and for every sub-issue of an epic whose summary counts
+    an issue blocking it, those issues. The reads stop short of the
+    reserve (within_budget), and a read GitHub fails drops the section
+    with its own notice; either way the run goes on and the page says why
+    the section is not drawn (board.NOT_DRAWN). The chart each listed
+    body holds is kept whatever is read (board.listed_graphs), so the
+    graph writer knows what stands without reading again. Nothing here
+    raises."""
+    graphs = board.listed_graphs(found["issues"])
+    if graphs:
+        found["graphs"] = graphs
+    planned = [issue for issue in found["issues"]
+               if labels.planned(labels.label_names(issue)) and not owes_no_read(issue)]
+    if not planned:
+        return
+    reads = DependencyReads(api, found)
+    if not within_budget(api, len(planned)):
+        found["dependencies_skipped"], found["dependencies_notice"] = "reserve", reserve_words(api)
+        return
+    try:
+        complete = reads.read(planned)
+    except GitHubError as problem:
+        found["dependencies_skipped"] = "failed"
+        found["dependencies_notice"] = f"reading {reads.reading} failed: {problem}{github_words(problem)}"
+        return
+    if not complete:
+        found["dependencies_skipped"], found["dependencies_notice"] = "reserve", reserve_words(api)
+        return
+    reads.write_into(found)
+
+
+def dependencies_skipped_lines(snapshot):
+    """The line for the workflow's log where the Dependencies section was
+    left out, and why, or none."""
+    snap = board.as_snapshot(snapshot)
+    if not snap.dependencies_skipped:
+        return []
+    return [f"board: Dependencies left out: {snap.dependencies_notice or snap.dependencies_skipped}"]
+
+
+def write_graphs(api, snapshot, blocks):
+    """Write each open epic's flowchart into its body, between the graph
+    markers, after the page is written, and take the chart out of an
+    issue that owes none any more, its sub-issues taken off; nothing in a
+    run whose reads for the section were left out, since it knows nothing
+    of what the bodies owe. An epic whose listed body holds the block
+    already costs no call; any other is read afresh, since the clerk or a
+    person may have written it since the run began, and written only when
+    its body would change, so a run that finds nothing moved writes
+    nothing. A closed or deleted epic, a body whose markers are not one
+    clean pair, which a person wrote and the board leaves alone, a write
+    that would reach the reserve and one GitHub refuses are each a line
+    and never stop the next; nothing here raises."""
+    snap = board.as_snapshot(snapshot)
+    if snap.dependencies_skipped:
+        return []
+    lines = []
+    for number in sorted(set(blocks) | set(snap.graphs)):
+        block = blocks.get(number)
+        if block is not None and snap.graphs.get(number) == block:
+            continue
+        if not within_budget(api, 2):
+            lines.append(f"epic #{number}: graph not written: {reserve_words(api)}")
+            continue
+        try:
+            lines += write_graph(api, number, block)
+        except GitHubError as problem:
+            lines.append(f"epic #{number}: graph write failed: {problem}{github_words(problem)}")
+    return lines
+
+
+def write_graph(api, number, block):
+    """One epic's write: its body with the block, or without the chart
+    where block is None, compared with the body as read with Windows
+    line endings folded, so a body GitHub stored with them is not
+    rewritten every run."""
+    issue = issue_or_none(api, number)
+    if issue is None or issue.get("state") == "closed":
+        return []
+    body = issue.get("body") or ""
+    wanted = board.body_with_graph(body, block) if block is not None else board.body_without_graph(body)
+    if wanted is None:
+        return [] if block is None else [f"epic #{number}: graph block not written: markers unpaired"]
+    if wanted.replace("\r\n", "\n") == body.replace("\r\n", "\n"):
+        return []
+    api.set_body(number, wanted)
+    return [f"epic #{number}: graph {'written' if block is not None else 'taken out'}"]
 
 
 def began_times(api, found):

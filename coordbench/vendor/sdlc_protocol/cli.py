@@ -19,6 +19,9 @@ sdlc_protocol board ...":
          workers, .github/symphony/workers/<name>.json, read offline
   guard  the PreToolUse hook: the tool call's JSON on stdin, and exit 2
          with the reason on stderr to refuse a push
+  locks  status, plan, acquire, release, sweep, verify or overlap: the locks on
+         files, symbols and named resources in LOCKS.json on the branch
+         locks; verify obeys the switch SYMPHONY_LOCKS, off by default
   verify-vendored VENDOR_DIR
          hold a vendored copy, VENDOR_DIR/sdlc_protocol, to the record
          VENDOR_DIR/VENDORED beside it (vendoring.py, which a copy also
@@ -44,7 +47,7 @@ from pathlib import Path
 from . import board, claims, guard, protocol_check, team, vendoring, workers
 
 PROG = "python3 -m sdlc_protocol"
-USAGE = (f"usage: {PROG} {{board,check,team,workers,guard,verify-vendored}} [arguments]; "
+USAGE = (f"usage: {PROG} {{board,check,team,workers,guard,locks,verify-vendored}} [arguments]; "
          f"{PROG} <command> -h says more")
 
 
@@ -114,7 +117,8 @@ def plan_board(api, sha, default_branch, now, render_only=False, say=print, star
     dated at the run's start (adapters.github.head_since)."""
     github = github_adapter()
     snap = github.snapshot(api, sha, default_branch, now, started_by)
-    for line in github.unread_claim_lines(snap) + github.pushed_refused_lines(snap) + github.began_refused_lines(snap):
+    for line in (github.unread_claim_lines(snap) + github.pushed_refused_lines(snap)
+                 + github.began_refused_lines(snap) + github.dependencies_skipped_lines(snap)):
         say(line)
     if not render_only:
         for line in github.coordinate(api, snap, now):
@@ -124,13 +128,16 @@ def plan_board(api, sha, default_branch, now, render_only=False, say=print, star
 
 def act_on_board(api, snap, event_name, ref_name, now, say=print):
     """The second half, once the page is written: rename the released
-    claims' branches, then post the comments the pull requests are owed,
-    both from the snapshot the first half read; the event and the ref are
-    passed on, though since F12's fix no comment depends on them."""
+    claims' branches, post the comments the pull requests are owed, and
+    write each open epic's flowchart into its body, all from the snapshot
+    the first half read; the event and the ref are passed on, though
+    since F12's fix no comment depends on them."""
     github = github_adapter()
     for line in github.release_claims(api, snap):
         say(line)
     for line in github.post_comments(api, board.comments_due(snap, event_name, ref_name, now)):
+        say(line)
+    for line in github.write_graphs(api, snap, board.epic_blocks(snap)):
         say(line)
 
 
@@ -676,6 +683,199 @@ def run_guard(argv, stdin=None):
     return code
 
 
+locks = git_locks = None  # bound by run_locks
+
+
+# --- locks --------------------------------------------------------------------
+
+def locks_arguments(argv):
+    parser = argparse.ArgumentParser(
+        prog=f"{PROG} locks",
+        description="Locks on files, symbols and named resources, kept in LOCKS.json on the branch locks "
+                    "(sdlc_protocol.locks). verify obeys the switch SYMPHONY_LOCKS or .github/symphony-locks "
+                    "(off, advise, enforce); the other commands do what they are asked.")
+    parser.add_argument("--repo", default=".", help="the clone to work in")
+    parser.add_argument("--remote", default="origin")
+    parser.add_argument("--default-branch", default="main")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("status", help="the table, one entry a line")
+    planning = sub.add_parser("plan", help="what a claim asks for to change KEYS: a write on each, reads on "
+                                           "what each Python symbol's code depends on")
+    planning.add_argument("keys", nargs="+", metavar="KEY")
+    acquiring = sub.add_parser("acquire", help="take KEYS for --claim, all or none")
+    acquiring.add_argument("keys", nargs="+", metavar="KEY")
+    acquiring.add_argument("--claim", type=int, required=True)
+    acquiring.add_argument("--worker", default="")
+    acquiring.add_argument("--read", action="append", default=[], metavar="KEY", help="a read lock as well")
+    acquiring.add_argument("--no-reads", action="store_true", help="take no read locks from the plan")
+    acquiring.add_argument("--with-claim", action="store_true",
+                           help="push the local branch claude/<claim> in the same atomic push: the claim itself")
+    releasing = sub.add_parser("release", help="give up every lock of --claim")
+    releasing.add_argument("--claim", type=int, required=True)
+    sweeping = sub.add_parser("sweep", help="drop the locks of claims that have ended")
+    sweeping.add_argument("--ended", type=int, action="append", default=[], metavar="N",
+                          help="a claim the caller knows has ended (its issue closed, its release counted)")
+    verifying = sub.add_parser("verify", help="hold the change from --base to --head to the locks: what it "
+                                              "touches that another claim holds, and, for a claim, what it "
+                                              "touches without holding it")
+    verifying.add_argument("--base", required=True)
+    verifying.add_argument("--head", default="HEAD")
+    verifying.add_argument("--claim", type=int, default=0, help="the claim's issue, 0 for a pull request of none")
+    overlapping = sub.add_parser("overlap", help="whether what the default branch --base changed since the "
+                                                 "change's fork meets what --head changes or builds on, so the "
+                                                 "change must bring main in; no lock table is read")
+    overlapping.add_argument("--base", required=True)
+    overlapping.add_argument("--head", default="HEAD")
+    return parser.parse_args(argv)
+
+
+def entry_line(entry):
+    return f"{entry.key}\t{entry.mode}\t#{entry.claim}\t{entry.worker or 'unnamed'}"
+
+
+def locks_status(args):
+    _, entries = git_locks.fetch_table(args.repo, args.remote)
+    print("\n".join(entry_line(entry) for entry in entries) or "no locks")
+    return 0
+
+
+def tracked_files(repo):
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=repo, capture_output=True, text=True)
+    return [name for name in listed.stdout.split("\0") if name]
+
+
+def file_reader(repo):
+    def read(path):
+        try:
+            return (Path(repo) / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+    return read
+
+
+def planned(args, claim=0, worker=""):
+    return locks.plan(args.keys, file_reader(args.repo), tracked_files(args.repo), claim, worker)
+
+
+def locks_plan(args):
+    print("\n".join(entry_line(entry) for entry in planned(args)))
+    return 0
+
+
+def locks_acquire(args):
+    wanted = planned(args, args.claim, args.worker)
+    if args.no_reads:
+        wanted = [entry for entry in wanted if entry.mode == locks.WRITE]
+    wanted += [locks.Entry(key, args.claim, locks.READ, args.worker) for key in args.read]
+    branch = claims.branch_of(args.claim) if args.with_claim else ""
+    after = git_locks.acquire(args.repo, args.remote, wanted, args.default_branch, branch)
+    print("\n".join(entry_line(entry) for entry in locks.held_by(after, args.claim)))
+    return 0
+
+
+def locks_release(args):
+    git_locks.release(args.repo, args.remote, args.claim, args.default_branch)
+    print(f"#{args.claim} holds no locks")
+    return 0
+
+
+def locks_sweep(args):
+    after = git_locks.sweep(args.repo, args.remote, args.default_branch, args.ended)
+    print(f"{len(after)} locks held")
+    return 0
+
+
+def switch_text(repo):
+    try:
+        return (Path(repo) / locks.SWITCH_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def locks_verify(args, environ):
+    mode = locks.mode_of(environ, switch_text(args.repo))
+    if mode == locks.OFF:
+        print("locks are off")
+        return 0
+    try:
+        problems = verify_problems(args)
+    except git_locks.LocksFailed as problem:
+        # At advise nothing fails, a clone too shallow to read included:
+        # actions/checkout's default depth must not turn a run red.
+        print(f"locks: {problem}")
+        return 1 if mode == locks.ENFORCE else 0
+    for line in problems:
+        print(f"locks: {line}")
+    if not problems:
+        print("locks: the change touches nothing it may not")
+    return 1 if problems and mode == locks.ENFORCE else 0
+
+
+def locks_overlap(args, environ):
+    mode = locks.mode_of(environ, switch_text(args.repo))
+    if mode == locks.OFF:
+        print("locks are off")
+        return 0
+    try:
+        met = git_locks.overlap(args.repo, args.base, args.head)
+    except git_locks.LocksFailed as problem:
+        print(f"locks: {problem}")
+        return 1 if mode == locks.ENFORCE else 0
+    for ours, theirs in met:
+        print(f"locks: {meeting_line(args.base, ours, theirs)}: bring {args.base} in")
+    if not met:
+        print(f"locks: nothing {args.base} changed since the base meets this change; it need not bring it in")
+    return 1 if met and mode == locks.ENFORCE else 0
+
+
+def meeting_line(base, ours, theirs):
+    """Why a change must bring the default branch in: what each side did
+    to the key, edited it or built on it, since a read on either side
+    means that side changed something that depends on the key."""
+    did = "edited" if theirs.mode == locks.WRITE else "built on"
+    does = "edits" if ours.mode == locks.WRITE else "builds on"
+    return f"{base} {did} {theirs.key} since this change's base, which this change {does}"
+
+
+def verify_problems(args):
+    _, entries = git_locks.fetch_table(args.repo, args.remote)
+    numbers = {entry.claim for entry in entries} - {args.claim}
+    alive = git_locks.live_claims(args.repo, args.remote, numbers, args.default_branch)
+    held = [entry for entry in entries if entry.claim in alive or entry.claim == args.claim]
+    touched = git_locks.touched(args.repo, args.base, args.head)
+    problems = [f"{want.key} is held by #{other.claim} ({other.worker or 'unnamed'}, {other.mode})"
+                for want, other in locks.conflicts(held, [locks.Entry(key, args.claim) for key in touched])]
+    if args.claim:
+        # A file the change adds, its own claim file among them, was no one
+        # else's to edit; another claim that means to add it holds it, and
+        # the conflicts above say so.
+        new = set(git_locks.added(args.repo, args.base, args.head))
+        problems += [f"{key} is changed but #{args.claim} holds no write lock on it"
+                     for key in locks.uncovered(touched, held, args.claim) if locks.split_key(key)[0] not in new]
+    return problems
+
+
+def run_locks(argv, environ=None):
+    # Imported here, as the GitHub adapter is, so the guard, which answers
+    # before every Bash call, never pays for ast and the git side.
+    global locks, git_locks
+    from . import locks
+    from .adapters import git_locks
+    args = locks_arguments(argv)
+    environ = os.environ if environ is None else environ
+    commands = {"status": locks_status, "plan": locks_plan, "acquire": locks_acquire, "release": locks_release,
+                "sweep": locks_sweep, "verify": lambda given: locks_verify(given, environ),
+                "overlap": lambda given: locks_overlap(given, environ)}
+    try:
+        return commands[args.command](args)
+    except locks.Held as problem:
+        print(f"locks: refused: {problem}", file=sys.stderr)
+        return 1
+    except (git_locks.LocksFailed, git_locks.ClaimTaken) as problem:
+        print(f"locks: {problem}", file=sys.stderr)
+        return 1
+
+
 # --- verify-vendored ----------------------------------------------------------
 
 def run_verify_vendored(argv):
@@ -689,7 +889,7 @@ def run_verify_vendored(argv):
 
 
 COMMANDS = {"board": run_board, "check": run_check, "team": run_team, "workers": run_workers, "guard": run_guard,
-            "verify-vendored": run_verify_vendored}
+            "locks": run_locks, "verify-vendored": run_verify_vendored}
 
 
 def main(argv=None):
