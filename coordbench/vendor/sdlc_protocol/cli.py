@@ -362,11 +362,22 @@ def merge_bases(git, one, two):
 
 def checkout_of(git, pull, base):
     """What the checkout is: the commit whose change is the pull request's
-    own, whether HEAD is GitHub's test merge, and whether HEAD is the pull
-    request at all. HEAD is the test merge where it is a merge whose first
-    parent is the base and whose second is the head the event names, or
-    any second where the event names none; the tip is the event's head
-    wherever it names one, so a checkout of something else, the base as
+    own, the commit GitHub's test merge was made on where HEAD is that
+    merge, and whether HEAD is the pull request at all. HEAD is the test
+    merge where it is a merge whose second parent is the head the event
+    names, whatever its first: GitHub makes the merge on the base branch
+    as it stands when the event fires, while the event's base is a commit
+    it set when the pull request was opened and leaves while the base
+    branch alone moves (symphony-template#315's pushes while behind main
+    carried the base it was opened on), so the two agree only while the
+    base has not moved past the pull request, which GitHub's rule that a
+    branch be up to date no longer prevents; such a pull request is the
+    test merge by its second parent alone, and its first parent is what
+    the merge was made on, the merge's own change being read against it.
+    Where the
+    event names no head, HEAD is the test merge where it is a merge whose
+    first parent is the base. The tip is the event's head wherever it
+    names one, so a checkout of something else, the base as
     pull_request_target leaves it among them, still has the pull request's
     own change judged; and where the event names none, HEAD itself, as a
     sha, a head commit that is itself a merge among them. None for the tip
@@ -374,12 +385,13 @@ def checkout_of(git, pull, base):
     here = git("rev-parse", "--verify", "--quiet", "HEAD^{commit}")
     parents = parents_of(git, "HEAD") if here is not None else None
     if parents is None:
-        return None, False, False
+        return None, None, False
     here = here.decode("ascii", "replace").strip()
     head = event_sha(pull.get("head"))
-    test_merge = len(parents) == 2 and parents[0] == base and (head is None or parents[1] == head)
+    test_merge = len(parents) == 2 and (parents[1] == head if head is not None else parents[0] == base)
+    made_on = parents[0] if test_merge else None
     tip = parents[1] if test_merge else (head or here)
-    return tip, test_merge, test_merge or head is None or here == head
+    return tip, made_on, test_merge or head is None or here == head
 
 
 def change_of(git, pull):
@@ -392,23 +404,32 @@ def change_of(git, pull):
     tip (git's three dots, from every merge base), so a file the base
     also holds, which the merge leaves alone, still counts where the
     branch added it; and, in GitHub's test merge, the merge's change
-    against the base as well. A checkout that is neither the test merge
-    nor the event's head is no reading of the pull request's claim file,
-    so it is a reason too, beside the change judged."""
+    against the commit it was made on, its first parent, as well, which
+    is the base branch's tip when the event fired and not the event's
+    base, a commit the base branch may have moved past, so that what the
+    base branch did since is never read as the pull request's; the diffs
+    from every merge base already hold whatever the merge brings, so that
+    second reading is a second reading of the same change, never the only
+    one. A checkout that is neither
+    the test merge nor the event's head is no reading of the pull
+    request's claim file, so it is a reason too, beside the change
+    judged."""
     base = event_sha(pull.get("base"))
     if base is None:
         return None, "the event names no base commit"
     if not fetched(git, base):
         return None, git.said(f"the base commit {base[:12]} could not be fetched")
-    tip, test_merge, is_pull = checkout_of(git, pull, base)
+    tip, made_on, is_pull = checkout_of(git, pull, base)
     if tip is None:
         return None, git.said("git could not read the checked-out commit")
     if not fetched(git, tip):
         return None, git.said(f"the head commit {tip[:12]} could not be fetched")
+    if made_on is not None and not fetched(git, made_on):
+        return None, git.said(f"the commit the test merge was made on, {made_on[:12]}, could not be fetched")
     lefts = merge_bases(git, base, tip)
     if not lefts:
         return None, git.said(f"git found no commit where the branch left {base[:12]}")
-    pairs = [(left, tip) for left in lefts] + ([(base, "HEAD")] if test_merge else [])
+    pairs = [(left, tip) for left in lefts] + ([(made_on, "HEAD")] if made_on is not None else [])
     diffs = [git("diff", "--no-renames", "--raw", "-z", older, newer) for older, newer in pairs]
     if any(d is None for d in diffs):
         return None, git.said(f"git could not compare {base[:12]} with the checkout")
