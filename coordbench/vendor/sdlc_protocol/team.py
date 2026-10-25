@@ -45,7 +45,7 @@ from .claims import PREFIX as CLAIM_PREFIX, UNNAMED, claim_worker, issue_files, 
 from .labels import (ACCOUNT_PREFIX, AGENT_PREFIX, BLOCKED as BLOCKED_LABEL,
                      BLOCKER as BLOCKER_LABEL, CLAIMED as CLAIMED_LABEL, EPIC as EPIC_LABEL,
                      IN_REVIEW as IN_REVIEW_LABEL, TODO as TODO_LABEL, WORKER_COLOUR, agent_label as agent_of,
-                     blocked_by_counts, holders, label_names, planned, worker_label, worker_of)
+                     blocked_by_counts, holders, label_names, planned, priority, worker_label, worker_of)
 from .workers import fits
 
 # The one check the ruleset requires and a member can fix; the board's own
@@ -262,13 +262,23 @@ def needs_work(client, pull):
                for run in runs)
 
 
+def in_pick_order(issue):
+    """The key that sorts the issues of one of Pick's places into the order
+    a worker takes them in: by priority label (labels.priority), then by
+    number."""
+    return (priority(label_names(issue)), issue["number"])
+
+
 class Snapshot:
     """One look at the open issues and the claim branches, shared by every
     member's answer so the members of one run divide the work alike."""
 
     def __init__(self, client):
         self.client = client
-        self.issues = sorted(open_issues(client), key=lambda issue: issue["number"])
+        # In Pick's order within each place: p1 first, then p2, p3 and the
+        # issues with no priority, the lower number first among equals; a
+        # repository whose issues carry no priority label sees number order.
+        self.issues = sorted(open_issues(client), key=in_pick_order)
         self.claimed = claim_branches(client)
         # What the look has read so far, by issue number, each read once
         # the first time a member's answer asks for it.
@@ -415,13 +425,14 @@ class Snapshot:
         """The shared work: unclaimed issues labelled blocker or todo that
         no worker was given and that are neither epics, which the
         coordinator plans, nor goals, which a person breaks into epics,
-        blockers first, since a blocker stops everyone (spec/PROTOCOL.md)."""
+        blockers first, since a blocker stops everyone (spec/PROTOCOL.md),
+        then each in Pick's order (in_pick_order)."""
         def shared(issue):
             labels = label_names(issue)
             return (self.free(issue) and not holders(issue) and not planned(labels)
                     and (TODO_LABEL in labels or BLOCKER_LABEL in labels))
         return sorted((i for i in self.issues if shared(i)),
-                      key=lambda i: (BLOCKER_LABEL not in label_names(i), i["number"]))
+                      key=lambda i: (BLOCKER_LABEL not in label_names(i), in_pick_order(i)))
 
 
 def deal(members, pool, areas=None):

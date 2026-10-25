@@ -27,6 +27,14 @@ BLOCKED = "blocked"
 # renames that label first, since an issue carrying it is dealt to nobody.
 GOAL = "goal"
 
+# The priority labels, first to last: within each place Pick takes from,
+# an issue labelled p1 is taken before one labelled p2, p2 before p3, and
+# p3 before an issue with none of them; the lower number comes first among
+# equals. A person puts them on, as the control panel's queue does with its
+# arrows, so they are made when someone first needs them, as goal is, and
+# are not among the labels a repository makes up front (LABELS).
+PRIORITIES = ("p1", "p2", "p3")
+
 # A worker's label: the name after the colon is the worker that holds the
 # issue, or that the coordinator gave it. The older spellings, an
 # account's label and a team member's, are read as the same label.
@@ -131,6 +139,17 @@ def agent_label(issue):
 def holders(issue):
     """Every worker an issue's labels name, under any spelling, as a set."""
     return set(holder_names(label_names(issue)))
+
+
+def priority(names):
+    """Where these label names put an issue in its place's order: 0 for
+    p1, 1 for p2, 2 for p3 and 3 for an issue with none of them, so a sort
+    by it, then by number, is the order Pick takes a place in. The highest
+    of several counts. GitHub matches a label's name whatever its case, so
+    P1 reads as p1."""
+    ranks = [PRIORITIES.index(name.lower()) for name in names
+             if isinstance(name, str) and name.lower() in PRIORITIES]
+    return min(ranks, default=len(PRIORITIES))
 
 
 def planned(names):
