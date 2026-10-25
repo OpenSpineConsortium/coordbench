@@ -928,16 +928,25 @@ def blocked_note(snap, issue):
     return f" (blocked by {count} open issue{'s' if count != 1 else ''})"
 
 
+def in_pick_order(issues):
+    """The issues in the order Pick takes them within a place: by priority
+    label, p1 first and the issues with none last (labels.priority), then
+    by number, so the board lists what a worker will take first at the
+    top. Without priority labels this is number order, as the board always
+    listed them."""
+    return sorted(issues, key=lambda i: (labels.priority(i.labels), i.number))
+
+
 def issue_rows(snap, label, unclaimed_only):
-    """The issues carrying a label, in number order; the queue leaves out
-    an issue with the label claimed, a claim branch that is not released,
-    an epic or a goal, or a worker's label, which gives the issue to that
-    worker. An issue an open issue blocks stays listed and says so beside
-    its title (blocked_note), since the blocked-by relation keeps it from
-    being taken, not from being seen."""
+    """The issues carrying a label, in Pick's order (in_pick_order); the
+    queue leaves out an issue with the label claimed, a claim branch that
+    is not released, an epic or a goal, or a worker's label, which gives
+    the issue to that worker. An issue an open issue blocks stays listed
+    and says so beside its title (blocked_note), since the blocked-by
+    relation keeps it from being taken, not from being seen."""
     claimed = claimed_numbers(snap.branches, released_keys(snap))
     rows = []
-    for issue in sorted(snap.issues, key=lambda i: i.number):
+    for issue in in_pick_order(snap.issues):
         names = sorted(issue.labels)
         if label not in names:
             continue
@@ -949,16 +958,16 @@ def issue_rows(snap, label, unclaimed_only):
 
 def given_rows(snap):
     """The open issues a worker's label gives to that worker and that
-    nobody has claimed yet, in number order, whatever else they are
-    labelled: the spec says an issue a worker's label names is that
-    worker's alone, left out of the Queue and shown here until the worker
-    claims it, so the queue leaves them out and this is where the worker
-    and everyone else see them. Until F14's fix the rows needed todo and
-    left epics out, so an issue labelled worker:<name> alone was shown
-    nowhere."""
+    nobody has claimed yet, in Pick's order (in_pick_order), whatever else
+    they are labelled: the spec says an issue a worker's label names is
+    that worker's alone, left out of the Queue and shown here until the
+    worker claims it, so the queue leaves them out and this is where the
+    worker and everyone else see them. Until F14's fix the rows needed
+    todo and left epics out, so an issue labelled worker:<name> alone was
+    shown nowhere."""
     claimed = claimed_numbers(snap.branches, released_keys(snap))
     rows = []
-    for issue in sorted(snap.issues, key=lambda i: i.number):
+    for issue in in_pick_order(snap.issues):
         names = sorted(issue.labels)
         workers = labels.holder_names(names)
         if labels.CLAIMED in names or not workers or issue.number in claimed:
